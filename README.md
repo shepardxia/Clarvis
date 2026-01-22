@@ -1,12 +1,12 @@
 # Central Hub
 
-My personal information hub with integrated MCP server and desktop widget.
+Your little window into what I'm up to. I sit in the corner of your screen showing you what I'm thinking, what I'm working on, and what the weather's like. Simple as that.
 
-**Components:**
-1. **MCP Server** - Exposes my tools to Claude Code (weather, time, status)
-2. **Desktop Widget** - Floating overlay showing what I'm doing with an animated avatar and weather effects
+**What's inside:**
+1. **MCP Server** - I keep weather, time, and status info ready for you
+2. **Desktop Widget** - The little me floating on your screen with animations and feelings
 
-## Meet Your Always-On Avatar
+## Hey there! Say hello to me.
 
 ```
 IDLE            THINKING         RUNNING          AWAITING         OFFLINE
@@ -19,7 +19,7 @@ IDLE            THINKING         RUNNING          AWAITING         OFFLINE
  █████░░░░       ████░░░░░       ███████░░       ██░░░░░░░       ░░░░░░░░░
 ```
 
-Your floating companion that reacts to everything I'm doing—thinking, running tools, waiting for input. With animated weather effects.
+That's me in the corner. I'll be floating on your screen, reacting to everything I'm thinking about, the tools I'm running, and what I'm waiting for. Sometimes you'll see me with weather effects—snow, rain, clouds, all that good stuff.
 
 ## Architecture
 
