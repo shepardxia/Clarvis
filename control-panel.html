@@ -139,10 +139,6 @@
       <div id="time-content" class="loading">Loading...</div>
     </div>
     <div class="widget-card">
-      <h3>Usage Stats</h3>
-      <div id="usage-content" class="loading">Loading...</div>
-    </div>
-    <div class="widget-card">
       <h3>Claude Status</h3>
       <div id="status-content" class="loading">Loading...</div>
     </div>
@@ -208,6 +204,50 @@
     </div>
   </div>
 
+  <h2>Window Controls</h2>
+  <div class="control-group">
+    <div class="row">
+      <label>Window Width (px): <span class="value-display" id="windowWidth-val">220</span></label>
+      <input type="range" id="windowWidth" min="150" max="500" value="220" step="1">
+    </div>
+    <div class="row">
+      <label>Window Height (px): <span class="value-display" id="windowHeight-val">200</span></label>
+      <input type="range" id="windowHeight" min="150" max="500" value="200" step="1">
+    </div>
+    <div class="row">
+      <label>Opacity: <span class="value-display" id="windowOpacity-val">1.0</span></label>
+      <input type="range" id="windowOpacity" min="0" max="1" step="0.1" value="1.0">
+    </div>
+    <div class="row">
+      <label>Brightness: <span class="value-display" id="windowBrightness-val">1.0</span></label>
+      <input type="range" id="windowBrightness" min="0.5" max="2.0" step="0.1" value="1.0">
+    </div>
+  </div>
+
+  <h2>Grid Position</h2>
+  <div class="control-group">
+    <div class="row">
+      <label>Grid Offset X: <span class="value-display" id="gridOffsetX-val">0</span></label>
+      <input type="range" id="gridOffsetX" min="-5" max="5" value="0" step="1">
+    </div>
+    <div class="row">
+      <label>Grid Offset Y: <span class="value-display" id="gridOffsetY-val">0</span></label>
+      <input type="range" id="gridOffsetY" min="-5" max="5" value="0" step="1">
+    </div>
+  </div>
+
+  <h2>Avatar Size</h2>
+  <div class="control-group">
+    <div class="row">
+      <label>Avatar Width (chars): <span class="value-display" id="avatarWidth-val">11</span></label>
+      <input type="range" id="avatarWidth" min="7" max="25" value="11" step="1">
+    </div>
+    <div class="row">
+      <label>Avatar Height (chars): <span class="value-display" id="avatarHeight-val">5</span></label>
+      <input type="range" id="avatarHeight" min="4" max="15" value="5" step="1">
+    </div>
+  </div>
+
   <div style="margin-top: 40px; text-align: center;">
     <button id="restart">🔄 Apply & Restart</button>
     <button id="reset">↺ Reset to Defaults</button>
@@ -225,16 +265,30 @@
       snowCount: 6,
       rainCount: 8,
       cloudyCount: 12,
-      fogCount: 20
+      fogCount: 20,
+      windowWidth: 220,
+      windowHeight: 200,
+      windowOpacity: 1.0,
+      windowBrightness: 1.0,
+      gridOffsetX: 0,
+      gridOffsetY: 0,
+      avatarWidth: 11,
+      avatarHeight: 5
     };
 
     // Update displays
+    const floatParams = ['windowOpacity', 'windowBrightness'];
+
     for (let key in params) {
       const input = document.getElementById(key);
       const display = document.getElementById(key + '-val');
 
       input.addEventListener('input', (e) => {
-        params[key] = parseInt(e.target.value);
+        if (floatParams.includes(key)) {
+          params[key] = parseFloat(e.target.value);
+        } else {
+          params[key] = parseInt(e.target.value);
+        }
         display.textContent = params[key];
       });
     }
@@ -307,40 +361,6 @@
         el.textContent = 'Unable to load time';
         el.classList.remove('loading');
         el.classList.add('error');
-      }
-
-      // Load Usage Stats
-      try {
-        const usageResponse = await fetch('/tmp/central-hub-usage-stats.json');
-        if (usageResponse.ok) {
-          const usage = await usageResponse.json();
-          const usageEl = document.getElementById('usage-content');
-          usageEl.textContent = '';
-          usageEl.classList.remove('loading');
-
-          const tokensDiv = document.createElement('div');
-          tokensDiv.classList.add('value');
-          tokensDiv.textContent = usage.tokens || 'N/A';
-          usageEl.appendChild(tokensDiv);
-
-          const labelDiv = document.createElement('div');
-          labelDiv.classList.add('label');
-          labelDiv.textContent = 'Tokens';
-          usageEl.appendChild(labelDiv);
-
-          if (usage.costs) {
-            const costDiv = document.createElement('div');
-            costDiv.classList.add('label');
-            costDiv.textContent = 'Cost: ' + usage.costs;
-            usageEl.appendChild(costDiv);
-          }
-        } else {
-          document.getElementById('usage-content').textContent = 'Stats not installed';
-          document.getElementById('usage-content').classList.remove('loading');
-        }
-      } catch (err) {
-        document.getElementById('usage-content').textContent = 'Stats not available';
-        document.getElementById('usage-content').classList.remove('loading');
       }
 
       // Load Claude Status
@@ -438,7 +458,15 @@
         snowCount: 6,
         rainCount: 8,
         cloudyCount: 12,
-        fogCount: 20
+        fogCount: 20,
+        windowWidth: 220,
+        windowHeight: 200,
+        windowOpacity: 1.0,
+        windowBrightness: 1.0,
+        gridOffsetX: 0,
+        gridOffsetY: 0,
+        avatarWidth: 11,
+        avatarHeight: 5
       };
 
       for (let key in defaults) {

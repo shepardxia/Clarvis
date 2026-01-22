@@ -38,40 +38,42 @@ CoreLocationCLI -j  # Approve the dialog
 
 See README.md for detailed documentation.
 
-## Architecture (Post-Consolidation)
+## Architecture
 
-**Single Environment:** `~/.claude/mcp-servers/central-hub/`
+**Project Location:** `~/Desktop/directory/central-hub/`
 
-All development happens here:
-- MCP server files (server.py, thinking_feed.py)
-- Widget files (Display.swift, ClaudeStatusOverlay.swift)
-- Control panel (control-server.py, control-panel.html)
+All components live in this directory:
+- MCP server files: `mcp-server/` (server.py, thinking_feed.py)
+- Widget files: `Display.swift`, `ClaudeStatusOverlay.swift`, compiled binary
+- Control panel: `control-panel.html`, `control-server.py`
 - Git repo with remote configured
 
-**No sync needed** - changes apply immediately:
+**No copying needed** - `claude mcp add` references files in place:
 - MCP changes: Restart Claude Code
-- Widget changes: ./restart.sh or use control panel
+- Widget changes: `./restart.sh` or use control panel
 - Config changes: Hot-reload via DispatchSource watcher
 
 **Process efficiency:**
-- Single MCP server process (no uv wrapper)
+- Direct MCP server execution (no wrapper overhead)
 - Config hot-reload (no restart for position changes)
 - Widget auto-hides after 10min idle
 
 **Installation:**
 ```bash
-# Standard MCP installation
+# From this directory
+cd ~/Desktop/directory/central-hub/mcp-server
+uv venv
+uv pip install -e .
 claude mcp add central-hub
 
-# Or manual
+# Or use setup script from parent directory
 cd ~/Desktop/directory/central-hub
 ./setup.sh
 ```
 
 ## MCP Server Component
 
-**Location in repo:** `mcp-server/`
-**Installed to:** `~/.claude/mcp-servers/central-hub/` (by setup.sh)
+**Location:** `mcp-server/` subdirectory
 **Source:** `mcp-server/server.py`
 
 ### Tools
