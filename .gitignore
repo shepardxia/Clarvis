@@ -4,3 +4,7 @@ __pycache__/
 .DS_Store
 *.pyc
 docs/
+uv.lock
+widget/ClaudeStatusOverlay
+control-server.py
+control-panel.html

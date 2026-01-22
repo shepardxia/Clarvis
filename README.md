@@ -219,17 +219,6 @@ Widget settings are in `/tmp/claude-overlay-config.json`:
 }
 ```
 
-### Control Panel
-
-Web UI for runtime configuration:
-```bash
-cd ./repo
-python3 control-server.py
-# Opens at http://localhost:8765
-```
-
-Adjust widget settings and restart overlay from the control panel.
-
 ---
 
 ## Installation Details
@@ -277,23 +266,17 @@ swiftc -o ClaudeStatusOverlay Display.swift ClaudeStatusOverlay.swift -framework
 
 ```
 central-hub/
-├── .venv/                        # Virtual environment (created by setup)
-├── src/central_hub/              # MCP Server (Python package)
-│   ├── __init__.py
+├── src/central_hub/              # MCP Server
 │   ├── server.py                 # MCP tool implementations
 │   └── thinking_feed.py          # Session monitoring
 ├── widget/                       # Desktop Widget
 │   ├── Display.swift             # Widget display logic
 │   ├── ClaudeStatusOverlay.swift # Widget app lifecycle
-│   ├── ClaudeStatusOverlay       # Compiled binary
 │   └── restart.sh                # Build + restart script
-├── scripts/                      # Installation and utility scripts
-│   ├── setup.sh                  # One-command installation
-│   └── start-control-panel.sh    # Launch control panel server
+├── scripts/
+│   └── setup.sh                  # One-command installation
 ├── pyproject.toml                # Package configuration
-├── control-server.py             # Web UI for widget settings
-├── control-panel.html            # Web interface
-└── README.md                     # This file
+└── README.md
 ```
 
 ---
