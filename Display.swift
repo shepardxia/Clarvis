@@ -242,12 +242,17 @@ struct Sprite {
     /// Create sprite from ASCII art strings (one per frame)
     /// Spaces are treated as transparent (nil in grid)
     init(frames: [String], transparent: Character = " ", anchor: (Int, Int) = (0, 0)) {
+        precondition(!frames.isEmpty, "Sprite must have at least one frame")
         self.frames = frames.map { Sprite.parseASCII($0, transparent: transparent) }
         self.anchor = anchor
     }
 
     /// Create sprite from pre-built grids
     init(grids: [CharacterGrid], anchor: (Int, Int) = (0, 0)) {
+        precondition(!grids.isEmpty, "Sprite must have at least one frame")
+        let expectedSize = (grids[0].width, grids[0].height)
+        precondition(grids.allSatisfy { $0.width == expectedSize.0 && $0.height == expectedSize.1 },
+                     "All frames must have the same dimensions")
         self.frames = grids
         self.anchor = anchor
     }
