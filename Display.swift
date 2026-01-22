@@ -387,6 +387,68 @@ struct SpriteSpawner {
     }
 }
 
+class SpriteLayer: DisplayComponent {
+    var instances: [SpriteInstance] = []
+    var spawners: [SpriteSpawner] = []
+
+    var preferredSize: (width: Int, height: Int) { (0, 0) }  // Uses full grid
+
+    func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid {
+        update(size: size)
+
+        var grid = CharacterGrid(width: size.width, height: size.height)
+        for instance in instances {
+            let (spriteGrid, x, y) = instance.render()
+            grid.composite(spriteGrid, at: (x, y))
+        }
+        return grid
+    }
+
+    private func update(size: (width: Int, height: Int)) {
+        // Update existing instances, remove dead ones
+        instances = instances.compactMap { instance in
+            var i = instance
+            i.update()
+
+            // Remove if dead
+            if i.isDead { return nil }
+
+            // Remove if fully off-screen (with margin for sprite size)
+            let margin = 5
+            if i.x < Double(-margin) || i.x > Double(size.width + margin) ||
+               i.y < Double(-margin) || i.y > Double(size.height + margin) {
+                return nil
+            }
+
+            return i
+        }
+
+        // Run spawners
+        for spawner in spawners {
+            if spawner.shouldSpawn(currentCount: instances.count) {
+                instances.append(spawner.spawn())
+            }
+        }
+    }
+
+    // Manual placement API
+    func add(_ sprite: Sprite, at position: (x: Double, y: Double), velocity: (x: Double, y: Double) = (0, 0)) {
+        instances.append(SpriteInstance(
+            sprite: sprite,
+            x: position.x,
+            y: position.y,
+            velocityX: velocity.x,
+            velocityY: velocity.y,
+            lifetime: -1
+        ))
+    }
+
+    func clear() {
+        instances.removeAll()
+        spawners.removeAll()
+    }
+}
+
 protocol DisplayComponent {
     var preferredSize: (width: Int, height: Int) { get }
     func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid
