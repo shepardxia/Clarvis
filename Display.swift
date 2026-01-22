@@ -1,6 +1,31 @@
 import Cocoa
 import Foundation
 
+// MARK: - Config Model
+
+struct OverlayConfig: Codable {
+    var gridWidth: Int = 14
+    var gridHeight: Int = 10
+    var fontSize: Int = 20
+    var avatarX: Int = 2
+    var avatarY: Int = 2
+    var barX: Int = 2
+    var barY: Int = 8
+    var snowCount: Int = 6
+    var rainCount: Int = 8
+    var cloudyCount: Int = 12
+    var fogCount: Int = 20
+
+    static func load() -> OverlayConfig {
+        let path = "/tmp/claude-overlay-config.json"
+        guard let data = FileManager.default.contents(atPath: path),
+              let config = try? JSONDecoder().decode(OverlayConfig.self, from: data) else {
+            return OverlayConfig()
+        }
+        return config
+    }
+}
+
 // MARK: - Status Model
 
 struct ClaudeStatus: Equatable {
@@ -53,18 +78,18 @@ struct AvatarComponents {
         "reviewing": ["˘"]
     ]
 
-    // Eye positions for 5-char interior: (left, gap, right) must sum to 3
+    // Eye positions for 9-char interior: (left, gap, right) must sum to 7
     static let eyePositions: [String: [(Int, Int, Int)]] = [
-        "idle": [(1,1,1)],
-        "resting": [(1,1,1)],
-        "thinking": [(1,1,1), (2,1,0), (1,1,1), (0,1,2)],
-        "working": [(1,1,1)],
-        "awaiting": [(1,1,1), (2,1,0), (1,1,1), (0,1,2)],
-        "offline": [(1,1,1)],
-        "reading": [(1,1,1), (2,1,0), (1,1,1), (0,1,2)],
-        "writing": [(1,1,1)],
-        "executing": [(1,1,1)],
-        "reviewing": [(1,1,1), (2,1,0), (1,1,1), (0,1,2)]
+        "idle": [(3,1,3)],
+        "resting": [(3,1,3)],
+        "thinking": [(3,1,3), (4,1,2), (3,1,3), (2,1,4)],
+        "working": [(3,1,3)],
+        "awaiting": [(3,1,3), (4,1,2), (3,1,3), (2,1,4)],
+        "offline": [(3,1,3)],
+        "reading": [(3,1,3), (4,1,2), (3,1,3), (2,1,4)],
+        "writing": [(3,1,3)],
+        "executing": [(3,1,3)],
+        "reviewing": [(3,1,3), (4,1,2), (3,1,3), (2,1,4)]
     ]
 
     static let mouths: [String: String] = [
@@ -122,14 +147,15 @@ class AvatarCache {
         return frames
     }
 
-    // Smaller 7x4 avatar frame
+    // Larger 11x5 avatar frame
     private func buildFrame(border: String, eye: String, pos: (Int,Int,Int), mouth: String, sub: String) -> String {
         let (l, g, r) = pos
         return """
-        ╭\(String(repeating: border, count: 5))╮
-        │\(String(repeating: " ", count: l))\(eye)\(String(repeating: " ", count: g))\(eye)\(String(repeating: " ", count: r))│
-        │  \(mouth)  │
-        ╰\(String(repeating: border, count: 5))╯
+        ╭\(String(repeating: border, count: 9))╮
+        |\(String(repeating: " ", count: l))\(eye)\(String(repeating: " ", count: g))\(eye)\(String(repeating: " ", count: r))|
+        |    \(mouth)    |
+        |\(sub)|
+        ╰\(String(repeating: border, count: 9))╯
         """
     }
 }
@@ -268,6 +294,7 @@ struct Particle {
 
 class WeatherBackground: DisplayComponent {
     var weatherType: WeatherType = .clear
+    var config: OverlayConfig = OverlayConfig.load()
     private var particles: [Particle] = []
 
     var preferredSize: (width: Int, height: Int) { (0, 0) }
@@ -302,7 +329,7 @@ class WeatherBackground: DisplayComponent {
         case .clear:
             break
         case .snow(let intensity):
-            let targetCount = Int(intensity * 20)
+            let targetCount = Int(intensity * Double(config.snowCount))
             while particles.count < targetCount {
                 particles.append(Particle(
                     x: Double.random(in: 0..<Double(size.width)),
@@ -314,7 +341,7 @@ class WeatherBackground: DisplayComponent {
                 ))
             }
         case .rain(let intensity):
-            let targetCount = Int(intensity * 25)
+            let targetCount = Int(intensity * Double(config.rainCount))
             while particles.count < targetCount {
                 particles.append(Particle(
                     x: Double.random(in: 0..<Double(size.width)),
@@ -326,7 +353,7 @@ class WeatherBackground: DisplayComponent {
                 ))
             }
         case .cloudy:
-            let targetCount = 35
+            let targetCount = config.cloudyCount
             while particles.count < targetCount {
                 particles.append(Particle(
                     x: Double.random(in: 0..<Double(size.width)),
@@ -338,7 +365,7 @@ class WeatherBackground: DisplayComponent {
                 ))
             }
         case .fog:
-            let targetCount = 60
+            let targetCount = config.fogCount
             while particles.count < targetCount {
                 particles.append(Particle(
                     x: Double.random(in: 0..<Double(size.width)),
@@ -368,7 +395,7 @@ class WeatherBackground: DisplayComponent {
 class AvatarFace: DisplayComponent {
     var status: String = "idle"
 
-    var preferredSize: (width: Int, height: Int) { (7, 4) }
+    var preferredSize: (width: Int, height: Int) { (11, 5) }
 
     func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid {
         let frames = AvatarCache.shared.frames(for: status)
@@ -393,14 +420,14 @@ class AvatarFace: DisplayComponent {
 class ContextBarComponent: DisplayComponent {
     var percent: Double = 0
 
-    var preferredSize: (width: Int, height: Int) { (1, 5) }
+    var preferredSize: (width: Int, height: Int) { (9, 1) }
 
     func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid {
         var grid = CharacterGrid(width: size.width, height: size.height)
-        let rows = ContextBar.renderVertical(percent: percent, height: size.height)
-        for (y, row) in rows.enumerated() {
-            if let char = row.first, y < size.height {
-                grid[0, y] = char
+        let bar = ContextBar.render(percent: percent, width: size.width)
+        for (x, char) in bar.enumerated() {
+            if x < size.width {
+                grid[x, 0] = char
             }
         }
         return grid
@@ -422,11 +449,12 @@ class StatusDisplayView: NSView {
         didSet { needsDisplay = true }
     }
 
+    private var config = OverlayConfig.load()
     private var pulsePhase: CGFloat = 0
     private var currentFrame: Int = 0
     private var pulseTimer: Timer?
     private var frameTimer: Timer?
-    private let font = NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+    private var font: NSFont { NSFont.monospacedSystemFont(ofSize: CGFloat(config.fontSize), weight: .regular) }
 
     private let weatherBackground = WeatherBackground()
     private let avatarFace = AvatarFace()
@@ -434,14 +462,11 @@ class StatusDisplayView: NSView {
 
     private lazy var compositor: DisplayCompositor = {
         let c = DisplayCompositor()
-        c.gridSize = (15, 10)
-        // Avatar 7x4 centered: x=(15-7)/2=4, y=3
-        // Context bar below avatar: x=4, y=3+4=7
+        c.gridSize = (self.config.gridWidth, self.config.gridHeight)
         c.layers = [
-            ComponentLayer(component: weatherBackground, zIndex: 0, origin: { _ in (0, 0) }),
-            ComponentLayer(component: avatarFace, zIndex: 1, origin: { _ in (4, 3) }, subtractsBelow: true),
-            // Vertical context bar: 1x5 on right side, lower position
-            ComponentLayer(component: contextBarComponent, zIndex: 2, origin: { _ in (13, 5) }, subtractsBelow: true),
+            ComponentLayer(component: self.weatherBackground, zIndex: 0, origin: { _ in (0, 0) }),
+            ComponentLayer(component: self.avatarFace, zIndex: 1, origin: { _ in (self.config.avatarX, self.config.avatarY) }, subtractsBelow: true),
+            ComponentLayer(component: self.contextBarComponent, zIndex: 2, origin: { _ in (self.config.barX, self.config.barY) }, subtractsBelow: true),
         ]
         return c
     }()
