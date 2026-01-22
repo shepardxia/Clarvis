@@ -75,8 +75,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let idleTimeout: TimeInterval = 10 * 60
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Larger window for pixel art display
-        let size = NSSize(width: 200, height: 220)
+        // Window size for ASCII-based pixel art (38x22 chars @ 4px = 152x88 + padding) × 3
+        let size = NSSize(width: 540, height: 390)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
         let origin = NSPoint(x: screen.maxX - size.width - 20, y: screen.maxY - size.height - 20)
 
@@ -132,7 +132,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             idleStart = nil
             if !window.isVisible {
                 let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
-                window.setFrameOrigin(NSPoint(x: screen.maxX - 200, y: screen.maxY - 220))
+                window.setFrameOrigin(NSPoint(x: screen.maxX - 540, y: screen.maxY - 390))
                 window.makeKeyAndOrderFront(nil)
             }
         }

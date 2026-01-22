@@ -1,140 +1,72 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Clarvis</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    html, body {
-      width: 100%;
-      height: 100%;
+    * { margin: 0; padding: 0; }
+    body {
       background: transparent;
-      overflow: hidden;
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
-    }
-
-    .container {
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      width: 100%;
-      height: 100%;
-      padding: 10px;
+      height: 100vh;
     }
-
-    #clarvis-canvas {
-      /* Canvas will be 160x160 for the sprite */
+    #ascii-view {
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 12px;
+      color: #fff;
+      white-space: pre;
+      opacity: 1;
+      text-shadow: 0 0 4px rgba(255, 255, 255, 0.8);
+    }
+    #pixel-view {
       image-rendering: pixelated;
       image-rendering: crisp-edges;
     }
-
-    .status-text {
-      margin-top: 8px;
-      font-size: 11px;
-      font-weight: 500;
-      color: rgba(255, 255, 255, 0.9);
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      text-align: center;
-      max-width: 150px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .tool-name {
-      font-size: 10px;
-      font-weight: 400;
-      color: rgba(255, 255, 255, 0.7);
-      margin-top: 2px;
-    }
-
-    /* State-specific text colors */
-    .status-thinking .status-text { color: #FFD060; }
-    .status-running .status-text { color: #60E090; }
-    .status-awaiting .status-text { color: #80B8FF; }
-    .status-resting .status-text { color: #A0A0A8; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
-  <div class="container" id="container">
-    <canvas id="clarvis-canvas"></canvas>
-    <div class="status-text" id="status-text">Resting</div>
-    <div class="tool-name" id="tool-name"></div>
-  </div>
+  <pre id="ascii-view"></pre>
+  <canvas id="pixel-view"></canvas>
 
-  <!-- Load sprites first, then animator -->
   <script src="sprites.js"></script>
-  <script src="animator.js"></script>
-
   <script>
-    // Status text mapping
-    const STATUS_LABELS = {
-      thinking: 'Thinking',
-      running: 'Working',
-      awaiting: 'Waiting',
-      resting: 'Resting',
-    };
+    // ===========================================
+    // RENDER MODE: 'ascii' or 'pixel'
+    // ===========================================
+    const RENDER_MODE = 'ascii';
+    // ===========================================
 
-    // Extend setState to update UI
-    const originalSetState = window.setState;
-    window.setState = function(state, tool) {
-      originalSetState(state, tool);
+    const asciiView = document.getElementById('ascii-view');
+    const pixelView = document.getElementById('pixel-view');
 
-      // Update container class for styling
-      const container = document.getElementById('container');
-      container.className = 'container status-' + state;
+    if (RENDER_MODE === 'ascii') {
+      pixelView.classList.add('hidden');
+      asciiView.textContent = ASCII.trim();
+    } else {
+      asciiView.classList.add('hidden');
+      const ctx = pixelView.getContext('2d');
+      const px = 4;
+      const height = SPRITE.length;
+      const width = Math.max(...SPRITE.map(row => row.length));
+      pixelView.width = width * px;
+      pixelView.height = height * px;
 
-      // Update status text
-      const statusText = document.getElementById('status-text');
-      statusText.textContent = STATUS_LABELS[state] || state;
-
-      // Update tool name
-      const toolName = document.getElementById('tool-name');
-      if (tool && state === 'running') {
-        toolName.textContent = tool;
-        toolName.style.display = 'block';
-      } else {
-        toolName.textContent = '';
-        toolName.style.display = 'none';
+      for (let y = 0; y < SPRITE.length; y++) {
+        for (let x = 0; x < SPRITE[y].length; x++) {
+          const color = SPRITE[y][x];
+          if (color && color !== '0, 0, 0, 0') {
+            const [r, g, b, a] = color.split(',').map(s => parseInt(s.trim()));
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${(a || 255) / 255})`;
+            ctx.fillRect(x * px, y * px, px, px);
+          }
+        }
       }
-    };
+    }
 
-    // Helper for Swift to call
-    window.updateToolName = function(tool) {
-      const toolName = document.getElementById('tool-name');
-      if (tool && window.getState() === 'running') {
-        toolName.textContent = tool;
-        toolName.style.display = 'block';
-      }
-    };
-
-    // Debug: cycle through states with keyboard (for testing)
-    const states = ['thinking', 'running', 'awaiting', 'resting'];
-    let stateIndex = 3; // Start at resting
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === ' ') {
-        stateIndex = (stateIndex + 1) % states.length;
-        window.setState(states[stateIndex], stateIndex === 1 ? 'Bash' : null);
-      }
-      // Number keys for direct state
-      if (e.key >= '1' && e.key <= '4') {
-        const idx = parseInt(e.key) - 1;
-        window.setState(states[idx], idx === 1 ? 'Read' : null);
-      }
-    });
-
-    // Log that we're ready
-    console.log('Clarvis renderer loaded. Press SPACE to cycle states, 1-4 for direct state.');
+    // For Swift bridge (no-op for now)
+    window.setState = function(state, tool) {};
   </script>
 </body>
 </html>
