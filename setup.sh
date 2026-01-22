@@ -74,6 +74,7 @@ setup_mcp_server() {
 
     # Copy server files
     cp "$MCP_SOURCE/server.py" "$MCP_DEST/"
+    cp "$MCP_SOURCE/thinking_feed.py" "$MCP_DEST/"
     cp "$MCP_SOURCE/pyproject.toml" "$MCP_DEST/"
     print_success "Copied MCP server to $MCP_DEST"
 

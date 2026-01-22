@@ -113,6 +113,9 @@ Check MCP is connected: Run `/mcp` in Claude Code - `central-hub` should appear.
 | `get_weather(lat?, lon?)` | Current weather with auto-location | `requests` (included) |
 | `get_time(timezone?)` | Current time in any timezone | None (stdlib zoneinfo) |
 | `get_claude_status()` | Read my current status | None |
+| `list_active_sessions()` | List all active Claude Code sessions | `watchdog` (included) |
+| `get_session_thoughts(id, limit?)` | Get thinking blocks from a session | `watchdog` (included) |
+| `get_latest_thought()` | Get most recent thought globally | `watchdog` (included) |
 
 ### Location Detection (Automatic)
 
@@ -328,6 +331,12 @@ Add new data sources:
 2. Write output to `/tmp/central-hub-<source>.json`
 3. Run `setup.sh` again or restart Claude Code
 4. Update widget to read new file
+
+---
+
+## Credits
+
+- **Thinking Feed** - Adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield) (MIT License). Ported from TypeScript to Python for MCP integration.
 
 ---
 

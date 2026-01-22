@@ -9,6 +9,7 @@ from datetime import datetime
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from thinking_feed import get_session_manager
 
 # CoreLocationCLI (OPTIONAL: installed via: brew install corelocationcli)
 # If not available, falls back to IP-based geolocation
@@ -300,6 +301,57 @@ async def get_claude_status() -> str:
 
     except Exception as e:
         return f"Error reading status: {e}"
+
+
+# --- Thinking Feed Tools ---
+# Adapted from watch-claude-think by @bporterfield (MIT License)
+# https://github.com/bporterfield/watch-claude-think
+
+
+@mcp.tool()
+async def list_active_sessions() -> list[dict]:
+    """
+    List all active Claude Code sessions across all projects.
+
+    Returns list of sessions with metadata including project name,
+    status (active/idle/ended), and thought count.
+    """
+    manager = get_session_manager()
+    return manager.list_active_sessions()
+
+
+@mcp.tool()
+async def get_session_thoughts(session_id: str, limit: int = 10) -> dict:
+    """
+    Get recent thinking blocks from a specific session.
+
+    Args:
+        session_id: UUID of the session
+        limit: Maximum number of thoughts to return (default: 10)
+
+    Returns:
+        Session info with list of recent thoughts, or error if not found
+    """
+    manager = get_session_manager()
+    result = manager.get_session_thoughts(session_id, limit)
+    if result is None:
+        return {"error": f"Session {session_id} not found"}
+    return result
+
+
+@mcp.tool()
+async def get_latest_thought() -> dict:
+    """
+    Get the single most recent thought across all sessions.
+
+    Returns:
+        Latest thought with session context, or empty dict if none
+    """
+    manager = get_session_manager()
+    result = manager.get_latest_thought()
+    if result is None:
+        return {"message": "No active thoughts found"}
+    return result
 
 
 # --- Background refresh function (called by cron/launchd) ---
