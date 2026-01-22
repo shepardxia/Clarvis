@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import WebKit
 
 // MARK: - Single Instance Check
 
@@ -61,73 +62,12 @@ class StatusWatcher {
     }
 }
 
-// MARK: - Weather Watcher
-
-class WeatherWatcher {
-    private let weatherPath = "/tmp/central-hub-weather.json"
-    private var dirSource: DispatchSourceFileSystemObject?
-    private var lastMod: Date?
-    var onChange: ((WeatherType) -> Void)?
-
-    func start() {
-        let dirFD = open("/tmp", O_EVTONLY)
-        guard dirFD != -1 else { return }
-
-        dirSource = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: dirFD,
-            eventMask: .write,
-            queue: .main
-        )
-
-        dirSource?.setEventHandler { [weak self] in self?.checkFile() }
-        dirSource?.setCancelHandler { close(dirFD) }
-        dirSource?.resume()
-
-        checkFile()
-    }
-
-    private func checkFile() {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: weatherPath),
-              let mod = attrs[.modificationDate] as? Date else { return }
-
-        if lastMod == nil || mod > lastMod! {
-            lastMod = mod
-            onChange?(readWeather())
-        }
-    }
-
-    func readWeather() -> WeatherType {
-        guard let data = FileManager.default.contents(atPath: weatherPath),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let description = json["description"] as? String else {
-            return .clear
-        }
-        return mapDescriptionToWeatherType(description)
-    }
-
-    private func mapDescriptionToWeatherType(_ desc: String) -> WeatherType {
-        let lower = desc.lowercased()
-        if lower.contains("snow") {
-            let intensity = lower.contains("heavy") ? 1.0 : lower.contains("light") ? 0.3 : 0.6
-            return .snow(intensity: intensity)
-        }
-        if lower.contains("rain") || lower.contains("shower") || lower.contains("drizzle") {
-            let intensity = lower.contains("heavy") ? 1.0 : lower.contains("light") ? 0.3 : 0.6
-            return .rain(intensity: intensity)
-        }
-        if lower.contains("fog") { return .fog }
-        if lower.contains("cloud") || lower.contains("overcast") { return .cloudy }
-        return .clear
-    }
-}
-
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
-    var displayView: StatusDisplayView!
+    var displayView: PixelArtDisplayView!
     let watcher = StatusWatcher()
-    let weatherWatcher = WeatherWatcher()
     var idleStart: Date?
     var lastActivity: Date = Date()
     var inactivityTimer: Timer?
@@ -135,7 +75,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let idleTimeout: TimeInterval = 10 * 60
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let size = NSSize(width: 220, height: 200)
+        // Larger window for pixel art display
+        let size = NSSize(width: 200, height: 220)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
         let origin = NSPoint(x: screen.maxX - size.width - 20, y: screen.maxY - size.height - 20)
 
@@ -151,7 +92,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
         window.isMovableByWindowBackground = true
 
-        displayView = StatusDisplayView(frame: NSRect(origin: .zero, size: size))
+        displayView = PixelArtDisplayView(frame: NSRect(origin: .zero, size: size))
         window.contentView = displayView
         window.makeKeyAndOrderFront(nil)
 
@@ -162,11 +103,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.handleState(status)
         }
         watcher.start()
-
-        weatherWatcher.onChange = { [weak self] weatherType in
-            self?.displayView.weatherType = weatherType
-        }
-        weatherWatcher.start()
 
         inactivityTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.checkInactivity()
@@ -196,7 +132,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             idleStart = nil
             if !window.isVisible {
                 let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
-                window.setFrameOrigin(NSPoint(x: screen.maxX - 180, y: screen.maxY - 180))
+                window.setFrameOrigin(NSPoint(x: screen.maxX - 200, y: screen.maxY - 220))
                 window.makeKeyAndOrderFront(nil)
             }
         }
