@@ -354,6 +354,214 @@ async def get_latest_thought() -> dict:
     return result
 
 
+# --- Sonos Tools ---
+# Uses SoCo library: https://github.com/SoCo/SoCo
+
+_sonos_speakers = {}  # Cache discovered speakers
+
+
+def _get_sonos_speaker(name: str = None):
+    """Get a Sonos speaker by name, or the first one found."""
+    import soco
+
+    global _sonos_speakers
+
+    # Discover if cache is empty
+    if not _sonos_speakers:
+        speakers = soco.discover(timeout=5)
+        if speakers:
+            _sonos_speakers = {s.player_name: s for s in speakers}
+
+    if not _sonos_speakers:
+        return None
+
+    if name:
+        return _sonos_speakers.get(name)
+
+    # Return first speaker
+    return next(iter(_sonos_speakers.values()))
+
+
+@mcp.tool()
+async def sonos_discover() -> list[str]:
+    """
+    Discover all Sonos speakers on the network.
+
+    Returns:
+        List of speaker names
+    """
+    import soco
+
+    global _sonos_speakers
+    speakers = soco.discover(timeout=5)
+
+    if not speakers:
+        return ["No Sonos speakers found"]
+
+    _sonos_speakers = {s.player_name: s for s in speakers}
+    return list(_sonos_speakers.keys())
+
+
+@mcp.tool()
+async def sonos_now_playing(speaker: str = None) -> dict:
+    """
+    Get current track info from a Sonos speaker.
+
+    Args:
+        speaker: Speaker name (default: first found)
+
+    Returns:
+        Track info (title, artist, album, position, duration)
+    """
+    s = _get_sonos_speaker(speaker)
+    if not s:
+        return {"error": "No speaker found"}
+
+    try:
+        track = s.get_current_track_info()
+        transport = s.get_current_transport_info()
+
+        return {
+            "speaker": s.player_name,
+            "title": track.get("title", "Unknown"),
+            "artist": track.get("artist", "Unknown"),
+            "album": track.get("album", "Unknown"),
+            "position": track.get("position", "0:00:00"),
+            "duration": track.get("duration", "0:00:00"),
+            "state": transport.get("current_transport_state", "UNKNOWN"),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def sonos_play(speaker: str = None) -> str:
+    """
+    Start playback on a Sonos speaker.
+
+    Args:
+        speaker: Speaker name (default: first found)
+    """
+    s = _get_sonos_speaker(speaker)
+    if not s:
+        return "No speaker found"
+
+    try:
+        s.play()
+        return f"Playing on {s.player_name}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def sonos_pause(speaker: str = None) -> str:
+    """
+    Pause playback on a Sonos speaker.
+
+    Args:
+        speaker: Speaker name (default: first found)
+    """
+    s = _get_sonos_speaker(speaker)
+    if not s:
+        return "No speaker found"
+
+    try:
+        s.pause()
+        return f"Paused {s.player_name}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def sonos_next(speaker: str = None) -> str:
+    """
+    Skip to next track on a Sonos speaker.
+
+    Args:
+        speaker: Speaker name (default: first found)
+    """
+    s = _get_sonos_speaker(speaker)
+    if not s:
+        return "No speaker found"
+
+    try:
+        s.next()
+        return f"Skipped to next track on {s.player_name}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def sonos_previous(speaker: str = None) -> str:
+    """
+    Go to previous track on a Sonos speaker.
+
+    Args:
+        speaker: Speaker name (default: first found)
+    """
+    s = _get_sonos_speaker(speaker)
+    if not s:
+        return "No speaker found"
+
+    try:
+        s.previous()
+        return f"Previous track on {s.player_name}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def sonos_volume(speaker: str = None, level: int = None) -> str:
+    """
+    Get or set volume on a Sonos speaker.
+
+    Args:
+        speaker: Speaker name (default: first found)
+        level: Volume level 0-100 (omit to get current)
+
+    Returns:
+        Current or new volume level
+    """
+    s = _get_sonos_speaker(speaker)
+    if not s:
+        return "No speaker found"
+
+    try:
+        if level is not None:
+            level = max(0, min(100, level))
+            s.volume = level
+            return f"{s.player_name} volume set to {level}"
+        else:
+            return f"{s.player_name} volume: {s.volume}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def sonos_mute(speaker: str = None, mute: bool = None) -> str:
+    """
+    Get or set mute state on a Sonos speaker.
+
+    Args:
+        speaker: Speaker name (default: first found)
+        mute: True to mute, False to unmute (omit to toggle)
+    """
+    s = _get_sonos_speaker(speaker)
+    if not s:
+        return "No speaker found"
+
+    try:
+        if mute is None:
+            s.mute = not s.mute
+        else:
+            s.mute = mute
+
+        state = "muted" if s.mute else "unmuted"
+        return f"{s.player_name} {state}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
 # --- Background refresh function (called by cron/launchd) ---
 
 def refresh_all():
