@@ -14,15 +14,6 @@
 - **Desktop Widget** — Animated ASCII avatar with weather effects (macOS)
 - **Status Display** — See when Claude is idle, thinking, running tools, or waiting
 
-```
-IDLE            THINKING         RUNNING          AWAITING
-╭─────────╮     ╭~~~~~~~~~╮     ╭═════════╮     ╭⋯⋯⋯⋯⋯⋯⋯⋯⋯╮
-│  ·   ·  │     │  ˘   ˘  │     │  ●   ●  │     │  ?   ?  │
-│    ◡    │     │    ~    │     │    ◡    │     │    ·    │
-│ ·  ·  · │     │ • ◦ • ◦ │     │ • ● • ● │     │ · · · · │
-╰─────────╯     ╰~~~~~~~~~╯     ╰═════════╯     ╰⋯⋯⋯⋯⋯⋯⋯⋯⋯╯
-```
-
 ## Setup
 
 ```bash
