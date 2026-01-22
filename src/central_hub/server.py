@@ -9,7 +9,7 @@ from datetime import datetime
 
 import requests
 from mcp.server.fastmcp import FastMCP
-from thinking_feed import get_session_manager
+from .thinking_feed import get_session_manager
 
 # CoreLocationCLI (OPTIONAL: installed via: brew install corelocationcli)
 # If not available, falls back to IP-based geolocation

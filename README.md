@@ -33,12 +33,12 @@ That's me in the corner. I'll be floating on your screen, reacting to everything
                       │ stdio
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│         MCP Server (single environment development)          │
-│         ~/.claude/mcp-servers/central-hub/                   │
-│         ├── server.py (MCP tools)                            │
-│         ├── thinking_feed.py (session monitoring)            │
-│         ├── Display.swift (widget rendering)                 │
-│         └── ClaudeStatusOverlay.swift (app lifecycle)        │
+│         MCP Server (Python package)                          │
+│         ~/Desktop/directory/central-hub/                     │
+│         ├── src/central_hub/server.py (MCP tools)            │
+│         ├── src/central_hub/thinking_feed.py (sessions)      │
+│         ├── widget/Display.swift (rendering)                 │
+│         └── widget/ClaudeStatusOverlay.swift (app)           │
 │                          │                                   │
 │                          │ writes JSON                       │
 │                          ▼                                   │
@@ -65,10 +65,10 @@ That's me in the corner. I'll be floating on your screen, reacting to everything
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Single Environment Development:**
-- Edit directly in `~/.claude/mcp-servers/central-hub/`
-- Git repo initialized by setup.sh
-- No sync scripts needed
+**Project Structure:**
+- MCP server as Python package in `src/central_hub/`
+- Widget components in `widget/`
+- Single source of truth in `~/Desktop/directory/central-hub/`
 - Changes take effect immediately (widget hot-reloads config)
 
 ## Quick Start (First Time)
@@ -77,7 +77,7 @@ That's me in the corner. I'll be floating on your screen, reacting to everything
 cd ~/Desktop/directory/central-hub
 
 # One-time setup (installs MCP server, builds widget)
-./setup.sh
+./scripts/setup.sh
 
 # Restart Claude Code to load MCP server
 # (Close completely and reopen)
@@ -89,12 +89,14 @@ cd ~/Desktop/directory/central-hub
 ## Quick Start (Already Set Up)
 
 ```bash
-# Start just the widget
 cd ~/Desktop/directory/central-hub
-./ClaudeStatusOverlay &
 
-# Or use the convenience script
+# Start just the widget
+cd widget
 ./restart.sh
+
+# Or run the binary directly
+./ClaudeStatusOverlay &
 ```
 
 ## Using the MCP Tools
@@ -114,8 +116,8 @@ Check MCP is connected: Run `/mcp` in Claude Code - `central-hub` should appear.
 
 ## Component 1: My MCP Server
 
-**Location**: `~/.claude/mcp-servers/central-hub/` (auto-installed by `setup.sh`)
-**Source**: `./mcp-server/` directory in this repo
+**Location**: `~/Desktop/directory/central-hub/src/central_hub/`
+**Config**: `~/.claude/.mcp.json` and `~/.claude.json` (user-scope, available globally)
 
 ### Tools I Provide
 
@@ -237,37 +239,34 @@ Adjust widget settings and restart overlay from the control panel.
 `setup.sh` does the following:
 
 1. ✓ Checks Python 3.10+ is available
-2. ✓ Copies MCP server to `~/.claude/mcp-servers/central-hub/`
-3. ✓ Creates Python virtual environment
-4. ✓ Installs dependencies (tries `uv` for speed, falls back to `pip`)
-5. ✓ Configures `.mcp.json` for Claude Code
-6. ✓ Builds Swift widget binary
-7. ✓ Tests MCP server startup
-8. ✓ Prints next steps
+2. ✓ Creates Python virtual environment at project root
+3. ✓ Installs MCP server as package (`uv pip install -e .`)
+4. ✓ Configures `~/.claude.json` to point to this directory
+5. ✓ Builds Swift widget binary
+6. ✓ Tests MCP server startup
+7. ✓ Prints next steps
 
 ### Manual MCP Server Setup
 
 If you prefer manual installation:
 
 ```bash
-# Create directory
-mkdir -p ~/.claude/mcp-servers/central-hub
-
-# Copy files
-cp mcp-server/* ~/.claude/mcp-servers/central-hub/
+cd ~/Desktop/directory/central-hub
 
 # Setup Python environment
-python3.11 -m venv ~/.claude/mcp-servers/central-hub/venv
-source ~/.claude/mcp-servers/central-hub/venv/bin/activate
-pip install -e ~/.claude/mcp-servers/central-hub/
+uv venv
 
-# Configure MCP JSON manually (see mcp-server/README.md)
+# Install as editable package
+uv pip install -e .
+
+# Configure MCP (add to ~/.claude.json)
+# See "MCP Configuration" section below
 ```
 
 ### Widget Build
 
 ```bash
-cd ./repo
+cd ~/Desktop/directory/central-hub/widget
 swiftc -o ClaudeStatusOverlay Display.swift ClaudeStatusOverlay.swift -framework Cocoa
 ./ClaudeStatusOverlay &
 ```
@@ -278,26 +277,24 @@ swiftc -o ClaudeStatusOverlay Display.swift ClaudeStatusOverlay.swift -framework
 
 ```
 central-hub/
-├── setup.sh                      # One-command installation
-├── restart.sh                    # Start widget + rebuild
+├── .venv/                        # Virtual environment (created by setup)
+├── src/central_hub/              # MCP Server (Python package)
+│   ├── __init__.py
+│   ├── server.py                 # MCP tool implementations
+│   └── thinking_feed.py          # Session monitoring
+├── widget/                       # Desktop Widget
+│   ├── Display.swift             # Widget display logic
+│   ├── ClaudeStatusOverlay.swift # Widget app lifecycle
+│   ├── ClaudeStatusOverlay       # Compiled binary
+│   └── restart.sh                # Build + restart script
+├── scripts/                      # Installation and utility scripts
+│   ├── setup.sh                  # One-command installation
+│   └── start-control-panel.sh    # Launch control panel server
+├── pyproject.toml                # Package configuration
 ├── control-server.py             # Web UI for widget settings
 ├── control-panel.html            # Web interface
-├── Display.swift                 # Widget display logic + sprite system
-├── ClaudeStatusOverlay.swift     # Widget app lifecycle
-├── ClaudeStatusOverlay           # Compiled widget binary
-├── README.md                     # This file
-├── CLAUDE.md                     # Project context
-├── mcp-server/                   # MCP Server (version-controlled)
-│   ├── server.py                 # MCP tool implementations
-│   ├── pyproject.toml            # Python dependencies
-│   └── README.md                 # MCP server documentation
-└── docs/
-    └── plans/
-        ├── 2026-01-22-composable-sprite-system.md  # Implementation plan
-        └── ...
+└── README.md                     # This file
 ```
-
-**Note**: MCP server is version-controlled in `mcp-server/`. It's installed to `~/.claude/mcp-servers/central-hub/` by `setup.sh` to keep user home directories clean.
 
 ---
 
@@ -311,86 +308,22 @@ central-hub/
 **Weather not working:**
 - Check: `cat /tmp/central-hub-weather.json` (should exist)
 - No internet? MCP server needs internet for weather API
-- Run manually: `~/.claude/mcp-servers/central-hub/venv/bin/python3 ~/.claude/mcp-servers/central-hub/server.py --refresh`
+- Run manually: `cd ~/Desktop/directory/central-hub && uv run python -m central_hub.server --refresh`
 
 **Widget won't build:**
 - Install Xcode command line tools: `xcode-select --install`
 - Verify Swift: `swiftc --version`
-- Run: `./setup.sh` to rebuild
+- Run: `./scripts/setup.sh` to rebuild
 
 **Python version mismatch:**
 - Install Python 3.10+: `brew install python3`
-- Run: `./setup.sh` (auto-detects correct version)
+- Run: `./scripts/setup.sh` (auto-detects correct version)
 
 **Config changes not applying:**
 - Check: Widget console shows "🔄 Config reloaded - updating positions"
 - If dimension changes (gridWidth/Height/fontSize): Restart required
 - For position changes (avatarX/Y, barX/Y): Should hot-reload
 - Debug: `tail -f /tmp/claude-overlay-config.json`
-
-**Git workflow after consolidation:**
-- Development location: `~/.claude/mcp-servers/central-hub/`
-- Commit and push from MCP server location
-- Original folder (`~/Desktop/directory/central-hub`) is template only
-
----
-
-## Development
-
-**Active development location:** `~/.claude/mcp-servers/central-hub/`
-
-This is where the live MCP server runs. Edit files here directly:
-- `server.py` - MCP tools
-- `thinking_feed.py` - Session monitoring
-- `Display.swift` - Widget rendering
-- `ClaudeStatusOverlay.swift` - App lifecycle
-
-**Original template:** `~/Desktop/directory/central-hub/`
-- Kept as reference and for git commits
-- Push changes from MCP server location
-- No sync script needed anymore
-
-### Development Workflow
-
-1. **Edit files in MCP server location:**
-   ```bash
-   cd ~/.claude/mcp-servers/central-hub
-   # Edit server.py, Display.swift, etc.
-   ```
-
-2. **Test changes:**
-   ```bash
-   # For MCP server: Restart Claude Code (Command+R)
-   # For widget: ./restart.sh (rebuilds + restarts)
-   ```
-
-3. **Commit from MCP server location:**
-   ```bash
-   cd ~/.claude/mcp-servers/central-hub
-   git add .
-   git commit -m "feat: description"
-   git push
-   ```
-
-**Note:** The `~/.claude/mcp-servers/central-hub` directory is a git repo initialized by setup.sh, pointing to the same remote as the template folder.
-
-### Sprite System
-
-New composable ASCII sprite system supports:
-- Multi-frame animation
-- Procedural generation with variation
-- Anchor-based positioning
-- Layer composition with MINUS operator (prevents sprites showing through avatar)
-
-See `docs/plans/2026-01-22-composable-sprite-system.md` for details.
-
-### MCP Server Extension
-
-Add new data sources:
-1. Add tool function to `mcp-server/server.py` with `@mcp.tool()` decorator
-2. Write output to `/tmp/central-hub-<source>.json`
-3. Run `setup.sh` again or restart Claude Code
-4. Update widget to read new file
 
 ---
 
@@ -400,9 +333,4 @@ Add new data sources:
 
 ---
 
-## See Also
-
-- `mcp-server/README.md` - MCP server documentation
-- `CLAUDE.md` - Project memory and context
-- `docs/plans/` - Implementation plans and designs
 
