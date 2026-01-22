@@ -449,6 +449,54 @@ class SpriteLayer: DisplayComponent {
     }
 }
 
+// MARK: - Sprite Catalog
+
+struct SpriteCatalog {
+    // MARK: - Clouds
+    static let cloudTiny = Sprite(frames: ["∿∿"])
+
+    static let cloudSmall = Sprite(frames: ["""
+ ∿∿
+∿∿∿∿
+"""])
+
+    static let cloudMedium = Sprite(frames: ["""
+  ∿∿∿
+ ∿∿∿∿∿
+  ∿∿∿
+"""])
+
+    static let cloudLarge = Sprite(frames: ["""
+   ∿∿∿∿
+ ∿∿∿∿∿∿∿∿
+  ∿∿∿∿∿∿
+"""])
+
+    // MARK: - Snow
+    static let snowflake = Sprite(frames: ["*"])
+    static let snowDot = Sprite(frames: ["·"])
+    static let snowLarge = Sprite(frames: ["""
+ *
+***
+ *
+"""])
+
+    // MARK: - Rain
+    static let raindrop = Sprite(frames: ["│"])
+    static let rainLight = Sprite(frames: [":"])
+    static let rainStreak = Sprite(frames: ["""
+│
+│
+"""])
+
+    // MARK: - Fog
+    static let fogDot = Sprite(frames: ["·"])
+    static let fogWisp = Sprite(frames: ["···"])
+
+    // MARK: - Decorations
+    static let sparkle = Sprite(frames: ["·", "•", "✦", "•"])  // Animated
+}
+
 protocol DisplayComponent {
     var preferredSize: (width: Int, height: Int) { get }
     func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid
