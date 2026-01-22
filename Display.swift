@@ -337,6 +337,56 @@ struct SpriteInstance {
     }
 }
 
+struct SpriteSpawner {
+    let spriteVariants: [Sprite]  // Random selection for variation
+    var spawnRate: Double  // Probability per update (0-1)
+    var maxInstances: Int
+
+    // Spawn ranges
+    var xRange: ClosedRange<Double>
+    var yRange: ClosedRange<Double>
+    var velocityXRange: ClosedRange<Double>
+    var velocityYRange: ClosedRange<Double>
+    var frameSpeedRange: ClosedRange<Double>
+    var lifetimeRange: ClosedRange<Int>
+
+    init(spriteVariants: [Sprite],
+         spawnRate: Double = 0.1,
+         maxInstances: Int = 10,
+         xRange: ClosedRange<Double>,
+         yRange: ClosedRange<Double>,
+         velocityXRange: ClosedRange<Double> = 0...0,
+         velocityYRange: ClosedRange<Double> = 0...0,
+         frameSpeedRange: ClosedRange<Double> = 0...0,
+         lifetimeRange: ClosedRange<Int> = 50...150) {
+        self.spriteVariants = spriteVariants
+        self.spawnRate = spawnRate
+        self.maxInstances = maxInstances
+        self.xRange = xRange
+        self.yRange = yRange
+        self.velocityXRange = velocityXRange
+        self.velocityYRange = velocityYRange
+        self.frameSpeedRange = frameSpeedRange
+        self.lifetimeRange = lifetimeRange
+    }
+
+    func shouldSpawn(currentCount: Int) -> Bool {
+        currentCount < maxInstances && Double.random(in: 0...1) < spawnRate
+    }
+
+    func spawn() -> SpriteInstance {
+        SpriteInstance(
+            sprite: spriteVariants.randomElement()!,
+            x: Double.random(in: xRange),
+            y: Double.random(in: yRange),
+            velocityX: Double.random(in: velocityXRange),
+            velocityY: Double.random(in: velocityYRange),
+            frameSpeed: Double.random(in: frameSpeedRange),
+            lifetime: Int.random(in: lifetimeRange)
+        )
+    }
+}
+
 protocol DisplayComponent {
     var preferredSize: (width: Int, height: Int) { get }
     func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid
