@@ -70,6 +70,19 @@ cd ~/Desktop/directory/central-hub
 ./restart.sh
 ```
 
+## Avatar Preview
+
+```
+IDLE            THINKING         RUNNING          AWAITING         OFFLINE
+╭─────────╮     ╭~~~~~~~~~╮     ╭═════════╮     ╭⋯⋯⋯⋯⋯⋯⋯⋯⋯╮     ╭·········╮
+│  ·   ·  │     │  ˘   ˘  │     │  ●   ●  │     │  ?   ?  │     │  ·   ·  │
+│    ◡    │     │    ~    │     │    ◡    │     │    ·    │     │    ─    │
+│         │     │         │     │         │     │         │     │         │
+│ ·  ·  · │     │ • ◦ • ◦ │     │ • ● • ● │     │ · · · · │     │  · · ·  │
+╰─────────╯     ╰~~~~~~~~~╯     ╰═════════╯     ╰⋯⋯⋯⋯⋯⋯⋯⋯⋯╯     ╰·········╯
+ █████░░░░       ████░░░░░       ███████░░       ██░░░░░░░       ░░░░░░░░░
+```
+
 ## Using the MCP Tools
 
 After setup and restarting Claude Code:
