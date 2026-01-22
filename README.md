@@ -1,10 +1,25 @@
 # Central Hub
 
-A complete personal information hub with integrated MCP server and desktop widget.
+My personal information hub with integrated MCP server and desktop widget.
 
 **Components:**
-1. **MCP Server** - Exposes tools to Claude Code (weather, time, status)
-2. **Desktop Widget** - Floating overlay showing Claude's status with animated avatar and weather effects
+1. **MCP Server** - Exposes my tools to Claude Code (weather, time, status)
+2. **Desktop Widget** - Floating overlay showing what I'm doing with an animated avatar and weather effects
+
+## Meet Your Always-On Avatar
+
+```
+IDLE            THINKING         RUNNING          AWAITING         OFFLINE
+╭─────────╮     ╭~~~~~~~~~╮     ╭═════════╮     ╭⋯⋯⋯⋯⋯⋯⋯⋯⋯╮     ╭·········╮
+│  ·   ·  │     │  ˘   ˘  │     │  ●   ●  │     │  ?   ?  │     │  ·   ·  │
+│    ◡    │     │    ~    │     │    ◡    │     │    ·    │     │    ─    │
+│         │     │         │     │         │     │         │     │         │
+│ ·  ·  · │     │ • ◦ • ◦ │     │ • ● • ● │     │ · · · · │     │  · · ·  │
+╰─────────╯     ╰~~~~~~~~~╯     ╰═════════╯     ╰⋯⋯⋯⋯⋯⋯⋯⋯⋯╯     ╰·········╯
+ █████░░░░       ████░░░░░       ███████░░       ██░░░░░░░       ░░░░░░░░░
+```
+
+Your floating companion that reacts to everything I'm doing—thinking, running tools, waiting for input. With animated weather effects.
 
 ## Architecture
 
@@ -70,25 +85,12 @@ cd ~/Desktop/directory/central-hub
 ./restart.sh
 ```
 
-## Avatar Preview
-
-```
-IDLE            THINKING         RUNNING          AWAITING         OFFLINE
-╭─────────╮     ╭~~~~~~~~~╮     ╭═════════╮     ╭⋯⋯⋯⋯⋯⋯⋯⋯⋯╮     ╭·········╮
-│  ·   ·  │     │  ˘   ˘  │     │  ●   ●  │     │  ?   ?  │     │  ·   ·  │
-│    ◡    │     │    ~    │     │    ◡    │     │    ·    │     │    ─    │
-│         │     │         │     │         │     │         │     │         │
-│ ·  ·  · │     │ • ◦ • ◦ │     │ • ● • ● │     │ · · · · │     │  · · ·  │
-╰─────────╯     ╰~~~~~~~~~╯     ╰═════════╯     ╰⋯⋯⋯⋯⋯⋯⋯⋯⋯╯     ╰·········╯
- █████░░░░       ████░░░░░       ███████░░       ██░░░░░░░       ░░░░░░░░░
-```
-
 ## Using the MCP Tools
 
 After setup and restarting Claude Code:
 
 ```
-Ask Claude:
+Ask me:
   • "What's the weather?"
   • "What time is it in Tokyo?"
   • "What's my current status?"
@@ -98,19 +100,19 @@ Check MCP is connected: Run `/mcp` in Claude Code - `central-hub` should appear.
 
 ---
 
-## Component 1: MCP Server
+## Component 1: My MCP Server
 
 **Location**: `~/.claude/mcp-servers/central-hub/` (auto-installed by `setup.sh`)
 **Source**: `./mcp-server/` directory in this repo
 
-### Tools
+### Tools I Provide
 
 | Tool | Description | Dependencies |
 |------|-------------|--------------|
 | `ping()` | Test server connectivity | None |
 | `get_weather(lat?, lon?)` | Current weather with auto-location | `requests` (included) |
 | `get_time(timezone?)` | Current time in any timezone | None (stdlib zoneinfo) |
-| `get_claude_status()` | Read Claude's current status | None |
+| `get_claude_status()` | Read my current status | None |
 
 ### Location Detection (Automatic)
 
@@ -152,14 +154,14 @@ Installed automatically by `setup.sh`:
 
 ---
 
-## Component 2: Desktop Widget
+## Component 2: My Desktop Widget
 
 **Location**: `./ClaudeStatusOverlay` (built by `setup.sh`)
 **Source**: `Display.swift`, `ClaudeStatusOverlay.swift`
 
 ### Features
 
-- **Always-on-top floating window** - Shows Claude's current status
+- **Always-on-top floating window** - Shows what I'm up to
 - **Animated avatar** - Different faces for idle/thinking/running/awaiting/offline states
 - **Composable sprite system** - Multi-frame ASCII art sprites
 - **Weather effects** - Animated snow, rain, clouds, fog using procedural sprite generation
@@ -289,7 +291,7 @@ central-hub/
 **MCP server not connected:**
 - Run `setup.sh` to install/configure
 - Restart Claude Code completely (close + reopen)
-- Check: `/mcp` in Claude should list `central-hub`
+- Check: `/mcp` in your Claude Code should list `central-hub`
 
 **Weather not working:**
 - Check: `cat /tmp/central-hub-weather.json` (should exist)
