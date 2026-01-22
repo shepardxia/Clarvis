@@ -21,6 +21,20 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.end_headers()
             with open(OVERLAY_DIR / 'control-panel.html', 'rb') as f:
                 self.wfile.write(f.read())
+        elif self.path.startswith('/tmp/'):
+            # Serve JSON files from /tmp - convert /tmp/file to /tmp/file path
+            filepath = Path('/' + self.path.lstrip('/'))
+            if filepath.exists() and filepath.is_file():
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                with open(filepath, 'rb') as f:
+                    self.wfile.write(f.read())
+            else:
+                self.send_response(404)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"error": "File not found"}')
         else:
             self.send_response(404)
             self.end_headers()
