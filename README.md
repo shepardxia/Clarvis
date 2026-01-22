@@ -1,8 +1,10 @@
 # Central Hub
 
-A personal information hub with two components:
+A complete personal information hub with integrated MCP server and desktop widget.
+
+**Components:**
 1. **MCP Server** - Exposes tools to Claude Code (weather, time, status)
-2. **Desktop Widget** - Floating overlay showing Claude's status
+2. **Desktop Widget** - Floating overlay showing Claude's status with animated avatar and weather effects
 
 ## Architecture
 
@@ -18,6 +20,7 @@ A personal information hub with two components:
 ┌─────────────────────────────────────────────────────────────┐
 │              MCP Server (central-hub)                        │
 │              ~/.claude/mcp-servers/central-hub/              │
+│  (Managed by setup.sh - auto-installed from repo)           │
 │                          │                                   │
 │                          │ writes JSON                       │
 │                          ▼                                   │
@@ -36,243 +39,286 @@ A personal information hub with two components:
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              Desktop Widget (Swift)                          │
-│              ~/Desktop/directory/central-hub/                │
-│              ClaudeStatusOverlay                             │
+│              ./ClaudeStatusOverlay                           │
+│              (Composable sprite system w/ weather effects)   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start
+## Quick Start (First Time)
 
-### Start the widget
 ```bash
 cd ~/Desktop/directory/central-hub
+
+# One-time setup (installs MCP server, builds widget)
+./setup.sh
+
+# Restart Claude Code to load MCP server
+# (Close completely and reopen)
+
+# Start the widget (optional)
+./ClaudeStatusOverlay &
+```
+
+## Quick Start (Already Set Up)
+
+```bash
+# Start just the widget
+cd ~/Desktop/directory/central-hub
+./ClaudeStatusOverlay &
+
+# Or use the convenience script
 ./restart.sh
 ```
 
-### Verify MCP server
-Run `/mcp` in Claude Code - `central-hub` should be listed.
+## Using the MCP Tools
 
-### Test MCP tools
-Ask Claude: "What's the weather?" or "What time is it?"
+After setup and restarting Claude Code:
+
+```
+Ask Claude:
+  • "What's the weather?"
+  • "What time is it in Tokyo?"
+  • "What's my current status?"
+```
+
+Check MCP is connected: Run `/mcp` in Claude Code - `central-hub` should appear.
 
 ---
 
 ## Component 1: MCP Server
 
-**Location:** `~/.claude/mcp-servers/central-hub/`
+**Location**: `~/.claude/mcp-servers/central-hub/` (auto-installed by `setup.sh`)
+**Source**: `./mcp-server/` directory in this repo
 
 ### Tools
 
-| Tool | Description | Output File |
-|------|-------------|-------------|
-| `ping` | Test connectivity | - |
-| `get_weather(lat, lon)` | Fetch weather (Open-Meteo API, free) | `/tmp/central-hub-weather.json` |
-| `get_time(timezone)` | Get current time | `/tmp/central-hub-time.json` |
-| `get_claude_status` | Read Claude's current status | - |
+| Tool | Description | Dependencies |
+|------|-------------|--------------|
+| `ping()` | Test server connectivity | None |
+| `get_weather(lat?, lon?)` | Current weather with auto-location | `requests` (included) |
+| `get_time(timezone?)` | Current time in any timezone | None (stdlib zoneinfo) |
+| `get_claude_status()` | Read Claude's current status | None |
 
-### Location Detection
+### Location Detection (Automatic)
 
-Location is detected automatically using two methods (in order of preference):
+Weather automatically detects your location using two methods (in order):
 
-1. **CoreLocation** via [CoreLocationCLI](https://github.com/fulldecent/corelocationcli) - GPS-based location
-2. **IP Geolocation** (ip-api.com) - Fallback, approximate location
+1. **CoreLocation (GPS)** - OPTIONAL
+   - More accurate, GPS-based location
+   - Requires: `CoreLocationCLI` (install: `brew install corelocationcli`)
+   - If not installed, automatically falls back to IP geolocation
 
-**Setup CoreLocation:**
+2. **IP Geolocation** - ALWAYS AVAILABLE
+   - Approximate location from your IP address
+   - Requires: Internet connection
+   - No additional setup needed
+
+**Enable GPS location (optional):**
 ```bash
-# Install (one time)
+# Install CoreLocationCLI
 brew install corelocationcli
 
 # Grant permission (run once, approve the dialog)
 CoreLocationCLI -j
+
+# Weather will now use GPS instead of IP geolocation
 ```
 
-### Background Refresh Daemon
+### Dependencies
 
-Data is refreshed automatically every 60 seconds via LaunchAgent:
+Installed automatically by `setup.sh`:
+- `mcp>=1.0.0` - MCP framework
+- `requests>=2.28.0` - Weather API requests
+- Python 3.10+ (checked by `setup.sh`)
 
-```
-~/Library/LaunchAgents/com.central-hub.refresh.plist
-```
+### Data Sources
 
-**Manual control:**
-```bash
-# Stop daemon
-launchctl unload ~/Library/LaunchAgents/com.central-hub.refresh.plist
-
-# Start daemon
-launchctl load ~/Library/LaunchAgents/com.central-hub.refresh.plist
-
-# Check logs
-tail -f /tmp/central-hub-refresh.log
-```
-
-### Configuration
-
-Located in `~/.claude.json`:
-
-```json
-{
-  "mcpServers": {
-    "central-hub": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["--directory", "/Users/shepardxia/.claude/mcp-servers/central-hub", "run", "python", "server.py"],
-      "env": {}
-    }
-  }
-}
-```
-
-### JSON Output
-
-**Weather** (`/tmp/central-hub-weather.json`):
-```json
-{
-  "temperature": 49.7,
-  "description": "Overcast",
-  "wind_speed": 9.7,
-  "latitude": 37.7749,
-  "longitude": -122.4194,
-  "timestamp": "2026-01-22T00:09:47"
-}
-```
-
-**Time** (`/tmp/central-hub-time.json`):
-```json
-{
-  "time": "21:09",
-  "date": "2026-01-21",
-  "day": "Wednesday",
-  "timezone": "America/Los_Angeles",
-  "timestamp": "2026-01-21T21:09:47-08:00"
-}
-```
-
-### Add New Tools
-
-Edit `~/.claude/mcp-servers/central-hub/server.py`:
-
-```python
-@mcp.tool()
-async def get_new_data() -> str:
-    """Fetch new data and write to widget file."""
-    data = {"key": "value"}
-    Path("/tmp/central-hub-newdata.json").write_text(json.dumps(data))
-    return "summary"
-```
-
-Then restart Claude Code.
+- **Weather**: Open-Meteo API (free, no API key required)
+- **Time**: Python stdlib (zoneinfo)
+- **Location**: CoreLocation CLI or ip-api.com
 
 ---
 
 ## Component 2: Desktop Widget
 
-**Location:** `~/Desktop/directory/central-hub/`
+**Location**: `./ClaudeStatusOverlay` (built by `setup.sh`)
+**Source**: `Display.swift`, `ClaudeStatusOverlay.swift`
 
-### Files
+### Features
 
-```
-central-hub/
-├── README.md                      # This file
-├── CLAUDE.md                      # Technical reference
-├── Display.swift                  # Avatar, status model, context bar, view rendering
-├── ClaudeStatusOverlay.swift      # App lifecycle, window management, file watcher
-├── ClaudeStatusOverlay            # Compiled binary
-├── restart.sh                     # Build and restart script
-└── docs/plans/                    # Design documentation
-```
+- **Always-on-top floating window** - Shows Claude's current status
+- **Animated avatar** - Different faces for idle/thinking/running/awaiting/offline states
+- **Composable sprite system** - Multi-frame ASCII art sprites
+- **Weather effects** - Animated snow, rain, clouds, fog using procedural sprite generation
+- **Status indicator** - Color-coded border pulse (idle/thinking/running/waiting)
+- **Context bar** - Progress bar showing token usage (█/░ format)
+- **Draggable** - Move window by dragging
+- **Auto-hide** - Disappears after 10 min idle, reappears when active
 
-### Status States
-
-| State | Trigger | Color | Avatar |
-|-------|---------|-------|--------|
-| **thinking** | User submits prompt | Yellow | Eyes closed |
-| **running** | Tool starts | Green | Eyes open |
-| **awaiting** | Stop event | Blue | Question marks |
-| **resting** | 5 min after awaiting | Gray | Neutral |
-| **idle** | 10 min after resting | Gray | Hidden |
-
-### Avatar Design
+### Avatar States
 
 ```
-IDLE:           THINKING:       WORKING:        AWAITING:
-╭─────────╮     ╭~~~~~~~~~╮     ╭═════════╮     ╭⋯⋯⋯⋯⋯⋯⋯⋯⋯╮
-│  ·   ·  │     │  ˘   ˘  │     │  ●   ●  │     │  ?   ?  │
-│    ◡    │     │    ~    │     │    ◡    │     │    ·    │
-│         │     │         │     │         │     │         │
-│ ·  ·  · │     │ • ◦ • ◦ │     │ • ● • ● │     │ · · · · │
-╰─────────╯     ╰~~~~~~~~~╯     ╰═════════╯     ╰⋯⋯⋯⋯⋯⋯⋯⋯⋯╯
- █████░░░░       ████░░░░░       ███████░░       ██░░░░░░░
+IDLE:           THINKING:       RUNNING:        AWAITING:       OFFLINE:
+╭─────────╮     ╭~~~~~~~~~╮     ╭═════════╮     ╭⋯⋯⋯⋯⋯⋯⋯⋯⋯╮     ╭·········╮
+│  ·   ·  │     │  ˘   ˘  │     │  ●   ●  │     │  ?   ?  │     │  ·   ·  │
+│    ◡    │     │    ~    │     │    ◡    │     │    ·    │     │    ─    │
+│         │     │         │     │         │     │         │     │         │
+│ ·  ·  · │     │ • ◦ • ◦ │     │ • ● • ● │     │ · · · · │     │  · · ·  │
+╰─────────╯     ╰~~~~~~~~~╯     ╰═════════╯     ╰⋯⋯⋯⋯⋯⋯⋯⋯⋯╯     ╰·········╯
+ █████░░░░       ████░░░░░       ███████░░       ██░░░░░░░       ░░░░░░░░░
 ```
 
-### Modify Widget
+### Configuration
 
-**Timeout logic** (in `ClaudeStatusOverlay.swift`):
-```swift
-let restingTimeout: TimeInterval = 5 * 60   // 5 min: awaiting → resting
-let idleTimeout: TimeInterval = 10 * 60     // 10 min: resting → idle
+Widget settings are in `/tmp/claude-overlay-config.json`:
+```json
+{
+  "gridWidth": 28,
+  "gridHeight": 14,
+  "fontSize": 19,
+  "avatarX": 9,
+  "avatarY": 4,
+  "barX": 9,
+  "barY": 10,
+  "snowCount": 14,
+  "rainCount": 24,
+  "cloudyCount": 50,
+  "fogCount": 70
+}
 ```
 
-After changes: `./restart.sh`
+### Control Panel
+
+Web UI for runtime configuration:
+```bash
+cd ./repo
+python3 control-server.py
+# Opens at http://localhost:8765
+```
+
+Adjust widget settings and restart overlay from the control panel.
 
 ---
 
-## File Locations Summary
+## Installation Details
 
-| Component | Location |
-|-----------|----------|
-| MCP Server | `~/.claude/mcp-servers/central-hub/` |
-| MCP Config | `~/.claude.json` → `mcpServers` section |
-| Widget | `~/Desktop/directory/central-hub/` |
-| Hook Script | `~/.claude/hooks/status-hook.sh` |
-| LaunchAgent | `~/Library/LaunchAgents/com.central-hub.refresh.plist` |
-| Weather JSON | `/tmp/central-hub-weather.json` |
-| Time JSON | `/tmp/central-hub-time.json` |
-| Location JSON | `/tmp/central-hub-location.json` |
-| Status JSON | `/tmp/claude-status.json` |
+### Automatic Setup (First Time)
+
+`setup.sh` does the following:
+
+1. ✓ Checks Python 3.10+ is available
+2. ✓ Copies MCP server to `~/.claude/mcp-servers/central-hub/`
+3. ✓ Creates Python virtual environment
+4. ✓ Installs dependencies (tries `uv` for speed, falls back to `pip`)
+5. ✓ Configures `.mcp.json` for Claude Code
+6. ✓ Builds Swift widget binary
+7. ✓ Tests MCP server startup
+8. ✓ Prints next steps
+
+### Manual MCP Server Setup
+
+If you prefer manual installation:
+
+```bash
+# Create directory
+mkdir -p ~/.claude/mcp-servers/central-hub
+
+# Copy files
+cp mcp-server/* ~/.claude/mcp-servers/central-hub/
+
+# Setup Python environment
+python3.11 -m venv ~/.claude/mcp-servers/central-hub/venv
+source ~/.claude/mcp-servers/central-hub/venv/bin/activate
+pip install -e ~/.claude/mcp-servers/central-hub/
+
+# Configure MCP JSON manually (see mcp-server/README.md)
+```
+
+### Widget Build
+
+```bash
+cd ./repo
+swiftc -o ClaudeStatusOverlay Display.swift ClaudeStatusOverlay.swift -framework Cocoa
+./ClaudeStatusOverlay &
+```
+
+---
+
+## File Structure
+
+```
+central-hub/
+├── setup.sh                      # One-command installation
+├── restart.sh                    # Start widget + rebuild
+├── control-server.py             # Web UI for widget settings
+├── control-panel.html            # Web interface
+├── Display.swift                 # Widget display logic + sprite system
+├── ClaudeStatusOverlay.swift     # Widget app lifecycle
+├── ClaudeStatusOverlay           # Compiled widget binary
+├── README.md                     # This file
+├── CLAUDE.md                     # Project context
+├── mcp-server/                   # MCP Server (version-controlled)
+│   ├── server.py                 # MCP tool implementations
+│   ├── pyproject.toml            # Python dependencies
+│   └── README.md                 # MCP server documentation
+└── docs/
+    └── plans/
+        ├── 2026-01-22-composable-sprite-system.md  # Implementation plan
+        └── ...
+```
+
+**Note**: MCP server is version-controlled in `mcp-server/`. It's installed to `~/.claude/mcp-servers/central-hub/` by `setup.sh` to keep user home directories clean.
 
 ---
 
 ## Troubleshooting
 
-### MCP server not in /mcp
-1. Check `~/.claude.json` has `central-hub` in `mcpServers`
-2. Restart Claude Code
-3. Run `/mcp`
+**MCP server not connected:**
+- Run `setup.sh` to install/configure
+- Restart Claude Code completely (close + reopen)
+- Check: `/mcp` in Claude should list `central-hub`
 
-### Widget not showing
-```bash
-pgrep -f ClaudeStatusOverlay  # Check if running
-rm -f /tmp/claude-status-overlay.lock
-./restart.sh
-```
+**Weather not working:**
+- Check: `cat /tmp/central-hub-weather.json` (should exist)
+- No internet? MCP server needs internet for weather API
+- Run manually: `~/.claude/mcp-servers/central-hub/venv/bin/python3 ~/.claude/mcp-servers/central-hub/server.py --refresh`
 
-### Weather tool fails
-```bash
-# Test API directly
-curl "https://api.open-meteo.com/v1/forecast?latitude=37.7749&longitude=-122.4194&current=temperature_2m"
-```
+**Widget won't build:**
+- Install Xcode command line tools: `xcode-select --install`
+- Verify Swift: `swiftc --version`
+- Run: `./setup.sh` to rebuild
 
-### Location detection not working
-```bash
-# Test CoreLocationCLI directly
-CoreLocationCLI -j
-
-# If it hangs or fails, check System Settings > Privacy & Security > Location Services
-# Make sure CoreLocationCLI.app is listed and enabled
-
-# Check cached location
-cat /tmp/central-hub-location.json
-# "source" should be "corelocation", not "ip"
-```
+**Python version mismatch:**
+- Install Python 3.10+: `brew install python3`
+- Run: `./setup.sh` (auto-detects correct version)
 
 ---
 
-## Future Enhancements
+## Development
 
-- [ ] Display weather/time in widget
-- [x] LaunchAgent for background refresh
-- [x] Location detection (CoreLocation + IP fallback)
-- [ ] Calendar integration
-- [ ] System stats (CPU, memory)
-- [ ] Notifications
+### Sprite System
+
+New composable ASCII sprite system supports:
+- Multi-frame animation
+- Procedural generation with variation
+- Anchor-based positioning
+- Layer composition with MINUS operator (prevents sprites showing through avatar)
+
+See `docs/plans/2026-01-22-composable-sprite-system.md` for details.
+
+### MCP Server Extension
+
+Add new data sources:
+1. Add tool function to `mcp-server/server.py` with `@mcp.tool()` decorator
+2. Write output to `/tmp/central-hub-<source>.json`
+3. Run `setup.sh` again or restart Claude Code
+4. Update widget to read new file
+
+---
+
+## See Also
+
+- `mcp-server/README.md` - MCP server documentation
+- `CLAUDE.md` - Project memory and context
+- `docs/plans/` - Implementation plans and designs
+

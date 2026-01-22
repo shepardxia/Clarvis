@@ -1,0 +1,13 @@
+[project]
+name = "central-hub"
+version = "0.1.0"
+description = "Central MCP server for widget data (weather, status, etc.)"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "requests>=2.28.0",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

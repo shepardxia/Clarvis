@@ -196,8 +196,14 @@ struct CharacterGrid {
     }
 
     subscript(x: Int, y: Int) -> Character? {
-        get { cells[y][x] }
-        set { cells[y][x] = newValue }
+        get {
+            guard x >= 0, x < width, y >= 0, y < height else { return nil }
+            return cells[y][x]
+        }
+        set {
+            guard x >= 0, x < width, y >= 0, y < height else { return }
+            cells[y][x] = newValue
+        }
     }
 
     mutating func composite(_ other: CharacterGrid, at origin: (x: Int, y: Int)) {
@@ -244,6 +250,9 @@ struct Sprite {
     init(frames: [String], transparent: Character = " ", anchor: (Int, Int) = (0, 0)) {
         precondition(!frames.isEmpty, "Sprite must have at least one frame")
         self.frames = frames.map { Sprite.parseASCII($0, transparent: transparent) }
+        // Validate that all parsed frames have non-zero dimensions
+        precondition(self.frames.allSatisfy { $0.width > 0 && $0.height > 0 },
+                     "All ASCII frames must parse to non-zero dimensions (empty sprites not allowed)")
         self.anchor = anchor
     }
 
@@ -251,6 +260,7 @@ struct Sprite {
     init(grids: [CharacterGrid], anchor: (Int, Int) = (0, 0)) {
         precondition(!grids.isEmpty, "Sprite must have at least one frame")
         let expectedSize = (grids[0].width, grids[0].height)
+        precondition(expectedSize.0 > 0 && expectedSize.1 > 0, "All frames must have non-zero dimensions")
         precondition(grids.allSatisfy { $0.width == expectedSize.0 && $0.height == expectedSize.1 },
                      "All frames must have the same dimensions")
         self.frames = grids
@@ -329,6 +339,9 @@ struct SpriteInstance {
         }
     }
 
+    /// Returns the current sprite frame and its render position
+    /// The render position accounts for the sprite's anchor point offset
+    /// Used by SpriteLayer to composite the sprite into the display grid
     func render() -> (grid: CharacterGrid, x: Int, y: Int) {
         let grid = sprite.frame(at: currentFrame)
         let renderX = Int(x) - sprite.anchor.x
@@ -359,6 +372,16 @@ struct SpriteSpawner {
          velocityYRange: ClosedRange<Double> = 0...0,
          frameSpeedRange: ClosedRange<Double> = 0...0,
          lifetimeRange: ClosedRange<Int> = 50...150) {
+        precondition(!spriteVariants.isEmpty, "SpriteSpawner must have at least one sprite variant")
+        precondition(spawnRate >= 0 && spawnRate <= 1, "spawnRate must be between 0 and 1")
+        precondition(maxInstances > 0, "maxInstances must be positive")
+        precondition(xRange.lowerBound <= xRange.upperBound, "xRange must be valid (min <= max)")
+        precondition(yRange.lowerBound <= yRange.upperBound, "yRange must be valid (min <= max)")
+        precondition(velocityXRange.lowerBound <= velocityXRange.upperBound, "velocityXRange must be valid (min <= max)")
+        precondition(velocityYRange.lowerBound <= velocityYRange.upperBound, "velocityYRange must be valid (min <= max)")
+        precondition(frameSpeedRange.lowerBound <= frameSpeedRange.upperBound, "frameSpeedRange must be valid (min <= max)")
+        precondition(lifetimeRange.lowerBound <= lifetimeRange.upperBound, "lifetimeRange must be valid (min <= max)")
+
         self.spriteVariants = spriteVariants
         self.spawnRate = spawnRate
         self.maxInstances = maxInstances
@@ -376,7 +399,7 @@ struct SpriteSpawner {
 
     func spawn() -> SpriteInstance {
         SpriteInstance(
-            sprite: spriteVariants.randomElement()!,
+            sprite: spriteVariants.randomElement() ?? spriteVariants[0],  // Safe: precondition ensures non-empty
             x: Double.random(in: xRange),
             y: Double.random(in: yRange),
             velocityX: Double.random(in: velocityXRange),
@@ -547,114 +570,6 @@ enum WeatherType {
     case fog
 }
 
-struct Particle {
-    var x: Double
-    var y: Double
-    var char: Character
-    var speed: Double
-    var drift: Double
-    var lifetime: Int  // frames until respawn
-}
-
-class WeatherBackground: DisplayComponent {
-    var weatherType: WeatherType = .clear
-    var config: OverlayConfig = OverlayConfig.load()
-    private var particles: [Particle] = []
-
-    var preferredSize: (width: Int, height: Int) { (0, 0) }
-
-    func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid {
-        updateParticles(size: size)
-        spawnParticles(size: size)
-        return particlesToGrid(size: size)
-    }
-
-    private func updateParticles(size: (width: Int, height: Int)) {
-        particles = particles.map { p in
-            var p = p
-            p.lifetime -= 1
-            p.y += p.speed
-            p.x += p.drift
-            // Respawn if expired or off-screen
-            if p.lifetime <= 0 || p.y >= Double(size.height) || p.y < 0 {
-                p.x = Double.random(in: 0..<Double(size.width))
-                p.y = Double.random(in: 0..<Double(size.height))
-                p.lifetime = Int.random(in: 30...90)
-            }
-            // Wrap horizontally
-            if p.x < 0 { p.x += Double(size.width) }
-            if p.x >= Double(size.width) { p.x -= Double(size.width) }
-            return p
-        }
-    }
-
-    private func spawnParticles(size: (width: Int, height: Int)) {
-        switch weatherType {
-        case .clear:
-            break
-        case .snow(let intensity):
-            let targetCount = Int(intensity * Double(config.snowCount))
-            while particles.count < targetCount {
-                particles.append(Particle(
-                    x: Double.random(in: 0..<Double(size.width)),
-                    y: Double.random(in: 0..<Double(size.height)),
-                    char: ["*", "·", "•"].randomElement()!,
-                    speed: Double.random(in: 0.1...0.3),
-                    drift: Double.random(in: -0.05...0.05),
-                    lifetime: Int.random(in: 40...100)
-                ))
-            }
-        case .rain(let intensity):
-            let targetCount = Int(intensity * Double(config.rainCount))
-            while particles.count < targetCount {
-                particles.append(Particle(
-                    x: Double.random(in: 0..<Double(size.width)),
-                    y: Double.random(in: 0..<Double(size.height)),
-                    char: ["|", "│", ":"].randomElement()!,
-                    speed: Double.random(in: 0.5...0.8),
-                    drift: Double.random(in: -0.02...0.02),
-                    lifetime: Int.random(in: 20...60)
-                ))
-            }
-        case .cloudy:
-            let targetCount = config.cloudyCount
-            while particles.count < targetCount {
-                particles.append(Particle(
-                    x: Double.random(in: 0..<Double(size.width)),
-                    y: Double.random(in: 0..<Double(size.height)),
-                    char: ["~", "≈", "∼"].randomElement()!,
-                    speed: Double.random(in: -0.02...0.02),
-                    drift: Double.random(in: -0.03...0.03),
-                    lifetime: Int.random(in: 50...120)
-                ))
-            }
-        case .fog:
-            let targetCount = config.fogCount
-            while particles.count < targetCount {
-                particles.append(Particle(
-                    x: Double.random(in: 0..<Double(size.width)),
-                    y: Double.random(in: 0..<Double(size.height)),
-                    char: ["·", ".", "˙"].randomElement()!,
-                    speed: Double.random(in: -0.02...0.02),
-                    drift: Double.random(in: -0.02...0.02),
-                    lifetime: Int.random(in: 60...150)
-                ))
-            }
-        }
-    }
-
-    private func particlesToGrid(size: (width: Int, height: Int)) -> CharacterGrid {
-        var grid = CharacterGrid(width: size.width, height: size.height)
-        for p in particles {
-            let x = Int(p.x)
-            let y = Int(p.y)
-            if x >= 0, x < size.width, y >= 0, y < size.height {
-                grid[x, y] = p.char
-            }
-        }
-        return grid
-    }
-}
 
 class AvatarFace: DisplayComponent {
     var status: String = "idle"
@@ -710,7 +625,69 @@ class StatusDisplayView: NSView {
     }
 
     var weatherType: WeatherType = .clear {
-        didSet { needsDisplay = true }
+        didSet {
+            configureWeather(weatherType)
+            needsDisplay = true
+        }
+    }
+
+    private func configureWeather(_ type: WeatherType) {
+        backgroundLayer.clear()
+        let w = Double(config.gridWidth)
+        let h = Double(config.gridHeight)
+
+        switch type {
+        case .clear:
+            break
+
+        case .snow(let intensity):
+            backgroundLayer.spawners.append(SpriteSpawner(
+                spriteVariants: [SpriteCatalog.snowflake, SpriteCatalog.snowDot],
+                spawnRate: intensity * 0.15,
+                maxInstances: Int(intensity * Double(config.snowCount)),
+                xRange: 0...w,
+                yRange: -2...0,
+                velocityXRange: -0.05...0.05,
+                velocityYRange: 0.1...0.3,
+                lifetimeRange: 40...100
+            ))
+
+        case .rain(let intensity):
+            backgroundLayer.spawners.append(SpriteSpawner(
+                spriteVariants: [SpriteCatalog.raindrop, SpriteCatalog.rainLight],
+                spawnRate: intensity * 0.2,
+                maxInstances: Int(intensity * Double(config.rainCount)),
+                xRange: 0...w,
+                yRange: -2...0,
+                velocityXRange: -0.02...0.02,
+                velocityYRange: 0.5...0.8,
+                lifetimeRange: 20...60
+            ))
+
+        case .cloudy:
+            backgroundLayer.spawners.append(SpriteSpawner(
+                spriteVariants: [SpriteCatalog.cloudTiny, SpriteCatalog.cloudSmall, SpriteCatalog.cloudMedium],
+                spawnRate: 0.02,
+                maxInstances: config.cloudyCount / 3,
+                xRange: 0...w,
+                yRange: 0...h,
+                velocityXRange: -0.03...0.03,
+                velocityYRange: -0.02...0.02,
+                lifetimeRange: 80...200
+            ))
+
+        case .fog:
+            backgroundLayer.spawners.append(SpriteSpawner(
+                spriteVariants: [SpriteCatalog.fogDot, SpriteCatalog.fogWisp],
+                spawnRate: 0.1,
+                maxInstances: config.fogCount,
+                xRange: 0...w,
+                yRange: 0...h,
+                velocityXRange: -0.02...0.02,
+                velocityYRange: -0.02...0.02,
+                lifetimeRange: 60...150
+            ))
+        }
     }
 
     private var config = OverlayConfig.load()
@@ -720,7 +697,7 @@ class StatusDisplayView: NSView {
     private var frameTimer: Timer?
     private var font: NSFont { NSFont.monospacedSystemFont(ofSize: CGFloat(config.fontSize), weight: .regular) }
 
-    private let weatherBackground = WeatherBackground()
+    private let backgroundLayer = SpriteLayer()
     private let avatarFace = AvatarFace()
     private let contextBarComponent = ContextBarComponent()
 
@@ -728,7 +705,7 @@ class StatusDisplayView: NSView {
         let c = DisplayCompositor()
         c.gridSize = (self.config.gridWidth, self.config.gridHeight)
         c.layers = [
-            ComponentLayer(component: self.weatherBackground, zIndex: 0, origin: { _ in (0, 0) }),
+            ComponentLayer(component: self.backgroundLayer, zIndex: 0, origin: { _ in (0, 0) }),
             ComponentLayer(component: self.avatarFace, zIndex: 1, origin: { _ in (self.config.avatarX, self.config.avatarY) }, subtractsBelow: true),
             ComponentLayer(component: self.contextBarComponent, zIndex: 2, origin: { _ in (self.config.barX, self.config.barY) }, subtractsBelow: true),
         ]
@@ -772,7 +749,6 @@ class StatusDisplayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         // Update component data
-        weatherBackground.weatherType = weatherType
         avatarFace.status = status.status
         contextBarComponent.percent = status.contextPercent
 
