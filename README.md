@@ -27,19 +27,23 @@ That's me in the corner. I'll be floating on your screen, reacting to everything
 ┌─────────────────────────────────────────────────────────────┐
 │                      Claude Code                             │
 │  ┌─────────────────────────────────────────────────────────┐ │
-│  │  MCP Tools: get_weather, get_time, get_claude_status    │ │
-│  └──────────────────────┬──────────────────────────────────┘ │
-└─────────────────────────┼───────────────────────────────────┘
-                          │ stdio
-                          ▼
+│  │  MCP Tools: get_weather, get_time, list_sessions, etc   │ │
+│  └──────────────────┬──────────────────────────────────────┘ │
+└─────────────────────┼───────────────────────────────────────┘
+                      │ stdio
+                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              MCP Server (central-hub)                        │
-│              ~/.claude/mcp-servers/central-hub/              │
-│  (Managed by setup.sh - auto-installed from repo)           │
+│         MCP Server (single environment development)          │
+│         ~/.claude/mcp-servers/central-hub/                   │
+│         ├── server.py (MCP tools)                            │
+│         ├── thinking_feed.py (session monitoring)            │
+│         ├── Display.swift (widget rendering)                 │
+│         └── ClaudeStatusOverlay.swift (app lifecycle)        │
 │                          │                                   │
 │                          │ writes JSON                       │
 │                          ▼                                   │
 │              /tmp/central-hub-*.json                         │
+│              /tmp/claude-overlay-config.json                 │
 └─────────────────────────┼───────────────────────────────────┘
                           │
         ┌─────────────────┼─────────────────┐
@@ -49,15 +53,23 @@ That's me in the corner. I'll be floating on your screen, reacting to everything
 │ weather.json  │ │  time.json    │ │ status.json   │
 └───────┬───────┘ └───────┬───────┘ └───────┬───────┘
         │                 │                 │
+        │     config.json (hot-reload) ◄────┤
+        │                 │                 │
         └─────────────────┼─────────────────┘
-                          │ reads
+                          │ reads + watches
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              Desktop Widget (Swift)                          │
-│              ./ClaudeStatusOverlay                           │
-│              (Composable sprite system w/ weather effects)   │
+│              ClaudeStatusOverlay                             │
+│              (Config hot-reload via DispatchSource)          │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**Single Environment Development:**
+- Edit directly in `~/.claude/mcp-servers/central-hub/`
+- Git repo initialized by setup.sh
+- No sync scripts needed
+- Changes take effect immediately (widget hot-reloads config)
 
 ## Quick Start (First Time)
 
@@ -310,9 +322,57 @@ central-hub/
 - Install Python 3.10+: `brew install python3`
 - Run: `./setup.sh` (auto-detects correct version)
 
+**Config changes not applying:**
+- Check: Widget console shows "🔄 Config reloaded - updating positions"
+- If dimension changes (gridWidth/Height/fontSize): Restart required
+- For position changes (avatarX/Y, barX/Y): Should hot-reload
+- Debug: `tail -f /tmp/claude-overlay-config.json`
+
+**Git workflow after consolidation:**
+- Development location: `~/.claude/mcp-servers/central-hub/`
+- Commit and push from MCP server location
+- Original folder (`~/Desktop/directory/central-hub`) is template only
+
 ---
 
 ## Development
+
+**Active development location:** `~/.claude/mcp-servers/central-hub/`
+
+This is where the live MCP server runs. Edit files here directly:
+- `server.py` - MCP tools
+- `thinking_feed.py` - Session monitoring
+- `Display.swift` - Widget rendering
+- `ClaudeStatusOverlay.swift` - App lifecycle
+
+**Original template:** `~/Desktop/directory/central-hub/`
+- Kept as reference and for git commits
+- Push changes from MCP server location
+- No sync script needed anymore
+
+### Development Workflow
+
+1. **Edit files in MCP server location:**
+   ```bash
+   cd ~/.claude/mcp-servers/central-hub
+   # Edit server.py, Display.swift, etc.
+   ```
+
+2. **Test changes:**
+   ```bash
+   # For MCP server: Restart Claude Code (Command+R)
+   # For widget: ./restart.sh (rebuilds + restarts)
+   ```
+
+3. **Commit from MCP server location:**
+   ```bash
+   cd ~/.claude/mcp-servers/central-hub
+   git add .
+   git commit -m "feat: description"
+   git push
+   ```
+
+**Note:** The `~/.claude/mcp-servers/central-hub` directory is a git repo initialized by setup.sh, pointing to the same remote as the template folder.
 
 ### Sprite System
 

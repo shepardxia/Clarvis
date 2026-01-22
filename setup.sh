@@ -81,13 +81,13 @@ setup_mcp_server() {
     # Create/setup virtual environment
     print_header "Setting up Python environment..."
 
-    if [ ! -d "$MCP_DEST/venv" ]; then
-        $PYTHON_CMD -m venv "$MCP_DEST/venv"
+    if [ ! -d "$MCP_DEST/.venv" ]; then
+        $PYTHON_CMD -m venv "$MCP_DEST/.venv"
         print_success "Created Python virtual environment"
     fi
 
     # Activate venv
-    source "$MCP_DEST/venv/bin/activate"
+    source "$MCP_DEST/.venv/bin/activate"
 
     # Try uv first (fast), fall back to pip
     if command -v uv &> /dev/null; then
@@ -96,18 +96,52 @@ setup_mcp_server() {
         print_success "Dependencies installed with uv"
     else
         print_warning "uv not found, using pip (slower)"
-        "$MCP_DEST/venv/bin/pip" install -e "$MCP_DEST"
+        "$MCP_DEST/.venv/bin/pip" install -e "$MCP_DEST"
         print_success "Dependencies installed with pip"
     fi
 
     deactivate
 }
 
+setup_git_in_mcp() {
+    print_header "Setting up git in MCP server directory..."
+
+    cd "$MCP_DEST"
+
+    # Initialize git if not already a repo
+    if [ ! -d .git ]; then
+        git init
+        print_success "Git initialized in MCP server directory"
+    fi
+
+    # Set remote if original repo has one
+    if [ -d "$REPO_DIR/.git" ]; then
+        REMOTE_URL=$(cd "$REPO_DIR" && git remote get-url origin 2>/dev/null || echo "")
+        if [ -n "$REMOTE_URL" ]; then
+            git remote add origin "$REMOTE_URL" 2>/dev/null || git remote set-url origin "$REMOTE_URL"
+            print_success "Remote set to: $REMOTE_URL"
+        fi
+    fi
+
+    # Set user config from original repo if available
+    if [ -d "$REPO_DIR/.git" ]; then
+        USER_NAME=$(cd "$REPO_DIR" && git config user.name 2>/dev/null || echo "")
+        USER_EMAIL=$(cd "$REPO_DIR" && git config user.email 2>/dev/null || echo "")
+
+        if [ -n "$USER_NAME" ]; then
+            git config user.name "$USER_NAME"
+        fi
+        if [ -n "$USER_EMAIL" ]; then
+            git config user.email "$USER_EMAIL"
+        fi
+    fi
+}
+
 configure_mcp_json() {
     print_header "Configuring MCP server in Claude settings..."
 
-    MCP_SERVER_PATH="$MCP_DEST/venv/bin/python3"
-    MCP_SERVER_ARGS="$MCP_DEST/server.py"
+    MCP_SERVER_PATH="$MCP_DEST/.venv/bin/python3"
+    MCP_SERVER_ARGS="server.py"
 
     # Create .mcp.json if it doesn't exist
     if [ ! -f "$MCP_CONFIG" ]; then
@@ -138,7 +172,8 @@ if 'mcpServers' not in config:
 
 config['mcpServers']['central-hub'] = {
     'command': '$MCP_SERVER_PATH',
-    'args': ['$MCP_SERVER_ARGS']
+    'args': ['$MCP_SERVER_ARGS'],
+    'cwd': '$MCP_DEST'
 }
 
 with open(config_path, 'w') as f:
@@ -179,7 +214,7 @@ verify_setup() {
     print_success "MCP server installed"
 
     # Check venv
-    if [ ! -d "$MCP_DEST/venv" ]; then
+    if [ ! -d "$MCP_DEST/.venv" ]; then
         print_error "Virtual environment not found"
         return 1
     fi
@@ -203,7 +238,7 @@ verify_setup() {
     print_header "Testing MCP server startup..."
 
     # Start server in background (cross-platform compatible)
-    "$MCP_DEST/venv/bin/python3" "$MCP_DEST/server.py" > /tmp/mcp-test.log 2>&1 &
+    "$MCP_DEST/.venv/bin/python3" "$MCP_DEST/server.py" > /tmp/mcp-test.log 2>&1 &
     MCP_PID=$!
 
     sleep 3
@@ -273,6 +308,7 @@ main() {
 
     check_python
     setup_mcp_server
+    setup_git_in_mcp
     configure_mcp_json
     setup_widget
 

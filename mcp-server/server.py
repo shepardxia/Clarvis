@@ -407,9 +407,13 @@ def refresh_all():
         print(f"  Time error: {e}")
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for claude mcp add installation."""
     # Check if called with --refresh flag for background updates
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
         refresh_all()
     else:
         mcp.run()
+
+if __name__ == "__main__":
+    main()

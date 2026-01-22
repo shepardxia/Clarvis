@@ -83,7 +83,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                     start_new_session=True
                 )
 
-                time.sleep(0.3)
+                time.sleep(0.5)
 
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

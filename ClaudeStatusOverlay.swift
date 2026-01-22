@@ -121,6 +121,46 @@ class WeatherWatcher {
     }
 }
 
+// MARK: - Config Watcher
+
+class ConfigWatcher {
+    private let configPath = "/tmp/claude-overlay-config.json"
+    private var dirSource: DispatchSourceFileSystemObject?
+    private var lastMod: Date?
+    var onChange: ((OverlayConfig) -> Void)?
+
+    func start() {
+        let dirFD = open("/tmp", O_EVTONLY)
+        guard dirFD != -1 else { return }
+
+        dirSource = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: dirFD,
+            eventMask: .write,
+            queue: .main
+        )
+
+        dirSource?.setEventHandler { [weak self] in self?.checkFile() }
+        dirSource?.setCancelHandler { close(dirFD) }
+        dirSource?.resume()
+
+        checkFile()
+    }
+
+    private func checkFile() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: configPath),
+              let mod = attrs[.modificationDate] as? Date else { return }
+
+        if lastMod == nil || mod > lastMod! {
+            lastMod = mod
+            onChange?(readConfig())
+        }
+    }
+
+    func readConfig() -> OverlayConfig {
+        return OverlayConfig.load()
+    }
+}
+
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -128,6 +168,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var displayView: StatusDisplayView!
     let watcher = StatusWatcher()
     let weatherWatcher = WeatherWatcher()
+    let configWatcher = ConfigWatcher()
     var idleStart: Date?
     var lastActivity: Date = Date()
     var inactivityTimer: Timer?
@@ -168,6 +209,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         weatherWatcher.start()
 
+        configWatcher.onChange = { [weak self] newConfig in
+            self?.handleConfigChange(newConfig)
+        }
+        configWatcher.start()
+
         inactivityTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.checkInactivity()
         }
@@ -183,6 +229,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else if current == "resting" && elapsed >= idleTimeout {
             displayView.status = ClaudeStatus(status: "idle", color: "gray", text: "Idle")
             handleState(displayView.status)
+        }
+    }
+
+    func handleConfigChange(_ newConfig: OverlayConfig) {
+        let oldConfig = displayView.config
+
+        // Check if dimensions changed (requires full rebuild)
+        let dimensionsChanged = newConfig.gridWidth != oldConfig.gridWidth ||
+                                newConfig.gridHeight != oldConfig.gridHeight ||
+                                newConfig.fontSize != oldConfig.fontSize
+
+        if dimensionsChanged {
+            print("📐 Config dimensions changed - requires app restart")
+            // Could post notification to restart app or handle window resize here
+        } else {
+            print("🔄 Config reloaded - updating positions")
+            displayView.updateConfig(newConfig)
         }
     }
 

@@ -690,7 +690,7 @@ class StatusDisplayView: NSView {
         }
     }
 
-    private var config = OverlayConfig.load()
+    private(set) var config = OverlayConfig.load()
     private var pulsePhase: CGFloat = 0
     private var currentFrame: Int = 0
     private var pulseTimer: Timer?
@@ -718,6 +718,26 @@ class StatusDisplayView: NSView {
     }
 
     required init?(coder: NSCoder) { super.init(coder: coder) }
+
+    func updateConfig(_ newConfig: OverlayConfig) {
+        self.config = newConfig
+
+        // Update compositor grid size
+        compositor.gridSize = (newConfig.gridWidth, newConfig.gridHeight)
+
+        // Update layer origins to use new positions
+        compositor.layers = [
+            ComponentLayer(component: self.backgroundLayer, zIndex: 0, origin: { _ in (0, 0) }),
+            ComponentLayer(component: self.avatarFace, zIndex: 1, origin: { _ in (newConfig.avatarX, newConfig.avatarY) }, subtractsBelow: true),
+            ComponentLayer(component: self.contextBarComponent, zIndex: 2, origin: { _ in (newConfig.barX, newConfig.barY) }, subtractsBelow: true),
+        ]
+
+        // Reconfigure weather with new particle counts
+        configureWeather(weatherType)
+
+        // Trigger re-render
+        needsDisplay = true
+    }
 
     private func updateAnimationState() {
         status.isActive ? startAnimations() : stopAnimations()

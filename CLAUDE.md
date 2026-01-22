@@ -38,21 +38,34 @@ CoreLocationCLI -j  # Approve the dialog
 
 See README.md for detailed documentation.
 
-## Architecture
+## Architecture (Post-Consolidation)
 
-```
-Claude Code
-    ↓ stdio connection
-MCP Server (~/.claude/mcp-servers/central-hub/)
-    │ provides tools: ping, get_weather, get_time, get_claude_status
-    │
-    ├→ /tmp/central-hub-weather.json
-    ├→ /tmp/central-hub-time.json
-    └→ /tmp/central-hub-status.json
-         ↓ (read by)
-    Desktop Widget (ClaudeStatusOverlay)
-         ↓ shows
-    Animated avatar + weather effects
+**Single Environment:** `~/.claude/mcp-servers/central-hub/`
+
+All development happens here:
+- MCP server files (server.py, thinking_feed.py)
+- Widget files (Display.swift, ClaudeStatusOverlay.swift)
+- Control panel (control-server.py, control-panel.html)
+- Git repo with remote configured
+
+**No sync needed** - changes apply immediately:
+- MCP changes: Restart Claude Code
+- Widget changes: ./restart.sh or use control panel
+- Config changes: Hot-reload via DispatchSource watcher
+
+**Process efficiency:**
+- Single MCP server process (no uv wrapper)
+- Config hot-reload (no restart for position changes)
+- Widget auto-hides after 10min idle
+
+**Installation:**
+```bash
+# Standard MCP installation
+claude mcp add central-hub
+
+# Or manual
+cd ~/Desktop/directory/central-hub
+./setup.sh
 ```
 
 ## MCP Server Component
