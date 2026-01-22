@@ -282,6 +282,61 @@ struct Sprite {
     }
 }
 
+struct SpriteInstance {
+    let sprite: Sprite
+    var x: Double
+    var y: Double
+    var velocityX: Double
+    var velocityY: Double
+    var currentFrame: Int
+    var frameSpeed: Double  // Frames per update (0 = no animation)
+    var frameAccumulator: Double
+    var lifetime: Int  // -1 = infinite, 0 = dead, >0 = frames remaining
+
+    init(sprite: Sprite, x: Double, y: Double,
+         velocityX: Double = 0, velocityY: Double = 0,
+         frameSpeed: Double = 0, lifetime: Int = -1) {
+        self.sprite = sprite
+        self.x = x
+        self.y = y
+        self.velocityX = velocityX
+        self.velocityY = velocityY
+        self.currentFrame = 0
+        self.frameSpeed = frameSpeed
+        self.frameAccumulator = 0
+        self.lifetime = lifetime
+    }
+
+    var isDead: Bool { lifetime == 0 }
+
+    mutating func update() {
+        // Move
+        x += velocityX
+        y += velocityY
+
+        // Animate frames
+        if frameSpeed > 0 {
+            frameAccumulator += frameSpeed
+            while frameAccumulator >= 1 {
+                currentFrame += 1
+                frameAccumulator -= 1
+            }
+        }
+
+        // Age
+        if lifetime > 0 {
+            lifetime -= 1
+        }
+    }
+
+    func render() -> (grid: CharacterGrid, x: Int, y: Int) {
+        let grid = sprite.frame(at: currentFrame)
+        let renderX = Int(x) - sprite.anchor.x
+        let renderY = Int(y) - sprite.anchor.y
+        return (grid, renderX, renderY)
+    }
+}
+
 protocol DisplayComponent {
     var preferredSize: (width: Int, height: Int) { get }
     func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid
