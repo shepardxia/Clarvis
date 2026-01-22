@@ -233,6 +233,50 @@ struct CharacterGrid {
     }
 }
 
+// MARK: - Sprite System
+
+struct Sprite {
+    let frames: [CharacterGrid]
+    let anchor: (x: Int, y: Int)
+
+    /// Create sprite from ASCII art strings (one per frame)
+    /// Spaces are treated as transparent (nil in grid)
+    init(frames: [String], transparent: Character = " ", anchor: (Int, Int) = (0, 0)) {
+        self.frames = frames.map { Sprite.parseASCII($0, transparent: transparent) }
+        self.anchor = anchor
+    }
+
+    /// Create sprite from pre-built grids
+    init(grids: [CharacterGrid], anchor: (Int, Int) = (0, 0)) {
+        self.frames = grids
+        self.anchor = anchor
+    }
+
+    var width: Int { frames[0].width }
+    var height: Int { frames[0].height }
+    var frameCount: Int { frames.count }
+
+    func frame(at index: Int) -> CharacterGrid {
+        frames[index % frames.count]
+    }
+
+    private static func parseASCII(_ ascii: String, transparent: Character) -> CharacterGrid {
+        let lines = ascii.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+        let height = lines.count
+        let width = lines.map { $0.count }.max() ?? 0
+
+        var grid = CharacterGrid(width: width, height: height)
+        for (y, line) in lines.enumerated() {
+            for (x, char) in line.enumerated() {
+                if char != transparent {
+                    grid[x, y] = char
+                }
+            }
+        }
+        return grid
+    }
+}
+
 protocol DisplayComponent {
     var preferredSize: (width: Int, height: Int) { get }
     func render(frame: Int, phase: Double, size: (width: Int, height: Int)) -> CharacterGrid
