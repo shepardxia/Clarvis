@@ -117,6 +117,23 @@ async def get_claude_status() -> str:
 
 
 @mcp.tool()
+async def get_token_usage() -> str:
+    """Get current Claude API token usage.
+
+    Returns 5-hour and 7-day usage limits with utilization percentages and reset times.
+    """
+    import json
+    try:
+        client = _get_client()
+        result = client.call("get_token_usage")
+        return json.dumps(result, indent=2)
+    except ConnectionError as e:
+        return str(e)
+    except Exception as e:
+        return f"Error getting token usage: {e}"
+
+
+@mcp.tool()
 async def get_clarvis_state() -> dict:
     """
     Get Clarvis's full current state including displayed session, status, weather, and full history.
