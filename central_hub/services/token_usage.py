@@ -102,12 +102,14 @@ class TokenUsageService:
                 self._usage_data = usage
                 self._last_updated = datetime.utcnow()
                 retry_delay = self._retry_delay  # reset on success
+                wait_time = self.poll_interval
             else:
                 # Exponential backoff on failure
+                wait_time = retry_delay
                 retry_delay = min(retry_delay * 2, self._max_retry_delay)
 
             # Sleep until next poll or stop event
-            self._stop_event.wait(self.poll_interval)
+            self._stop_event.wait(wait_time)
 
     def _fetch_usage(self) -> Optional[Dict[str, Any]]:
         """Make single API request to get token usage.
