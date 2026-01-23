@@ -12,9 +12,11 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from .core import get_hub_section, write_hub_section, get_current_time, read_hub_data, DEFAULT_TIMEZONE
+from .core.state import StateStore, get_state_store
 from .services import get_location, get_cached_timezone, fetch_weather
 from .widget.renderer import FrameRenderer
 from .widget.config import get_config
+from .widget.socket_server import WidgetSocketServer, get_socket_server
 
 
 class StatusHandler(FileSystemEventHandler):
@@ -22,7 +24,6 @@ class StatusHandler(FileSystemEventHandler):
 
     def __init__(self, daemon):
         self.daemon = daemon
-        # Resolve symlinks (e.g., /tmp -> /private/tmp on macOS)
         self._target = str(self.daemon.status_raw_file.resolve())
 
     def on_modified(self, event):
@@ -30,7 +31,6 @@ class StatusHandler(FileSystemEventHandler):
             self.daemon.process_status_updates()
 
     def on_moved(self, event):
-        # Atomic writes via mv/rename trigger on_moved, not on_modified
         if event.dest_path == self._target:
             self.daemon.process_status_updates()
 
@@ -40,69 +40,45 @@ class StatusHandler(FileSystemEventHandler):
 
 
 class CentralHubDaemon:
-    """Background daemon for Central Hub - handles status processing and data refreshes."""
-    
+    """Background daemon for Central Hub - uses StateStore as single source of truth."""
+
+    # Configuration
+    HISTORY_SIZE = 20
+    SESSION_TIMEOUT = 300  # 5 minutes
+
     def __init__(
         self,
         status_raw_file: Path = None,
         hub_data_file: Path = None,
         output_file: Path = None,
         refresh_interval: int = 30,
-        display_fps: int = 2
+        display_fps: int = 2,
+        state_store: StateStore = None,
+        socket_server: WidgetSocketServer = None,
     ):
-        """Initialize the daemon.
-        
-        Args:
-            status_raw_file: Path to raw status file (default: /tmp/claude-status-raw.json)
-            hub_data_file: Path to hub data file (default: /tmp/central-hub-data.json)
-            output_file: Path to widget output file (default: /tmp/widget-display.json)
-            refresh_interval: Interval in seconds for automatic refresh (default: 30)
-            display_fps: Frames per second for display rendering (default: 2)
-        """
+        # File paths
         self.status_raw_file = status_raw_file or Path("/tmp/claude-status-raw.json")
         self.hub_data_file = hub_data_file or Path("/tmp/central-hub-data.json")
         self.output_file = output_file or Path("/tmp/widget-display.json")
         self.refresh_interval = refresh_interval
         self.display_fps = display_fps
-        
-        # State variables
+
+        # Core components - single source of truth
+        self.state = state_store or get_state_store()
+        self.socket_server = socket_server or get_socket_server()
+
+        # Threading
         self.observer: Observer | None = None
         self.running = False
         self.background_thread: threading.Thread | None = None
         self.display_thread: threading.Thread | None = None
         self._lock = threading.Lock()
-        
-        # Stored data
-        self.location: dict | None = None
-        self.weather: dict | None = None
-        self.time: dict | None = None
-        self.status: dict | None = None
 
-        # Display state
+        # Display rendering
         config = get_config()
         self.renderer = FrameRenderer(width=config.grid_width, height=config.grid_height)
+        self.displayed_session_id: str | None = None
 
-        # Per-session tracking: {session_id: {"status_history": [], "context_history": []}}
-        self.HISTORY_SIZE = 20
-        self.sessions: dict[str, dict] = {}
-        self.displayed_session_id: str | None = None  # Which session we're showing
-        self._last_session_switch: float = 0  # Debounce session switches
-
-        # Load sessions from hub data if available
-        hub_data = read_hub_data()
-        self.sessions = hub_data.get("sessions", {})
-
-        # Current display values
-        last_status = hub_data.get("status", {})
-        self.display_status = last_status.get("status", "idle")
-        self.display_color = last_status.get("color", "gray")
-        self.display_context_percent = last_status.get("context_percent", 0.0)
-        self.weather_type = "clear"
-        self.weather_intensity = 0.0
-
-        # Apply restored status to renderer
-        self.renderer.set_status(self.display_status)
-        
         # Border styles by status
         self.border_styles = {
             "running": {"width": 3, "pulse": True},
@@ -112,60 +88,163 @@ class CentralHubDaemon:
             "idle": {"width": 1, "pulse": False},
             "offline": {"width": 1, "pulse": False},
         }
-    
+
+        # Load initial state from hub file
+        self._load_initial_state()
+
+        # Subscribe to state changes for file persistence
+        self.state.subscribe(self._on_state_change)
+
+    # --- Backward-compatible properties ---
+
+    @property
+    def sessions(self) -> dict:
+        """Backward-compatible access to sessions."""
+        return self.state.get("sessions")
+
+    @property
+    def display_status(self) -> str:
+        """Backward-compatible access to display status."""
+        status = self.state.get("status")
+        return status.get("status", "idle") if status else "idle"
+
+    @property
+    def display_color(self) -> str:
+        """Backward-compatible access to display color."""
+        status = self.state.get("status")
+        return status.get("color", "gray") if status else "gray"
+
+    @property
+    def display_context_percent(self) -> float:
+        """Backward-compatible access to display context percent."""
+        status = self.state.get("status")
+        return status.get("context_percent", 0.0) if status else 0.0
+
+    def _load_initial_state(self):
+        """Load initial state from hub data file."""
+        hub_data = read_hub_data()
+
+        # Load into StateStore
+        if hub_data.get("status"):
+            self.state.update("status", hub_data["status"], notify=False)
+        if hub_data.get("sessions"):
+            self.state.update("sessions", hub_data["sessions"], notify=False)
+        if hub_data.get("weather"):
+            self.state.update("weather", hub_data["weather"], notify=False)
+        if hub_data.get("location"):
+            self.state.update("location", hub_data["location"], notify=False)
+        if hub_data.get("time"):
+            self.state.update("time", hub_data["time"], notify=False)
+
+        # Initialize renderer from loaded state
+        status = self.state.get("status")
+        if status:
+            self.renderer.set_status(status.get("status", "idle"))
+
+        weather = self.state.get("weather")
+        if weather:
+            weather_type = weather.get("widget_type", "clear")
+            intensity = weather.get("widget_intensity", 0.0)
+            self.renderer.set_weather(weather_type, intensity)
+
+    def _on_state_change(self, section: str, value: dict):
+        """Handle state changes - persist to file."""
+        self._persist_to_file()
+
+    def _persist_to_file(self):
+        """Persist current state to hub data file."""
+        hub_data = self.state.get_all()
+        hub_data["updated_at"] = datetime.now().isoformat()
+
+        temp_file = self.hub_data_file.with_suffix('.tmp')
+        temp_file.write_text(json.dumps(hub_data, indent=2))
+        temp_file.rename(self.hub_data_file)
+
+    # --- Session Management ---
+
     def _get_session(self, session_id: str) -> dict:
         """Get or create session tracking data."""
-        if session_id not in self.sessions:
-            self.sessions[session_id] = {
+        sessions = self.state.get("sessions")
+        if session_id not in sessions:
+            sessions[session_id] = {
                 "status_history": [],
                 "context_history": [],
                 "last_status": "idle",
                 "last_context": 0.0,
+                "last_seen": time.time(),
             }
-        return self.sessions[session_id]
+            self.state.update("sessions", sessions)
+        return sessions[session_id]
 
     def _add_to_history(self, session_id: str, status: str, context_percent: float):
         """Add values to per-session history buffers."""
-        session = self._get_session(session_id)
+        sessions = self.state.get("sessions")
+        session = sessions.get(session_id) or {
+            "status_history": [],
+            "context_history": [],
+            "last_status": "idle",
+            "last_context": 0.0,
+        }
 
-        # Conservative session switching to prevent flickering:
-        # - Only switch if no session displayed, OR this is the current session
-        # - Never auto-switch between sessions (prevents rapid back-and-forth)
+        # Update last_seen for session cleanup
+        session["last_seen"] = time.time()
+
+        # Set displayed session if none set
         if self.displayed_session_id is None:
             self.displayed_session_id = session_id
 
         # Only add status if it changed
-        history = session["status_history"]
+        history = session.get("status_history", [])
         if not history or history[-1] != status:
             history.append(status)
             if len(history) > self.HISTORY_SIZE:
                 history.pop(0)
+        session["status_history"] = history
         session["last_status"] = status
 
         # Only add context if it's a valid non-zero value
         if context_percent > 0:
-            ctx_history = session["context_history"]
+            ctx_history = session.get("context_history", [])
             ctx_history.append(context_percent)
             if len(ctx_history) > self.HISTORY_SIZE:
                 ctx_history.pop(0)
+            session["context_history"] = ctx_history
             session["last_context"] = context_percent
+
+        sessions[session_id] = session
+        self.state.update("sessions", sessions)
 
     def _get_last_context(self, session_id: str) -> float:
         """Get last known context percent for session."""
-        session = self.sessions.get(session_id, {})
+        sessions = self.state.get("sessions")
+        session = sessions.get(session_id, {})
         return session.get("last_context", 0.0)
 
-    def process_hook_event(self, raw_data: dict, existing_status: dict = None) -> dict:
-        """Process raw hook event into status/color.
+    def _cleanup_stale_sessions(self):
+        """Remove sessions inactive for > SESSION_TIMEOUT."""
+        now = time.time()
+        sessions = self.state.get("sessions")
+        active = {
+            sid: data for sid, data in sessions.items()
+            if now - data.get("last_seen", 0) < self.SESSION_TIMEOUT
+        }
+        if len(active) != len(sessions):
+            self.state.update("sessions", active)
+            # Reset displayed session if it was cleaned up
+            if self.displayed_session_id not in active:
+                self.displayed_session_id = next(iter(active), None)
 
-        Args:
-            raw_data: Raw hook event data
-            existing_status: Optional pre-read status to avoid double file reads
-        """
+    # --- Status Processing ---
+
+    def process_hook_event(self, raw_data: dict) -> dict:
+        """Process raw hook event into status/color."""
         session_id = raw_data.get("session_id", "unknown")
         event = raw_data.get("hook_event_name", "")
         context_window = raw_data.get("context_window") or {}
         context_percent = context_window.get("used_percentage") or 0
+
+        # Get existing status from state (no file read needed!)
+        existing_status = self.state.get("status")
 
         # Map events to status/color
         if event == "PreToolUse":
@@ -179,33 +258,31 @@ class CentralHubDaemon:
         elif event == "Notification":
             status, color = "awaiting", "blue"
         elif context_window:
-            # Statusline update - keep existing status but update context
-            # Use passed-in status to avoid race condition from double read
-            existing = existing_status or {}
-            status = existing.get("status", "idle")
-            color = existing.get("color", "gray")
+            status = existing_status.get("status", "idle")
+            color = existing_status.get("color", "gray")
         else:
             status, color = "idle", "gray"
 
         # Update per-session history
         self._add_to_history(session_id, status, context_percent)
 
-        # Use last known context if current is 0 or None
+        # Use last known context if current is 0
         effective_context = context_percent if context_percent else self._get_last_context(session_id)
 
         # Get session data for output
-        session = self._get_session(session_id)
+        sessions = self.state.get("sessions")
+        session = sessions.get(session_id, {})
 
         return {
             "session_id": session_id,
             "status": status,
             "color": color,
             "context_percent": effective_context,
-            "status_history": session["status_history"].copy(),
-            "context_history": session["context_history"].copy(),
+            "status_history": session.get("status_history", []).copy(),
+            "context_history": session.get("context_history", []).copy(),
             "timestamp": datetime.now().isoformat(),
         }
-    
+
     def process_status_updates(self):
         """Watch for raw hook events and process them."""
         if not self.status_raw_file.exists():
@@ -213,44 +290,37 @@ class CentralHubDaemon:
 
         try:
             raw_data = json.loads(self.status_raw_file.read_text())
+            processed = self.process_hook_event(raw_data)
 
-            # Read hub data ONCE and pass existing status to avoid race condition
-            hub_data = read_hub_data()
-            existing_status = hub_data.get("status", {})
-            processed = self.process_hook_event(raw_data, existing_status)
+            # Update state (triggers observers, including file persistence)
+            self.state.update("status", processed)
 
-            hub_data["status"] = processed
-            hub_data["sessions"] = self.sessions  # Persist per-session tracking
-            hub_data["updated_at"] = datetime.now().isoformat()
+            # Update renderer if this is the displayed session
+            if processed.get("session_id") == self.displayed_session_id:
+                with self._lock:
+                    self.renderer.set_status(processed.get("status", "idle"))
 
-            # Store in instance and update display only if this is the displayed session
-            with self._lock:
-                self.status = processed
-                if processed.get("session_id") == self.displayed_session_id:
-                    self._update_display_from_data()
+            # Periodically clean up stale sessions
+            self._cleanup_stale_sessions()
 
-            # Write atomically
-            temp_file = self.hub_data_file.with_suffix('.tmp')
-            temp_file.write_text(json.dumps(hub_data, indent=2))
-            temp_file.rename(self.hub_data_file)
         except (json.JSONDecodeError, IOError):
             pass
-    
+
+    # --- Status Watcher ---
+
     def start_status_watcher(self):
         """Start watching for status updates in background."""
         with self._lock:
             if self.observer is not None:
                 return
 
-            # Start file watcher
             self.observer = Observer()
             handler = StatusHandler(self)
             self.observer.schedule(handler, str(self.status_raw_file.parent), recursive=False)
             self.observer.start()
 
-        # Initial processing (outside lock to avoid deadlock)
         self.process_status_updates()
-    
+
     def stop_status_watcher(self):
         """Stop the status watcher."""
         with self._lock:
@@ -258,43 +328,24 @@ class CentralHubDaemon:
                 self.observer.stop()
                 self.observer.join()
                 self.observer = None
-    
+
+    # --- Data Refresh ---
+
     def refresh_location(self) -> tuple[float, float, str]:
-        """
-        Refresh location data and write to hub.
-        
-        Returns:
-            Tuple of (latitude, longitude, city)
-        """
+        """Refresh location data."""
         lat, lon, city = get_location()
-        
-        # Store in instance
-        with self._lock:
-            self.location = {
-                "latitude": lat,
-                "longitude": lon,
-                "city": city,
-            }
-        
+        self.state.update("location", {
+            "latitude": lat,
+            "longitude": lon,
+            "city": city,
+        })
         return lat, lon, city
-    
+
     def refresh_weather(self, latitude: float = None, longitude: float = None, city: str = None) -> dict:
-        """
-        Refresh weather data and write to hub.
-        
-        Args:
-            latitude: Latitude (default: auto-detect)
-            longitude: Longitude (default: auto-detect)
-            city: City name (default: auto-detect)
-        
-        Returns:
-            Weather data dict
-        """
-        # Get location if not provided
+        """Refresh weather data."""
         if latitude is None or longitude is None:
             latitude, longitude, city = get_location()
-        
-        # Fetch weather
+
         weather = fetch_weather(latitude, longitude)
         weather_dict = {
             **weather.to_dict(),
@@ -308,91 +359,48 @@ class CentralHubDaemon:
         weather_dict["widget_type"] = widget_type
         weather_dict["widget_intensity"] = widget_intensity
 
-        write_hub_section("weather", weather_dict)
-        
-        # Store in instance
+        # Update state and renderer
+        self.state.update("weather", weather_dict)
+        write_hub_section("weather", weather_dict)  # Legacy file write
+
         with self._lock:
-            self.weather = weather_dict
-            self._update_weather_display(weather_dict)
-        
+            self.renderer.set_weather(widget_type, widget_intensity)
+
         return weather_dict
-    
+
     def refresh_time(self, timezone: str = None) -> dict:
-        """
-        Refresh time data and write to hub.
-        
-        Args:
-            timezone: Timezone name (default: auto-detect from location or use default)
-        
-        Returns:
-            Time data dict
-        """
+        """Refresh time data."""
         if timezone is None:
             timezone = get_cached_timezone() or DEFAULT_TIMEZONE
-        
+
         time_data = get_current_time(timezone)
         time_dict = time_data.to_dict()
-        write_hub_section("time", time_dict)
-        
-        # Store in instance
-        with self._lock:
-            self.time = time_dict
-        
+
+        self.state.update("time", time_dict)
+        write_hub_section("time", time_dict)  # Legacy file write
+
         return time_dict
-    
+
     def refresh_all(self):
         """Refresh all data sources."""
-
-        # Get location first (writes to hub data)
         lat, lon, city = self.refresh_location()
 
-        # Fetch weather
         try:
-            weather_dict = self.refresh_weather(lat, lon, city)
-        except Exception as e:
+            self.refresh_weather(lat, lon, city)
+        except Exception:
             pass
 
-        # Update time
         try:
-            time_dict = self.refresh_time()
-        except Exception as e:
+            self.refresh_time()
+        except Exception:
             pass
-        
-        # Update display with latest data
-        with self._lock:
-            self._update_display_from_data()
-    
-    def _background_loop(self):
-        """Main background loop - handles periodic refreshes."""
-        last_refresh = 0
-        
-        while self.running:
-            current_time = time.time()
-            
-            # Check if it's time to refresh
-            if current_time - last_refresh >= self.refresh_interval:
-                self.refresh_all()
-                last_refresh = current_time
-            
-            # Sleep for a short interval before checking again
-            time.sleep(1)
-    
-    def _update_display_from_data(self):
-        """Update display state from stored data."""
-        if self.status:
-            self.display_status = self.status.get("status", "idle")
-            self.display_color = self.status.get("color", "gray")
-            self.display_context_percent = self.status.get("context_percent", 0)
-            self.renderer.set_status(self.display_status)
-    
+
     def _map_weather_to_widget(self, weather_dict: dict) -> tuple[str, float]:
         """Map weather data to widget type and intensity."""
         description = weather_dict.get("description", "").lower()
         wind_speed = weather_dict.get("wind_speed", 0)
-        # Use API-calculated intensity (based on weather code, wind, precipitation, snowfall)
         intensity = weather_dict.get("intensity", 0.5)
 
-        # Map description to weather type (for particle sprites)
         weather_type = "clear"
 
         if "snow" in description:
@@ -406,156 +414,148 @@ class CentralHubDaemon:
         elif "cloud" in description or "overcast" in description:
             weather_type = "cloudy"
 
-        # Check wind speed - windy overrides clear/cloudy (but not precipitation)
-        # 15+ mph = breezy, 25+ mph = windy
         if weather_type in ("clear", "cloudy") and wind_speed >= 15:
             weather_type = "windy"
 
         return weather_type, intensity
 
-    def _update_weather_display(self, weather_dict: dict):
-        """Update weather display from weather data."""
-        weather_type, intensity = self._map_weather_to_widget(weather_dict)
+    # --- Display Rendering ---
 
-        if weather_type != self.weather_type or intensity != self.weather_intensity:
-            self.weather_type = weather_type
-            self.weather_intensity = intensity
-            self.renderer.set_weather(weather_type, intensity)
-    
     def _render_display_frame(self):
-        """Render and write a display frame."""
+        """Render and output a display frame."""
         with self._lock:
-            frame = self.renderer.render(self.display_context_percent)
-            border = self.border_styles.get(self.display_status, {"width": 1, "pulse": False})
-            
+            status = self.state.get("status")
+            context_percent = status.get("context_percent", 0) if status else 0
+
+            frame = self.renderer.render(context_percent)
+            display_status = status.get("status", "idle") if status else "idle"
+            display_color = status.get("color", "gray") if status else "gray"
+            border = self.border_styles.get(display_status, {"width": 1, "pulse": False})
+
             output = {
                 "frame": frame,
-                "color": self.display_color,
-                "status": self.display_status,
+                "color": display_color,
+                "status": display_status,
                 "border_width": border["width"],
                 "border_pulse": border["pulse"],
-                "context_percent": self.display_context_percent,
+                "context_percent": context_percent,
                 "timestamp": time.time(),
             }
-        
-        # Atomic write
+
+        # Push to socket (new way)
+        self.socket_server.push_frame(output)
+
+        # Also write to file (backward compatibility)
         temp_file = self.output_file.with_suffix(".tmp")
         temp_file.write_text(json.dumps(output))
         temp_file.rename(self.output_file)
-    
+
     def _display_loop(self):
-        """Display rendering loop - runs in separate thread."""
+        """Display rendering loop."""
         interval = 1.0 / self.display_fps
-        
+
         while self.running:
             start = time.time()
-            
-            # Advance animation
+
             with self._lock:
                 self.renderer.tick()
-            
-            # Render and write frame
+
             self._render_display_frame()
-            
-            # Sleep to maintain FPS
+
             elapsed = time.time() - start
             sleep_time = max(0, interval - elapsed)
             time.sleep(sleep_time)
-    
+
     def start_display(self):
         """Start the display rendering thread."""
         if self.display_thread is not None and self.display_thread.is_alive():
             return
-        
+
         self.display_thread = threading.Thread(target=self._display_loop, daemon=True)
         self.display_thread.start()
-    
+
     def stop_display(self):
         """Stop the display rendering thread."""
-        # Thread will stop when self.running becomes False
         if self.display_thread is not None:
             self.display_thread.join(timeout=1.0)
             self.display_thread = None
-    
-    def start(self):
-        """Start the daemon (status watcher and periodic refresh)."""
-        if self.running:
-            return
-        
-        self.running = True
-        
-        # Load existing data from hub file
-        hub_data = read_hub_data()
-        with self._lock:
-            self.location = hub_data.get("location")
-            self.weather = hub_data.get("weather")
-            self.time = hub_data.get("time")
-            self.status = hub_data.get("status")
-            
-            # Initialize display from loaded data
-            if self.status:
-                self._update_display_from_data()
-            if self.weather:
-                self._update_weather_display(self.weather)
-        
-        # Start status watcher
-        self.start_status_watcher()
-        
-        # Start display rendering (writes to JSON file)
-        self.start_display()
 
-        # Start background loop for periodic refreshes
-        self.start_background_loop()
-        
-        # Do initial refresh
-        self.refresh_all()
-    
+    # --- Background Loop ---
+
+    def _background_loop(self):
+        """Main background loop - handles periodic refreshes."""
+        last_refresh = 0
+
+        while self.running:
+            current_time = time.time()
+
+            if current_time - last_refresh >= self.refresh_interval:
+                self.refresh_all()
+                last_refresh = current_time
+
+            time.sleep(1)
+
     def start_background_loop(self):
         """Start the background refresh loop thread."""
         if self.background_thread is not None and self.background_thread.is_alive():
             return
-        
+
         self.background_thread = threading.Thread(target=self._background_loop, daemon=False)
         self.background_thread.start()
-    
+
     def stop_background_loop(self):
         """Stop the background refresh loop thread."""
-        # Thread will stop when self.running becomes False
         if self.background_thread is not None:
             self.background_thread.join(timeout=2.0)
             self.background_thread = None
-    
+
+    # --- Lifecycle ---
+
+    def start(self):
+        """Start the daemon."""
+        if self.running:
+            return
+
+        self.running = True
+
+        # Start socket server for widget connections
+        self.socket_server.start()
+
+        # Start status watcher
+        self.start_status_watcher()
+
+        # Start display rendering
+        self.start_display()
+
+        # Start background refresh loop
+        self.start_background_loop()
+
+        # Initial refresh
+        self.refresh_all()
+
     def stop(self):
         """Stop the daemon."""
         if not self.running:
             return
-        
+
         self.running = False
-        
-        # Stop background loop
+
         self.stop_background_loop()
-        
-        # Stop status watcher
         self.stop_status_watcher()
-        
-        # Stop display rendering
         self.stop_display()
-    
+        self.socket_server.stop()
+
     def run(self):
         """Run the daemon until interrupted."""
         self.start()
         try:
-            # Keep main thread alive - all work happens in background threads
             while self.running:
-                # Check if threads are still alive
                 if self.background_thread and not self.background_thread.is_alive():
-                    # Restart if it died
                     self.start_background_loop()
                 if self.display_thread and not self.display_thread.is_alive():
-                    # Restart if it died
                     self.start_display()
-                
-                time.sleep(5)  # Check every 5 seconds
+
+                time.sleep(5)
         except KeyboardInterrupt:
             pass
         finally:
@@ -598,15 +598,12 @@ def refresh_all():
 def main():
     """Entry point for daemon mode."""
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
-        # One-time refresh of all data sources
         daemon = CentralHubDaemon()
         daemon.refresh_all()
     else:
-        # Run as daemon
         daemon = CentralHubDaemon()
         daemon.run()
 
 
 if __name__ == "__main__":
     main()
-

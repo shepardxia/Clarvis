@@ -4,7 +4,8 @@ import Foundation
 // MARK: - Configuration
 
 struct Config {
-    static let jsonPath = "/tmp/widget-display.json"
+    static let socketPath = "/tmp/clarvis-widget.sock"
+    static let jsonPath = "/tmp/widget-display.json"  // Fallback
     static let pollInterval: TimeInterval = 0.2
     static let windowSize = NSSize(width: 280, height: 220)
     static let cornerRadius: CGFloat = 24
@@ -16,8 +17,8 @@ struct Config {
     static let statusColors: [String: NSColor] = [
         "idle": NSColor(red: 0.53, green: 0.53, blue: 0.6, alpha: 1),
         "thinking": NSColor(red: 1.0, green: 0.87, blue: 0, alpha: 1),
-        "running": NSColor(red: 0, green: 1.0, blue: 0.67, alpha: 1),
-        "awaiting": NSColor(red: 0, green: 0.8, blue: 1.0, alpha: 1),
+        "running": NSColor(red: 1.0, green: 0.6, blue: 0.2, alpha: 1),
+        "awaiting": NSColor(red: 0, green: 0.85, blue: 0.5, alpha: 1),
         "resting": NSColor(red: 0.4, green: 0.4, blue: 0.53, alpha: 1),
     ]
 }
@@ -34,6 +35,118 @@ struct WidgetData: Codable {
     let border_pulse: Bool?
 }
 
+// MARK: - Socket Client
+
+class SocketClient {
+    private let socketPath: String
+    private var fileDescriptor: Int32 = -1
+    private var isConnected = false
+    private var readThread: Thread?
+    private var shouldRun = true
+
+    var onFrame: ((WidgetData) -> Void)?
+    var onConnectionChange: ((Bool) -> Void)?
+
+    init(socketPath: String = Config.socketPath) {
+        self.socketPath = socketPath
+    }
+
+    func connect() {
+        guard !isConnected else { return }
+
+        fileDescriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fileDescriptor >= 0 else {
+            scheduleReconnect()
+            return
+        }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
+            _ = socketPath.withCString { strcpy(ptr, $0) }
+        }
+
+        let result = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                Darwin.connect(fileDescriptor, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+
+        if result < 0 {
+            close(fileDescriptor)
+            fileDescriptor = -1
+            scheduleReconnect()
+            return
+        }
+
+        isConnected = true
+        shouldRun = true
+
+        DispatchQueue.main.async {
+            self.onConnectionChange?(true)
+        }
+
+        readThread = Thread { [weak self] in
+            self?.readLoop()
+        }
+        readThread?.start()
+    }
+
+    func disconnect() {
+        shouldRun = false
+        isConnected = false
+
+        if fileDescriptor >= 0 {
+            close(fileDescriptor)
+            fileDescriptor = -1
+        }
+
+        DispatchQueue.main.async {
+            self.onConnectionChange?(false)
+        }
+    }
+
+    private func readLoop() {
+        var buffer = Data()
+        let readBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+        defer { readBuffer.deallocate() }
+
+        while shouldRun && fileDescriptor >= 0 {
+            let bytesRead = read(fileDescriptor, readBuffer, 4096)
+
+            if bytesRead <= 0 {
+                handleDisconnect()
+                return
+            }
+
+            buffer.append(readBuffer, count: bytesRead)
+
+            while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                let lineData = buffer[..<newlineIndex]
+                buffer = Data(buffer[(newlineIndex + 1)...])
+
+                if let frame = try? JSONDecoder().decode(WidgetData.self, from: lineData) {
+                    DispatchQueue.main.async {
+                        self.onFrame?(frame)
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleDisconnect() {
+        disconnect()
+        scheduleReconnect()
+    }
+
+    private func scheduleReconnect() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self = self, !self.isConnected else { return }
+            self.connect()
+        }
+    }
+}
+
 // MARK: - Pulsing Border View
 
 class PulsingBorderView: NSView {
@@ -45,11 +158,9 @@ class PulsingBorderView: NSView {
                                  xRadius: Config.cornerRadius,
                                  yRadius: Config.cornerRadius)
 
-        // Background
         NSColor(red: 0.05, green: 0.05, blue: 0.08, alpha: Config.bgAlpha).setFill()
         path.fill()
 
-        // Pulsing border
         let intensity = CGFloat((sin(pulsePhase) + 1) / 2)
         let alpha = 0.4 + 0.6 * intensity
         borderColor.withAlphaComponent(alpha).setStroke()
@@ -69,11 +180,12 @@ class WidgetWindowController: NSWindowController {
     var borderView: PulsingBorderView!
     var textField: NSTextField!
     var pulseTimer: Timer?
-    var pollTimer: Timer?
+    var pollTimer: Timer?  // Fallback polling
+    var socketClient: SocketClient!
     var currentStatus = "idle"
+    var socketConnected = false
 
     convenience init() {
-        // Create frameless window
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Config.windowSize),
             styleMask: [.borderless],
@@ -85,6 +197,7 @@ class WidgetWindowController: NSWindowController {
 
         setupWindow()
         setupViews()
+        setupSocket()
         startTimers()
         positionWindow()
     }
@@ -95,8 +208,6 @@ class WidgetWindowController: NSWindowController {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
-
-        // CRITICAL: These settings allow appearing above fullscreen apps
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)))
         window.collectionBehavior = [
             .canJoinAllSpaces,
@@ -104,8 +215,6 @@ class WidgetWindowController: NSWindowController {
             .fullScreenAuxiliary,
             .ignoresCycle
         ]
-
-        // Allow mouse events to pass through for dragging
         window.isMovableByWindowBackground = true
         window.acceptsMouseMovedEvents = true
     }
@@ -113,12 +222,10 @@ class WidgetWindowController: NSWindowController {
     func setupViews() {
         guard let window = window else { return }
 
-        // Border view (background)
         borderView = PulsingBorderView(frame: NSRect(origin: .zero, size: Config.windowSize))
         borderView.wantsLayer = true
         window.contentView = borderView
 
-        // Text field for ASCII display
         textField = NSTextField(frame: borderView.bounds.insetBy(dx: 20, dy: 20))
         textField.isEditable = false
         textField.isBordered = false
@@ -127,8 +234,64 @@ class WidgetWindowController: NSWindowController {
         textField.textColor = Config.statusColors["idle"]
         textField.font = NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
         textField.alignment = .left
-        textField.stringValue = "Loading..."
+        textField.stringValue = "Connecting..."
         borderView.addSubview(textField)
+    }
+
+    func setupSocket() {
+        socketClient = SocketClient()
+
+        socketClient.onFrame = { [weak self] data in
+            self?.updateDisplay(data)
+        }
+
+        socketClient.onConnectionChange = { [weak self] connected in
+            self?.socketConnected = connected
+            if !connected {
+                self?.textField.stringValue = "Reconnecting..."
+            }
+        }
+
+        socketClient.connect()
+    }
+
+    func startTimers() {
+        // Pulse animation
+        pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
+            self?.borderView.pulse()
+        }
+
+        // Fallback file polling (only when socket not connected)
+        pollTimer = Timer.scheduledTimer(withTimeInterval: Config.pollInterval, repeats: true) { [weak self] _ in
+            guard let self = self, !self.socketConnected else { return }
+            self.loadDataFromFile()
+        }
+
+        // Initial file load
+        loadDataFromFile()
+    }
+
+    func loadDataFromFile() {
+        let path = Config.jsonPath
+        guard FileManager.default.fileExists(atPath: path),
+              let data = FileManager.default.contents(atPath: path),
+              let widgetData = try? JSONDecoder().decode(WidgetData.self, from: data) else {
+            return
+        }
+        updateDisplay(widgetData)
+    }
+
+    func updateDisplay(_ data: WidgetData) {
+        if let frame = data.frame {
+            textField.stringValue = frame
+        }
+
+        if let status = data.status, status != currentStatus {
+            currentStatus = status
+            let color = Config.statusColors[status] ?? Config.statusColors["idle"]!
+            borderView.borderColor = color
+            textField.textColor = color
+        }
     }
 
     func positionWindow() {
@@ -137,44 +300,6 @@ class WidgetWindowController: NSWindowController {
         let x = screenRect.maxX - Config.windowSize.width - 40
         let y = screenRect.maxY - Config.windowSize.height - 40
         window.setFrameOrigin(NSPoint(x: x, y: y))
-    }
-
-    func startTimers() {
-        // Pulse animation timer
-        pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
-            self?.borderView.pulse()
-        }
-
-        // JSON polling timer
-        pollTimer = Timer.scheduledTimer(withTimeInterval: Config.pollInterval, repeats: true) { [weak self] _ in
-            self?.loadData()
-        }
-
-        // Initial load
-        loadData()
-    }
-
-    func loadData() {
-        // Use FileManager to bypass URL caching
-        let path = Config.jsonPath
-        guard FileManager.default.fileExists(atPath: path),
-              let data = FileManager.default.contents(atPath: path),
-              let widgetData = try? JSONDecoder().decode(WidgetData.self, from: data) else {
-            return
-        }
-
-        // Update display
-        if let frame = widgetData.frame {
-            textField.stringValue = frame
-        }
-
-        // Update status color
-        if let status = widgetData.status, status != currentStatus {
-            currentStatus = status
-            let color = Config.statusColors[status] ?? Config.statusColors["idle"]!
-            borderView.borderColor = color
-            textField.textColor = color
-        }
     }
 
     func show() {
@@ -188,9 +313,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var widgetController: WidgetWindowController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Hide dock icon
         NSApp.setActivationPolicy(.accessory)
-
         widgetController = WidgetWindowController()
         widgetController.show()
     }
@@ -200,7 +323,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - Single Instance Check (lock file)
+// MARK: - Single Instance Check
 
 let lockFilePath = "/tmp/clarvis-widget.lock"
 
@@ -208,17 +331,14 @@ func acquireLock() -> Bool {
     let fm = FileManager.default
     let pid = ProcessInfo.processInfo.processIdentifier
 
-    // Check if lock file exists with a running process
     if fm.fileExists(atPath: lockFilePath),
        let content = try? String(contentsOfFile: lockFilePath, encoding: .utf8),
        let existingPID = Int32(content.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        // Check if process is still running
         if kill(existingPID, 0) == 0 {
-            return false  // Another instance is running
+            return false
         }
     }
 
-    // Write our PID to lock file
     try? "\(pid)".write(toFile: lockFilePath, atomically: true, encoding: .utf8)
     return true
 }
@@ -229,7 +349,6 @@ func releaseLock() {
 
 // MARK: - Main
 
-// Ensure single instance
 if !acquireLock() {
     print("ClarvisWidget is already running. Exiting.")
     exit(0)

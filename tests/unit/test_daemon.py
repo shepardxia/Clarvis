@@ -47,13 +47,15 @@ class TestCentralHubDaemon:
             output_file=temp_hub_files["widget_display"],
         )
 
-        # Create session with some data
-        daemon.sessions["existing-session"] = {
-            "status_history": ["idle", "running"],
-            "context_history": [10, 20],
-            "last_status": "running",
-            "last_context": 20,
-        }
+        # Create session with some data via state store
+        daemon.state.update("sessions", {
+            "existing-session": {
+                "status_history": ["idle", "running"],
+                "context_history": [10, 20],
+                "last_status": "running",
+                "last_context": 20,
+            }
+        })
 
         session = daemon._get_session("existing-session")
         assert session["last_status"] == "running"
