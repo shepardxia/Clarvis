@@ -1,6 +1,8 @@
 <div align="center">
 
-# Clarvis
+<h1><img src="https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=700&size=40&pause=1000&color=7C3AED&center=true&vCenter=true&width=300&lines=Clarvis" alt="Clarvis" /></h1>
+
+*A friendly face for Claude Code*
 
 [![Tests](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml/badge.svg)](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/shepardxia/Clarvis/graph/badge.svg)](https://codecov.io/gh/shepardxia/Clarvis)
