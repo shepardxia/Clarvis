@@ -3,24 +3,100 @@ import Foundation
 
 // MARK: - Configuration
 
+struct RGBColor: Codable {
+    var r: CGFloat = 0.5
+    var g: CGFloat = 0.5
+    var b: CGFloat = 0.5
+
+    func toNSColor() -> NSColor {
+        return NSColor(red: r, green: g, blue: b, alpha: 1)
+    }
+}
+
+struct StaticConfig: Codable {
+    var window_width: CGFloat = 280
+    var window_height: CGFloat = 220
+    var corner_radius: CGFloat = 24
+    var bg_alpha: CGFloat = 0.75
+    var font_size: CGFloat = 14
+    var border_width: CGFloat = 2
+    var pulse_speed: Double = 0.1
+}
+
+struct WidgetConfigFile: Codable {
+    var `static`: StaticConfig = StaticConfig()
+    var colors: [String: RGBColor]? = nil
+}
+
+struct WidgetConfig {
+    var windowWidth: CGFloat = 280
+    var windowHeight: CGFloat = 220
+    var cornerRadius: CGFloat = 24
+    var bgAlpha: CGFloat = 0.75
+    var fontSize: CGFloat = 14
+    var borderWidth: CGFloat = 2
+    var pulseSpeed: Double = 0.1
+    var statusColors: [String: NSColor] = [:]
+
+    // Default colors (used if not in config)
+    static let defaultColors: [String: NSColor] = [
+        "idle": NSColor(red: 0.53, green: 0.53, blue: 0.53, alpha: 1),
+        "resting": NSColor(red: 0.4, green: 0.4, blue: 0.45, alpha: 1),
+        "thinking": NSColor(red: 1.0, green: 0.87, blue: 0, alpha: 1),
+        "running": NSColor(red: 0, green: 1.0, blue: 0.67, alpha: 1),
+        "executing": NSColor(red: 0, green: 1.0, blue: 0.67, alpha: 1),
+        "awaiting": NSColor(red: 0.4, green: 0.5, blue: 1.0, alpha: 1),
+        "reading": NSColor(red: 0.4, green: 0.5, blue: 1.0, alpha: 1),
+        "writing": NSColor(red: 0.4, green: 0.5, blue: 1.0, alpha: 1),
+        "reviewing": NSColor(red: 1.0, green: 0, blue: 1.0, alpha: 1),
+        "offline": NSColor(red: 0.53, green: 0.53, blue: 0.53, alpha: 1),
+    ]
+
+    static func load() -> WidgetConfig {
+        let binaryPath = CommandLine.arguments[0]
+        let projectRoot = (binaryPath as NSString).deletingLastPathComponent + "/.."
+        let configPath = (projectRoot as NSString).appendingPathComponent("config.json")
+
+        guard let data = FileManager.default.contents(atPath: configPath),
+              let file = try? JSONDecoder().decode(WidgetConfigFile.self, from: data) else {
+            return WidgetConfig(statusColors: defaultColors)
+        }
+
+        // Convert config colors to NSColor
+        var colors = defaultColors
+        if let configColors = file.colors {
+            for (status, rgb) in configColors {
+                colors[status] = rgb.toNSColor()
+            }
+        }
+
+        return WidgetConfig(
+            windowWidth: file.static.window_width,
+            windowHeight: file.static.window_height,
+            cornerRadius: file.static.corner_radius,
+            bgAlpha: file.static.bg_alpha,
+            fontSize: file.static.font_size,
+            borderWidth: file.static.border_width,
+            pulseSpeed: file.static.pulse_speed,
+            statusColors: colors
+        )
+    }
+}
+
 struct Config {
     static let socketPath = "/tmp/clarvis-widget.sock"
     static let jsonPath = "/tmp/widget-display.json"  // Fallback
     static let pollInterval: TimeInterval = 0.2
-    static let windowSize = NSSize(width: 280, height: 220)
-    static let cornerRadius: CGFloat = 24
-    static let bgAlpha: CGFloat = 0.75
-    static let fontSize: CGFloat = 14
-    static let borderWidth: CGFloat = 2
-    static let pulseSpeed: Double = 0.1
 
-    static let statusColors: [String: NSColor] = [
-        "idle": NSColor(red: 0.53, green: 0.53, blue: 0.6, alpha: 1),
-        "thinking": NSColor(red: 1.0, green: 0.87, blue: 0, alpha: 1),
-        "running": NSColor(red: 0, green: 1.0, blue: 0.67, alpha: 1),
-        "awaiting": NSColor(red: 0, green: 0.8, blue: 1.0, alpha: 1),
-        "resting": NSColor(red: 0.4, green: 0.4, blue: 0.53, alpha: 1),
-    ]
+    // Loaded from config file or defaults
+    static let widgetConfig = WidgetConfig.load()
+    static var windowSize: NSSize { NSSize(width: widgetConfig.windowWidth, height: widgetConfig.windowHeight) }
+    static var cornerRadius: CGFloat { widgetConfig.cornerRadius }
+    static var bgAlpha: CGFloat { widgetConfig.bgAlpha }
+    static var fontSize: CGFloat { widgetConfig.fontSize }
+    static var borderWidth: CGFloat { widgetConfig.borderWidth }
+    static var pulseSpeed: Double { widgetConfig.pulseSpeed }
+    static var statusColors: [String: NSColor] { widgetConfig.statusColors }
 }
 
 // MARK: - Data Model
@@ -235,6 +311,14 @@ class WidgetWindowController: NSWindowController {
         textField.font = NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
         textField.alignment = .left
         textField.stringValue = "Connecting..."
+
+        // CRITICAL: Prevent line wrapping which causes display corruption
+        textField.cell?.wraps = false
+        textField.cell?.isScrollable = false
+        textField.lineBreakMode = .byClipping
+        textField.maximumNumberOfLines = 0  // No limit, but won't wrap
+        textField.usesSingleLineMode = false  // Allow newlines in content
+
         borderView.addSubview(textField)
     }
 

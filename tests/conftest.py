@@ -5,14 +5,17 @@ import pytest
 from pathlib import Path
 
 from central_hub.core import reset_state_store
+from central_hub.widget.socket_server import reset_socket_server
 
 
 @pytest.fixture(autouse=True)
 def reset_global_state():
     """Reset global state before each test to ensure isolation."""
     reset_state_store()
+    reset_socket_server()
     yield
     reset_state_store()
+    reset_socket_server()
 
 
 @pytest.fixture

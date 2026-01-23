@@ -22,11 +22,11 @@ from typing import Callable, Optional
 
 
 # =============================================================================
-# Colors
+# Colors (Canvas-local enum for Cell rendering)
 # =============================================================================
 
 class Color(Enum):
-    """ANSI 256-color codes. Value is the color number."""
+    """ANSI 256-color codes for canvas cells. Value is the color number."""
     RESET = -1
 
     # Basic colors
@@ -36,7 +36,6 @@ class Color(Enum):
     YELLOW = 3
     BLUE = 4
     MAGENTA = 5
-    CYAN = 6
     WHITE = 7
 
     # Bright colors
@@ -46,7 +45,6 @@ class Color(Enum):
     BRIGHT_YELLOW = 11
     BRIGHT_BLUE = 12
     BRIGHT_MAGENTA = 13
-    BRIGHT_CYAN = 14
     BRIGHT_WHITE = 15
 
     def ansi_fg(self) -> str:
@@ -62,19 +60,8 @@ class Color(Enum):
         return f"\033[48;5;{self.value}m"
 
 
-# Status to color mapping
-STATUS_COLORS = {
-    "idle": Color.GRAY,
-    "resting": Color.GRAY,
-    "thinking": Color.YELLOW,
-    "running": Color.BRIGHT_GREEN,
-    "executing": Color.BRIGHT_GREEN,
-    "awaiting": Color.BRIGHT_BLUE,
-    "reading": Color.CYAN,
-    "writing": Color.BRIGHT_CYAN,
-    "reviewing": Color.MAGENTA,
-    "offline": Color.GRAY,
-}
+# Note: Status colors are defined centrally in core.colors
+# Import from there: from central_hub.core.colors import STATUS_MAP
 
 
 # =============================================================================
@@ -458,7 +445,7 @@ def demo():
     # 1. Basic shapes
     print("1. Rounded rectangle:")
     c.clear()
-    Brush.rounded_rect(c, 2, 1, 8, 4, Color.CYAN, fill=False)
+    Brush.rounded_rect(c, 2, 1, 8, 4, Color.BRIGHT_BLUE, fill=False)
     print(c.render())
     print()
 

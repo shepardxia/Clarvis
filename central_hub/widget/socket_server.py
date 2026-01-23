@@ -156,3 +156,12 @@ def get_socket_server() -> WidgetSocketServer:
             if _server_instance is None:
                 _server_instance = WidgetSocketServer()
     return _server_instance
+
+
+def reset_socket_server() -> None:
+    """Reset the global socket server instance. Used for testing."""
+    global _server_instance
+    with _server_lock:
+        if _server_instance is not None:
+            _server_instance.stop()
+            _server_instance = None

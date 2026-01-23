@@ -1,8 +1,11 @@
 """Single source of truth for all Clarvis state with observer pattern."""
 
+import logging
 import threading
 import time
 from typing import Callable, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class StateStore:
@@ -61,8 +64,8 @@ class StateStore:
             for observer in observers:
                 try:
                     observer(section, value)
-                except Exception:
-                    pass  # Don't let one bad observer break others
+                except Exception as e:
+                    logger.warning(f"Observer failed for section '{section}': {e}")
 
     def get(self, section: str) -> dict:
         """
@@ -107,8 +110,8 @@ class StateStore:
             for observer in observers:
                 try:
                     observer(section, value)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Observer failed for section '{section}': {e}")
 
 
 # Global instance for singleton access

@@ -15,9 +15,10 @@ from watchdog.events import FileSystemEventHandler
 
 from .core import get_hub_section, write_hub_section, get_current_time, read_hub_data, DEFAULT_TIMEZONE
 from .core.state import StateStore, get_state_store
+from .core.ipc import DaemonServer
 from .services import get_location, get_cached_timezone, fetch_weather
 from .widget.renderer import FrameRenderer
-from .widget.config import get_config
+from .widget.config import get_config, watch_config, WidgetConfig, restart_daemon_and_widget
 from .widget.socket_server import WidgetSocketServer, get_socket_server
 
 
@@ -68,6 +69,7 @@ class CentralHubDaemon:
         # Core components - single source of truth
         self.state = state_store or get_state_store()
         self.socket_server = socket_server or get_socket_server()
+        self.command_server = DaemonServer()
 
         # Threading
         self.observer: Observer | None = None
@@ -78,7 +80,14 @@ class CentralHubDaemon:
 
         # Display rendering
         config = get_config()
-        self.renderer = FrameRenderer(width=config.grid_width, height=config.grid_height)
+        self.renderer = FrameRenderer(
+            width=config.grid_width,
+            height=config.grid_height,
+            avatar_x_offset=config.static.avatar_x_offset,
+            avatar_y_offset=config.static.avatar_y_offset,
+            bar_x_offset=config.static.bar_x_offset,
+            bar_y_offset=config.static.bar_y_offset,
+        )
         self.displayed_session_id: str | None = None
 
         # Border styles by status
@@ -147,7 +156,8 @@ class CentralHubDaemon:
         if weather:
             weather_type = weather.get("widget_type", "clear")
             intensity = weather.get("widget_intensity", 0.0)
-            self.renderer.set_weather(weather_type, intensity)
+            wind_speed = weather.get("wind_speed", 0.0)
+            self.renderer.set_weather(weather_type, intensity, wind_speed)
 
     def _on_state_change(self, section: str, value: dict):
         """Handle state changes - persist to file."""
@@ -366,7 +376,7 @@ class CentralHubDaemon:
         write_hub_section("weather", weather_dict)  # Legacy file write
 
         with self._lock:
-            self.renderer.set_weather(widget_type, widget_intensity)
+            self.renderer.set_weather(widget_type, widget_intensity, weather.wind_speed)
 
         return weather_dict
 
@@ -425,13 +435,32 @@ class CentralHubDaemon:
 
     def _render_display_frame(self):
         """Render and output a display frame."""
+        config = get_config()
+
         with self._lock:
-            status = self.state.get("status")
-            context_percent = status.get("context_percent", 0) if status else 0
+            # In testing mode, use config overrides
+            if config.testing:
+                display_status = config.test_status
+                context_percent = config.test_context_percent
+                display_color = {
+                    "idle": "gray", "thinking": "yellow", "running": "green",
+                    "awaiting": "blue", "resting": "gray"
+                }.get(display_status, "gray")
+
+                # Apply test weather if different from current
+                self.renderer.set_status(display_status)
+                self.renderer.set_weather(
+                    config.test_weather,
+                    config.test_weather_intensity,
+                    config.state.test_wind_speed
+                )
+            else:
+                status = self.state.get("status")
+                context_percent = status.get("context_percent", 0) if status else 0
+                display_status = status.get("status", "idle") if status else "idle"
+                display_color = status.get("color", "gray") if status else "gray"
 
             frame = self.renderer.render(context_percent)
-            display_status = status.get("status", "idle") if status else "idle"
-            display_color = status.get("color", "gray") if status else "gray"
             border = self.border_styles.get(display_status, {"width": 1, "pulse": False})
 
             output = {
@@ -513,12 +542,154 @@ class CentralHubDaemon:
 
     # --- Lifecycle ---
 
+    def _on_config_change(self, new_config: WidgetConfig):
+        """Handle config file changes."""
+        # Check if grid size changed (requires restart)
+        if (new_config.grid_width != self.renderer.width or
+            new_config.grid_height != self.renderer.height):
+            print(f"Grid size changed, restarting...")
+            restart_daemon_and_widget()
+            return
+
+        # If testing mode, apply overrides immediately
+        if new_config.testing:
+            with self._lock:
+                self.renderer.set_status(new_config.test_status)
+                self.renderer.set_weather(
+                    new_config.test_weather,
+                    new_config.test_weather_intensity,
+                    new_config.state.test_wind_speed
+                )
+
+    def _register_command_handlers(self):
+        """Register handlers for IPC commands from MCP server."""
+        # State queries
+        self.command_server.register("get_state", self._cmd_get_state)
+        self.command_server.register("get_status", self._cmd_get_status)
+        self.command_server.register("get_weather", self._cmd_get_weather)
+        self.command_server.register("get_sessions", self._cmd_get_sessions)
+        self.command_server.register("get_session", self._cmd_get_session)
+
+        # Actions
+        self.command_server.register("refresh_weather", self._cmd_refresh_weather)
+        self.command_server.register("refresh_time", self._cmd_refresh_time)
+        self.command_server.register("refresh_location", self._cmd_refresh_location)
+        self.command_server.register("refresh_all", self._cmd_refresh_all)
+
+        # Utility
+        self.command_server.register("ping", lambda: "pong")
+
+    def _cmd_get_state(self) -> dict:
+        """Get full Clarvis state."""
+        status = self.state.get("status")
+        weather = self.state.get("weather")
+        time_data = self.state.get("time")
+        sessions = self.state.get("sessions")
+
+        session_details = {}
+        for session_id, data in sessions.items():
+            session_details[session_id] = {
+                "last_status": data.get("last_status", "unknown"),
+                "last_context": data.get("last_context", 0),
+                "status_history": data.get("status_history", []),
+                "context_history": data.get("context_history", []),
+            }
+
+        return {
+            "displayed_session": status.get("session_id"),
+            "status": status.get("status", "unknown"),
+            "color": status.get("color", "gray"),
+            "context_percent": status.get("context_percent", 0),
+            "status_history": status.get("status_history", []),
+            "context_history": status.get("context_history", []),
+            "weather": {
+                "type": weather.get("description", "unknown"),
+                "temperature": weather.get("temperature"),
+                "wind_speed": weather.get("wind_speed", 0),
+                "intensity": weather.get("intensity", 0),
+                "city": weather.get("city", "unknown"),
+                "widget_type": weather.get("widget_type", "clear"),
+            },
+            "time": time_data.get("timestamp"),
+            "sessions": session_details,
+        }
+
+    def _cmd_get_status(self) -> dict:
+        """Get current status."""
+        return self.state.get("status")
+
+    def _cmd_get_weather(self) -> dict:
+        """Get current weather."""
+        return self.state.get("weather")
+
+    def _cmd_get_sessions(self) -> list:
+        """List all tracked sessions."""
+        sessions = self.state.get("sessions")
+        status = self.state.get("status")
+        displayed = status.get("session_id") if status else None
+
+        result = []
+        for session_id, data in sessions.items():
+            result.append({
+                "session_id": session_id,
+                "is_displayed": session_id == displayed,
+                "last_status": data.get("last_status", "unknown"),
+                "last_context": data.get("last_context", 0),
+                "status_history_length": len(data.get("status_history", [])),
+                "context_history_length": len(data.get("context_history", [])),
+            })
+        return result
+
+    def _cmd_get_session(self, session_id: str) -> dict:
+        """Get details for a specific session."""
+        sessions = self.state.get("sessions")
+        status = self.state.get("status")
+        displayed = status.get("session_id") if status else None
+
+        if session_id not in sessions:
+            raise ValueError(f"Session {session_id} not found")
+
+        data = sessions[session_id]
+        return {
+            "session_id": session_id,
+            "is_displayed": session_id == displayed,
+            "last_status": data.get("last_status", "unknown"),
+            "last_context": data.get("last_context", 0),
+            "status_history": data.get("status_history", []),
+            "context_history": data.get("context_history", []),
+        }
+
+    def _cmd_refresh_weather(self, latitude: float = None, longitude: float = None) -> dict:
+        """Refresh weather and return new data."""
+        return self.refresh_weather(latitude, longitude)
+
+    def _cmd_refresh_time(self, timezone: str = None) -> dict:
+        """Refresh time and return new data."""
+        return self.refresh_time(timezone)
+
+    def _cmd_refresh_location(self) -> dict:
+        """Refresh location and return new data."""
+        lat, lon, city = self.refresh_location()
+        return {"latitude": lat, "longitude": lon, "city": city}
+
+    def _cmd_refresh_all(self) -> str:
+        """Refresh all data sources."""
+        self.refresh_all()
+        return "ok"
+
     def start(self):
         """Start the daemon."""
         if self.running:
             return
 
         self.running = True
+
+        # Start config watcher
+        self.config_watcher = watch_config(self._on_config_change)
+
+        # Register and start command server for MCP communication
+        self._register_command_handlers()
+        self.command_server.start()
 
         # Start socket server for widget connections
         self.socket_server.start()
@@ -542,10 +713,15 @@ class CentralHubDaemon:
 
         self.running = False
 
+        # Stop config watcher
+        if hasattr(self, 'config_watcher') and self.config_watcher:
+            self.config_watcher.stop()
+
         self.stop_background_loop()
         self.stop_status_watcher()
         self.stop_display()
         self.socket_server.stop()
+        self.command_server.stop()
 
     def run(self):
         """Run the daemon until interrupted."""

@@ -13,34 +13,7 @@ from functools import lru_cache
 from typing import Optional
 
 from .pipeline import RenderPipeline, Layer
-
-
-# =============================================================================
-# Color Constants (ANSI 256)
-# =============================================================================
-
-COLORS = {
-    "gray": 8,
-    "white": 15,
-    "yellow": 11,
-    "green": 10,
-    "cyan": 14,
-    "blue": 12,
-    "magenta": 13,
-}
-
-STATUS_COLORS = {
-    "idle": COLORS["gray"],
-    "resting": COLORS["gray"],
-    "thinking": COLORS["yellow"],
-    "running": COLORS["green"],
-    "executing": COLORS["green"],
-    "awaiting": COLORS["blue"],
-    "reading": COLORS["cyan"],
-    "writing": COLORS["cyan"],
-    "reviewing": COLORS["magenta"],
-    "offline": COLORS["gray"],
-}
+from ..core.colors import ANSI_COLORS as COLORS, STATUS_ANSI as STATUS_COLORS
 
 
 # =============================================================================
@@ -294,17 +267,19 @@ class WeatherSystem:
         self.ambient_clouds: list[Particle] = []
         self.weather_type: Optional[str] = None
         self.intensity = 0.0
+        self.wind_speed = 0.0  # mph, affects horizontal drift
         self.exclusion_zones: list[BoundingBox] = []
 
     def set_exclusion_zones(self, zones: list[BoundingBox]):
         """Set bounding boxes where particles should not render."""
         self.exclusion_zones = zones
 
-    def set_weather(self, weather_type: str, intensity: float = 0.6):
+    def set_weather(self, weather_type: str, intensity: float = 0.6, wind_speed: float = 0.0):
         if weather_type != self.weather_type:
             self.weather_type = weather_type
             self.particles.clear()
         self.intensity = intensity
+        self.wind_speed = wind_speed
 
     def _is_alive(self, p: Particle) -> bool:
         """Check if particle is still on screen (any part visible)."""
@@ -334,9 +309,9 @@ class WeatherSystem:
                 alive.append(p)
         self.ambient_clouds = alive
 
-        # Spawn new ambient clouds (unless we have active cloudy/fog weather)
-        if self.weather_type in ("cloudy", "fog"):
-            return  # Let main weather handle clouds
+        # Only spawn ambient clouds when weather is calm (clear or no weather)
+        if self.weather_type and self.weather_type not in ("clear", None):
+            return  # Active weather - skip ambient clouds
 
         if (len(self.ambient_clouds) < self.AMBIENT_MAX_CLOUDS and
                 random.random() < self.AMBIENT_SPAWN_RATE):
@@ -346,8 +321,8 @@ class WeatherSystem:
             p = Particle(
                 x=random.uniform(-shape.width * 2, -shape.width),  # Start off-screen left
                 y=random.uniform(0, max_y),  # Upper portion only
-                vx=random.uniform(0.08, 0.15),  # Faster rightward drift
-                vy=random.uniform(-0.02, 0.02),  # Some vertical drift
+                vx=random.uniform(0.25, 0.45),  # Noticeable rightward drift
+                vy=random.uniform(-0.08, 0.08),  # Vertical wobble
                 shape=shape,
                 lifetime=999999,  # Effectively infinite - removed by position check
             )
@@ -380,10 +355,15 @@ class WeatherSystem:
             shape = get_shape(shape_name)
 
             if self.weather_type == "snow":
+                # Horizontal drift based on wind speed (0-30+ mph)
+                # At 0 mph: nearly still, at 15 mph: moderate drift, at 30+ mph: strong drift
+                wind_factor = min(self.wind_speed / 30.0, 1.0)  # Normalize to 0-1
+                base_vx = wind_factor * 0.15  # Max drift at high wind
+                vx_variance = 0.02 + wind_factor * 0.03  # Small variance
                 p = Particle(
                     x=random.uniform(0, self.width),
                     y=random.uniform(-shape.height, 0),
-                    vx=random.uniform(-0.1, 0.1),
+                    vx=base_vx + random.uniform(-vx_variance, vx_variance),
                     vy=random.uniform(0.15, 0.35),
                     shape=shape,
                     lifetime=random.randint(40, 100),
@@ -460,9 +440,17 @@ class FrameRenderer:
     CONTENT_HEIGHT_RATIO = 0.7 # Content uses 70% of height
     BAR_GAP_RATIO = 0.1        # Gap between avatar and bar
 
-    def __init__(self, width: int = 18, height: int = 10):
+    def __init__(self, width: int = 18, height: int = 10,
+                 avatar_x_offset: int = 0, avatar_y_offset: int = 0,
+                 bar_x_offset: int = 0, bar_y_offset: int = 0):
         self.width = width
         self.height = height
+
+        # Store offsets for layout adjustment
+        self.avatar_x_offset = avatar_x_offset
+        self.avatar_y_offset = avatar_y_offset
+        self.bar_x_offset = bar_x_offset
+        self.bar_y_offset = bar_y_offset
 
         # Pipeline with layers
         self.pipeline = RenderPipeline(width, height)
@@ -474,7 +462,7 @@ class FrameRenderer:
         self._recalculate_layout()
 
     def _recalculate_layout(self):
-        """Calculate element positions using proportional math."""
+        """Calculate element positions using proportional math, then apply offsets."""
         w, h = self.width, self.height
 
         # Scale factor relative to base
@@ -489,22 +477,28 @@ class FrameRenderer:
         content_w = w - 2 * margin_x
         content_h = h - 2 * margin_y
 
-        # Avatar stays fixed size, centered in content area
-        self.avatar_x = margin_x + (content_w - self.AVATAR_WIDTH) // 2
+        # Avatar stays fixed size, centered in content area (auto-centering)
+        avatar_x_centered = margin_x + (content_w - self.AVATAR_WIDTH) // 2
 
         # Vertical layout: avatar + gap + bar within content area
         bar_gap = max(1, int(h * self.BAR_GAP_RATIO))
         total_content_h = self.AVATAR_HEIGHT + bar_gap + 1  # 1 for bar height
 
-        # Center content block vertically
+        # Center content block vertically (auto-centering)
         content_start_y = margin_y + (content_h - total_content_h) // 2
 
-        self.avatar_y = content_start_y
-        self.bar_y = content_start_y + self.AVATAR_HEIGHT + bar_gap
+        avatar_y_centered = content_start_y
+        bar_y_centered = content_start_y + self.AVATAR_HEIGHT + bar_gap
 
         # Bar width scales with grid (clamped to reasonable bounds)
         self.bar_width = max(self.AVATAR_WIDTH, min(int(w * self.BAR_WIDTH_RATIO), w - 2 * margin_x))
-        self.bar_x = margin_x + (content_w - self.bar_width) // 2
+        bar_x_centered = margin_x + (content_w - self.bar_width) // 2
+
+        # Apply offsets to centered positions
+        self.avatar_x = avatar_x_centered + self.avatar_x_offset
+        self.avatar_y = avatar_y_centered + self.avatar_y_offset
+        self.bar_x = bar_x_centered + self.bar_x_offset
+        self.bar_y = bar_y_centered + self.bar_y_offset
 
         # Weather system
         self.weather = WeatherSystem(self.width, self.height)
@@ -522,8 +516,8 @@ class FrameRenderer:
             self.current_color = STATUS_COLORS.get(status, COLORS["gray"])
             self.keyframe_index = 0
 
-    def set_weather(self, weather_type: str, intensity: float = 0.6):
-        self.weather.set_weather(weather_type, intensity)
+    def set_weather(self, weather_type: str, intensity: float = 0.6, wind_speed: float = 0.0):
+        self.weather.set_weather(weather_type, intensity, wind_speed)
 
     def tick(self):
         """Advance animation state."""
@@ -558,13 +552,13 @@ class FrameRenderer:
         x, y = self.avatar_x, self.avatar_y
         color = self.current_color
 
-        # Build face lines
+        # Build face lines with rounded corners
         lines = [
-            f"+{border * 9}+",
-            f"|{' ' * l}{eye_char}{' ' * g}{eye_char}{' ' * r}|",
-            f"|    {mouth_char}    |",
-            f"|{substrate}|",
-            f"+{border * 9}+",
+            f"╭{border * 9}╮",
+            f"│{' ' * l}{eye_char}{' ' * g}{eye_char}{' ' * r}│",
+            f"│    {mouth_char}    │",
+            f"│{substrate}│",
+            f"╰{border * 9}╯",
         ]
 
         for dy, line in enumerate(lines):
@@ -573,6 +567,11 @@ class FrameRenderer:
     def _render_bar(self, context_percent: float):
         """Render progress bar layer."""
         self.bar_layer.clear()
+
+        # Validate and clamp context_percent to prevent flickering
+        if context_percent is None or not isinstance(context_percent, (int, float)):
+            context_percent = 0.0
+        context_percent = max(0.0, min(100.0, float(context_percent)))
 
         filled = int(context_percent / 100 * self.bar_width)
         for i in range(self.bar_width):

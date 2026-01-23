@@ -4,9 +4,9 @@ from .avatar import build_frame, get_frames, get_avatar_data
 from .renderer import FrameRenderer
 from .pipeline import RenderPipeline, Layer
 from .display_service import DisplayService, main as run_display_service
+from .socket_server import get_socket_server, reset_socket_server
 from .canvas import (
     Color,
-    STATUS_COLORS,
     Cell,
     Canvas,
     Brush,
@@ -14,6 +14,9 @@ from .canvas import (
     SPRITES,
     FaceBuilder,
 )
+
+# Status colors are now centralized in core.colors
+from ..core.colors import STATUS_MAP as STATUS_COLORS
 
 __all__ = [
     # Legacy avatar
@@ -28,9 +31,12 @@ __all__ = [
     # Display service
     "DisplayService",
     "run_display_service",
+    # Socket server
+    "get_socket_server",
+    "reset_socket_server",
     # Canvas system (modular drawing)
     "Color",
-    "STATUS_COLORS",
+    "STATUS_COLORS",  # Re-exported from core.colors
     "Cell",
     "Canvas",
     "Brush",

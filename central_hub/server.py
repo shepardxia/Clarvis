@@ -1,27 +1,41 @@
 #!/usr/bin/env python3
-"""Central Hub MCP Server - exposes tools for widget data sources."""
+"""Central Hub MCP Server - thin client that communicates with daemon."""
 
 from mcp.server.fastmcp import FastMCP
 
-from .core import get_hub_section, read_hub_data, DEFAULT_TIMEZONE
-from .daemon import refresh_location, refresh_weather, refresh_time
+from .core.ipc import get_daemon_client, DaemonClient
 from .services import get_controller, get_session_manager
 
 mcp = FastMCP("central-hub")
+
+
+def _get_client() -> DaemonClient:
+    """Get daemon client, checking if daemon is running."""
+    client = get_daemon_client()
+    if not client.is_daemon_running():
+        raise ConnectionError(
+            "Clarvis daemon is not running. Start it with: "
+            "uv run python -m central_hub.daemon"
+        )
+    return client
 
 
 # --- Widget Tools ---
 
 @mcp.tool()
 async def ping() -> str:
-    """Test that the server is running."""
-    return "pong"
+    """Test that the server is running and daemon is connected."""
+    try:
+        client = _get_client()
+        return client.call("ping")
+    except ConnectionError as e:
+        return str(e)
 
 
 @mcp.tool()
 async def get_weather(latitude: float = None, longitude: float = None) -> str:
     """
-    Fetch current weather for a location and write to widget file.
+    Fetch current weather for a location.
 
     Args:
         latitude: Latitude (default: auto-detect from IP)
@@ -31,24 +45,23 @@ async def get_weather(latitude: float = None, longitude: float = None) -> str:
         Weather summary string
     """
     try:
-        # Check cache first (only for auto-detected location)
-        if latitude is None and longitude is None:
-            cached = get_hub_section("weather")
-            if cached:
-                return (
-                    f"{cached['temperature']}°F, {cached['description']}, "
-                    f"Wind: {cached['wind_speed']} mph ({cached.get('city', '')}) [cached]"
-                )
+        client = _get_client()
 
-        # Call daemon to refresh weather
-        weather_dict = refresh_weather(latitude, longitude)
-        city = weather_dict.get('city', 'Unknown')
+        # If coordinates provided, refresh with them
+        if latitude is not None and longitude is not None:
+            weather = client.call("refresh_weather", latitude=latitude, longitude=longitude)
+        else:
+            # Try cached first, then refresh if needed
+            weather = client.call("get_weather")
+            if not weather or not weather.get("temperature"):
+                weather = client.call("refresh_weather")
 
         return (
-            f"{weather_dict['temperature']}°F, {weather_dict['description']}, "
-            f"Wind: {weather_dict['wind_speed']} mph ({city})"
+            f"{weather.get('temperature', '?')}°F, {weather.get('description', 'unknown')}, "
+            f"Wind: {weather.get('wind_speed', 0)} mph ({weather.get('city', 'Unknown')})"
         )
-
+    except ConnectionError as e:
+        return str(e)
     except Exception as e:
         return f"Error fetching weather: {e}"
 
@@ -56,30 +69,23 @@ async def get_weather(latitude: float = None, longitude: float = None) -> str:
 @mcp.tool()
 async def get_time(timezone: str = None) -> str:
     """
-    Get current time and write to widget file.
+    Get current time.
 
     Args:
-        timezone: Timezone name (default: auto-detect from location, fallback to America/Los_Angeles)
+        timezone: Timezone name (default: auto-detect)
 
     Returns:
         Current time string
     """
     try:
-        # Auto-detect timezone from cached location if not provided
-        if timezone is None:
-            location = get_hub_section("location")
-            timezone = location.get("timezone") if location else None
-            if not timezone:
-                timezone = DEFAULT_TIMEZONE
+        client = _get_client()
+        time_dict = client.call("refresh_time", timezone=timezone)
 
-        # Call daemon to refresh time
-        time_dict = refresh_time(timezone)
-
-        # Format display string
         from datetime import datetime
         dt = datetime.fromisoformat(time_dict['timestamp'])
         return f"{dt.strftime('%A, %B %d, %Y %H:%M')} ({time_dict['timezone']})"
-
+    except ConnectionError as e:
+        return str(e)
     except Exception as e:
         return f"Error getting time: {e}"
 
@@ -87,24 +93,25 @@ async def get_time(timezone: str = None) -> str:
 @mcp.tool()
 async def get_claude_status() -> str:
     """
-    Read current Claude status from the hub data file.
+    Read current Claude status from the daemon.
 
     Returns:
         Current status information
     """
     try:
-        hub_data = read_hub_data()
-        status_data = hub_data.get("status", {})
+        client = _get_client()
+        status = client.call("get_status")
 
-        if not status_data:
+        if not status:
             return "No status data found"
 
-        status = status_data.get("status", "unknown")
-        color = status_data.get("color", "gray")
-        context_percent = status_data.get("context_percent", 0)
-
-        return f"Status: {status}, Color: {color}, Context: {context_percent:.1f}%"
-
+        return (
+            f"Status: {status.get('status', 'unknown')}, "
+            f"Color: {status.get('color', 'gray')}, "
+            f"Context: {status.get('context_percent', 0):.1f}%"
+        )
+    except ConnectionError as e:
+        return str(e)
     except Exception as e:
         return f"Error reading status: {e}"
 
@@ -118,40 +125,10 @@ async def get_clarvis_state() -> dict:
         Dictionary with Clarvis's complete state including all tracked session histories
     """
     try:
-        hub_data = read_hub_data()
-
-        status = hub_data.get("status", {})
-        weather = hub_data.get("weather", {})
-        time_data = hub_data.get("time", {})
-        sessions = hub_data.get("sessions", {})
-
-        # Include full session data for debugging
-        session_details = {}
-        for session_id, data in sessions.items():
-            session_details[session_id] = {
-                "last_status": data.get("last_status", "unknown"),
-                "last_context": data.get("last_context", 0),
-                "status_history": data.get("status_history", []),
-                "context_history": data.get("context_history", []),
-            }
-
-        return {
-            "displayed_session": status.get("session_id"),
-            "status": status.get("status", "unknown"),
-            "color": status.get("color", "gray"),
-            "context_percent": status.get("context_percent", 0),
-            "status_history": status.get("status_history", []),
-            "context_history": status.get("context_history", []),
-            "weather": {
-                "type": weather.get("description", "unknown"),
-                "temperature": weather.get("temperature"),
-                "intensity": weather.get("intensity", 0),
-                "city": weather.get("city", "unknown"),
-            },
-            "time": time_data.get("timestamp"),
-            "sessions": session_details,
-            "updated_at": hub_data.get("updated_at"),
-        }
+        client = _get_client()
+        return client.call("get_state")
+    except ConnectionError as e:
+        return {"error": str(e)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -165,23 +142,11 @@ async def list_clarvis_sessions() -> list[dict]:
         List of tracked sessions with status and context history
     """
     try:
-        hub_data = read_hub_data()
-
-        sessions = hub_data.get("sessions", {})
-        displayed = hub_data.get("status", {}).get("session_id")
-
-        result = []
-        for session_id, data in sessions.items():
-            result.append({
-                "session_id": session_id,
-                "is_displayed": session_id == displayed,
-                "last_status": data.get("last_status", "unknown"),
-                "last_context": data.get("last_context", 0),
-                "status_history_length": len(data.get("status_history", [])),
-                "context_history_length": len(data.get("context_history", [])),
-            })
-
-        return result if result else [{"message": "No sessions tracked"}]
+        client = _get_client()
+        sessions = client.call("get_sessions")
+        return sessions if sessions else [{"message": "No sessions tracked"}]
+    except ConnectionError as e:
+        return [{"error": str(e)}]
     except Exception as e:
         return [{"error": str(e)}]
 
@@ -198,23 +163,12 @@ async def get_clarvis_session(session_id: str) -> dict:
         Session details including full history
     """
     try:
-        hub_data = read_hub_data()
-
-        sessions = hub_data.get("sessions", {})
-        displayed = hub_data.get("status", {}).get("session_id")
-
-        if session_id not in sessions:
-            return {"error": f"Session {session_id} not found"}
-
-        data = sessions[session_id]
-        return {
-            "session_id": session_id,
-            "is_displayed": session_id == displayed,
-            "last_status": data.get("last_status", "unknown"),
-            "last_context": data.get("last_context", 0),
-            "status_history": data.get("status_history", []),
-            "context_history": data.get("context_history", []),
-        }
+        client = _get_client()
+        return client.call("get_session", session_id=session_id)
+    except ConnectionError as e:
+        return {"error": str(e)}
+    except RuntimeError as e:
+        return {"error": str(e)}
     except Exception as e:
         return {"error": str(e)}
 

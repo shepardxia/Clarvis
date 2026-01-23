@@ -1,67 +1,133 @@
-"""Widget configuration - shared state between debug UI and daemon."""
+"""Widget configuration - static settings and runtime state in nested structure."""
+
+from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, Callable
 
-CONFIG_PATH = Path("/tmp/widget-config.json")
+# Project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+CONFIG_PATH = PROJECT_ROOT / "config.json"
+
 
 @dataclass
-class WidgetConfig:
-    """Widget rendering configuration."""
-    # Grid
+class StaticConfig:
+    """Static settings (worth tracking in git)."""
+    # Grid size (Python renderer)
     grid_width: int = 29
     grid_height: int = 12
 
-    # Avatar position offsets
+    # Window size (Swift widget display)
+    window_width: int = 280
+    window_height: int = 220
+    corner_radius: int = 24
+    bg_alpha: float = 0.75
+    font_size: int = 14
+    border_width: int = 2
+    pulse_speed: float = 0.1
+
+    # Avatar position offsets (relative to auto-centered position)
     avatar_x_offset: int = 0
     avatar_y_offset: int = 0
-    bar_y_offset: int = 1
 
-    # Weather (auto = read from hub data)
-    weather_type: str = "auto"
-    weather_intensity: float = 0.6
+    # Bar position offsets (relative to auto-centered position)
+    bar_x_offset: int = 0
+    bar_y_offset: int = 0
 
     # Animation
     fps: int = 5
+
+
+@dataclass
+class StateConfig:
+    """Runtime state (for testing)."""
+    testing: bool = False
+    test_status: str = "idle"
+    test_weather: str = "clear"
+    test_weather_intensity: float = 0.5
+    test_wind_speed: float = 5.0  # mph, affects snow drift
+    test_context_percent: float = 50.0
     paused: bool = False
 
-    # Status override (None = use hook events)
-    status_override: Optional[str] = None
-    context_percent_override: Optional[float] = None
+
+@dataclass
+class WidgetConfig:
+    """Combined config with static and state sections."""
+    static: StaticConfig
+    state: StateConfig
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {
+            "static": asdict(self.static),
+            "state": asdict(self.state),
+        }
 
     @classmethod
     def from_dict(cls, d: dict) -> "WidgetConfig":
-        # Filter to only known fields
-        known = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered = {k: v for k, v in d.items() if k in known}
-        return cls(**filtered)
+        static_dict = d.get("static", {})
+        state_dict = d.get("state", {})
+
+        # Filter to known fields
+        static_known = {f.name for f in StaticConfig.__dataclass_fields__.values()}
+        state_known = {f.name for f in StateConfig.__dataclass_fields__.values()}
+
+        static = StaticConfig(**{k: v for k, v in static_dict.items() if k in static_known})
+        state = StateConfig(**{k: v for k, v in state_dict.items() if k in state_known})
+
+        return cls(static=static, state=state)
 
     def save(self, path: Path = CONFIG_PATH):
-        """Save config to file."""
         temp = path.with_suffix(".tmp")
         temp.write_text(json.dumps(self.to_dict(), indent=2))
         temp.rename(path)
 
     @classmethod
     def load(cls, path: Path = CONFIG_PATH) -> "WidgetConfig":
-        """Load config from file, or return defaults."""
         try:
             if path.exists():
                 return cls.from_dict(json.loads(path.read_text()))
         except (json.JSONDecodeError, IOError):
             pass
-        return cls()
+        return cls(static=StaticConfig(), state=StateConfig())
+
+    # Convenience accessors for backward compatibility
+    @property
+    def grid_width(self) -> int:
+        return self.static.grid_width
+
+    @property
+    def grid_height(self) -> int:
+        return self.static.grid_height
+
+    @property
+    def testing(self) -> bool:
+        return self.state.testing
+
+    @property
+    def test_status(self) -> str:
+        return self.state.test_status
+
+    @property
+    def test_weather(self) -> str:
+        return self.state.test_weather
+
+    @property
+    def test_weather_intensity(self) -> float:
+        return self.state.test_weather_intensity
+
+    @property
+    def test_context_percent(self) -> float:
+        return self.state.test_context_percent
 
 
 class ConfigWatcher:
-    """Watches config file for changes and calls callback."""
+    """Watches config file for changes."""
 
     def __init__(self, callback: Callable[[WidgetConfig], None], poll_interval: float = 0.2):
         self.callback = callback
@@ -100,13 +166,13 @@ class ConfigWatcher:
             time.sleep(self.poll_interval)
 
 
-# Global config instance
+# Global instance
 _config: Optional[WidgetConfig] = None
 _watchers: list[ConfigWatcher] = []
 
 
 def get_config() -> WidgetConfig:
-    """Get current config (loads from file if needed)."""
+    """Get current config."""
     global _config
     if _config is None:
         _config = WidgetConfig.load()
@@ -120,18 +186,33 @@ def set_config(config: WidgetConfig):
     config.save()
 
 
-def update_config(**kwargs):
-    """Update specific config fields and save."""
-    config = get_config()
-    for key, value in kwargs.items():
-        if hasattr(config, key):
-            setattr(config, key, value)
-    set_config(config)
-
-
 def watch_config(callback: Callable[[WidgetConfig], None]) -> ConfigWatcher:
     """Start watching config for changes."""
     watcher = ConfigWatcher(callback)
     watcher.start()
     _watchers.append(watcher)
     return watcher
+
+
+def restart_daemon_and_widget():
+    """Restart the daemon process and widget."""
+    subprocess.run(["pkill", "-f", "central_hub"], capture_output=True)
+    subprocess.run(["pkill", "-f", "ClarvisWidget"], capture_output=True)
+
+    time.sleep(0.5)
+
+    subprocess.Popen(
+        [sys.executable, "-m", "central_hub.daemon"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    widget_path = PROJECT_ROOT / "ClarvisWidget" / "ClarvisWidget"
+    if widget_path.exists():
+        subprocess.Popen(
+            [str(widget_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )

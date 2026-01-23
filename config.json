@@ -1,0 +1,39 @@
+{
+  "static": {
+    "grid_width": 30,
+    "grid_height": 12,
+    "window_width": 350,
+    "window_height": 280,
+    "corner_radius": 30,
+    "bg_alpha": 0.8,
+    "font_size": 17,
+    "border_width": 2,
+    "pulse_speed": 0.1,
+    "avatar_x_offset": 0,
+    "avatar_y_offset": 0,
+    "bar_x_offset": 0,
+    "bar_y_offset": 0,
+    "fps": 6
+  },
+  "colors": {
+    "idle":      {"r": 0.53, "g": 0.53, "b": 0.53},
+    "resting":   {"r": 0.40, "g": 0.40, "b": 0.45},
+    "thinking":  {"r": 1.00, "g": 0.87, "b": 0.00},
+    "running":   {"r": 0.00, "g": 1.00, "b": 0.67},
+    "executing": {"r": 0.00, "g": 1.00, "b": 0.67},
+    "awaiting":  {"r": 0.40, "g": 0.50, "b": 1.00},
+    "reading":   {"r": 0.40, "g": 0.50, "b": 1.00},
+    "writing":   {"r": 0.40, "g": 0.50, "b": 1.00},
+    "reviewing": {"r": 1.00, "g": 0.00, "b": 1.00},
+    "offline":   {"r": 0.53, "g": 0.53, "b": 0.53}
+  },
+  "state": {
+    "testing": false,
+    "test_status": "running",
+    "test_weather": "clear",
+    "test_weather_intensity": 0.0,
+    "test_wind_speed": 0.0,
+    "test_context_percent": 90.0,
+    "paused": false
+  }
+}
