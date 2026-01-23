@@ -1,5 +1,8 @@
 # Clarvis
 
+[![Tests](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml/badge.svg)](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/shepardxia/Clarvis/graph/badge.svg)](https://codecov.io/gh/shepardxia/Clarvis)
+
 ```
 ╭─────────╮
 │  ·   ·  │  Hi! I'm Clarvis—your little window into what Claude is up to.
