@@ -13,6 +13,7 @@ Supports multiple retro themes:
 """
 
 from dataclasses import dataclass
+from typing import Optional, Dict, List
 from typing import Tuple
 
 
@@ -137,12 +138,12 @@ DEFAULT_THEME = "modern"
 _current_theme: str = DEFAULT_THEME
 
 
-def get_available_themes() -> list[str]:
+def get_available_themes() -> List[str]:
     """Get list of available theme names."""
     return list(THEMES.keys())
 
 
-def load_theme(theme_name: str, overrides: dict[str, list[float]] | None = None) -> bool:
+def load_theme(theme_name: str, overrides: Optional[Dict[str, List[float]]] = None) -> bool:
     """
     Load a theme by name with optional color overrides.
 
@@ -234,7 +235,7 @@ ANSI_COLORS = {
 }
 
 
-def get_status_ansi() -> dict[str, int]:
+def get_status_ansi() -> Dict[str, int]:
     """Get status -> ANSI code mapping for current theme."""
     return {status: color.ansi for status, color in STATUS_MAP.items()}
 
@@ -247,7 +248,7 @@ STATUS_ANSI = get_status_ansi()
 # Config Export - For Swift/JSON
 # =============================================================================
 
-def get_status_colors_for_config() -> dict[str, dict]:
+def get_status_colors_for_config() -> Dict[str, Dict]:
     """Get status colors in format suitable for config.json (uses current theme)."""
     return {
         status: {
@@ -261,8 +262,8 @@ def get_status_colors_for_config() -> dict[str, dict]:
 
 def get_merged_theme_colors(
     theme_name: str,
-    overrides: dict[str, list[float]] | None = None
-) -> dict[str, list[float]]:
+    overrides: Optional[Dict[str, List[float]]] = None
+) -> Dict[str, List[float]]:
     """
     Get theme colors merged with overrides as RGB arrays.
 

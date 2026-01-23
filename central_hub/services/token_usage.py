@@ -5,7 +5,7 @@ import json
 import requests
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 
@@ -27,6 +27,7 @@ class TokenUsageService:
         self._last_updated: Optional[datetime] = None
         self._polling_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._lock = threading.Lock()
         self._retry_delay = 2  # seconds, exponential backoff
         self._max_retry_delay = 30
 
@@ -50,20 +51,21 @@ class TokenUsageService:
 
     def get_usage(self) -> Dict[str, Any]:
         """Return current cached usage data with metadata."""
-        if not self._usage_data:
-            return {"error": "Usage data not available", "is_stale": True}
+        with self._lock:
+            if not self._usage_data:
+                return {"error": "Usage data not available", "is_stale": True}
 
-        staleness = (
-            (datetime.utcnow() - self._last_updated).total_seconds()
-            if self._last_updated
-            else None
-        )
+            staleness = (
+                (datetime.now(timezone.utc) - self._last_updated).total_seconds()
+                if self._last_updated
+                else None
+            )
 
-        return {
-            **self._usage_data,
-            "last_updated": self._last_updated.isoformat() if self._last_updated else None,
-            "is_stale": staleness and staleness > self.poll_interval * 2,
-        }
+            return {
+                **self._usage_data,
+                "last_updated": self._last_updated.isoformat() if self._last_updated else None,
+                "is_stale": staleness and staleness > self.poll_interval * 2,
+            }
 
     def _fetch_from_keychain(self) -> Optional[str]:
         """Retrieve OAuth token from macOS Keychain.
@@ -82,7 +84,6 @@ class TokenUsageService:
                 ],
                 capture_output=True,
                 text=False,
-                check=True,
             )
 
             # Parse JSON response
@@ -99,8 +100,9 @@ class TokenUsageService:
             usage = self._fetch_usage()
 
             if usage:
-                self._usage_data = usage
-                self._last_updated = datetime.utcnow()
+                with self._lock:
+                    self._usage_data = usage
+                    self._last_updated = datetime.now(timezone.utc)
                 retry_delay = self._retry_delay  # reset on success
                 wait_time = self.poll_interval
             else:

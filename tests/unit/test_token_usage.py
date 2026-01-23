@@ -2,6 +2,8 @@
 
 import pytest
 import json
+import time
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 from central_hub.services.token_usage import TokenUsageService
 
@@ -90,5 +92,43 @@ class TestTokenUsageService:
         """Should return error state when no data fetched yet."""
         service = TokenUsageService()
         result = service.get_usage()
-        
+
         assert "error" in result or result.get("is_stale") is True
+
+    def test_staleness_calculation_exact_threshold(self):
+        """Should mark as stale when exactly 2x poll interval has passed."""
+        service = TokenUsageService(poll_interval=10)
+        service._usage_data = {"five_hour": {"utilization": 5.0}}
+        service._last_updated = datetime.now(timezone.utc) - timedelta(seconds=21)
+
+        result = service.get_usage()
+
+        # Should be marked stale (21 seconds > 20 second threshold)
+        assert result.get("is_stale") is True
+
+    def test_staleness_calculation_not_yet_stale(self):
+        """Should not mark as stale when under 2x poll interval."""
+        service = TokenUsageService(poll_interval=10)
+        service._usage_data = {"five_hour": {"utilization": 5.0}}
+        service._last_updated = datetime.now(timezone.utc) - timedelta(seconds=19)
+
+        result = service.get_usage()
+
+        # Should not be marked stale (19 seconds < 20 second threshold)
+        assert result.get("is_stale") is False
+
+    @patch("central_hub.services.token_usage.TokenUsageService._fetch_usage")
+    @patch("central_hub.services.token_usage.TokenUsageService._fetch_from_keychain")
+    def test_stop_waits_for_thread_completion(self, mock_keychain, mock_fetch):
+        """Should wait for polling thread to complete on stop."""
+        mock_keychain.return_value = "test-token"
+        mock_fetch.return_value = {"five_hour": {"utilization": 5.0}, "seven_day": {"utilization": 20.0}}
+
+        service = TokenUsageService(poll_interval=1)
+        service.start()
+
+        time.sleep(0.1)  # Let thread start
+        service.stop()
+
+        # Thread should have been joined
+        assert service._polling_thread is None or not service._polling_thread.is_alive()
