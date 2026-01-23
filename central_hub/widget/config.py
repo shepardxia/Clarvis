@@ -14,7 +14,7 @@ class WidgetConfig:
     """Widget rendering configuration."""
     # Grid
     grid_width: int = 29
-    grid_height: int = 10
+    grid_height: int = 12
 
     # Avatar position offsets
     avatar_x_offset: int = 0

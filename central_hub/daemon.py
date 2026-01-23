@@ -14,6 +14,7 @@ from watchdog.events import FileSystemEventHandler
 from .core import get_hub_section, write_hub_section, get_current_time, read_hub_data, DEFAULT_TIMEZONE
 from .services import get_location, get_cached_timezone, fetch_weather
 from .widget.renderer import FrameRenderer
+from .widget.config import get_config
 
 
 class StatusHandler(FileSystemEventHandler):
@@ -76,14 +77,30 @@ class CentralHubDaemon:
         self.weather: dict | None = None
         self.time: dict | None = None
         self.status: dict | None = None
-        
+
         # Display state
-        self.renderer = FrameRenderer()
-        self.display_status = "idle"
-        self.display_color = "gray"
-        self.display_context_percent = 0.0
+        config = get_config()
+        self.renderer = FrameRenderer(width=config.grid_width, height=config.grid_height)
+
+        # Per-session tracking: {session_id: {"status_history": [], "context_history": []}}
+        self.HISTORY_SIZE = 20
+        self.sessions: dict[str, dict] = {}
+        self.current_session_id: str | None = None
+
+        # Load sessions from hub data if available
+        hub_data = read_hub_data()
+        self.sessions = hub_data.get("sessions", {})
+
+        # Current display values
+        last_status = hub_data.get("status", {})
+        self.display_status = last_status.get("status", "idle")
+        self.display_color = last_status.get("color", "gray")
+        self.display_context_percent = last_status.get("context_percent", 0.0)
         self.weather_type = "clear"
         self.weather_intensity = 0.0
+
+        # Apply restored status to renderer
+        self.renderer.set_status(self.display_status)
         
         # Border styles by status
         self.border_styles = {
@@ -95,8 +112,46 @@ class CentralHubDaemon:
             "offline": {"width": 1, "pulse": False},
         }
     
+    def _get_session(self, session_id: str) -> dict:
+        """Get or create session tracking data."""
+        if session_id not in self.sessions:
+            self.sessions[session_id] = {
+                "status_history": [],
+                "context_history": [],
+                "last_status": "idle",
+                "last_context": 0.0,
+            }
+        return self.sessions[session_id]
+
+    def _add_to_history(self, session_id: str, status: str, context_percent: float):
+        """Add values to per-session history buffers."""
+        session = self._get_session(session_id)
+        self.current_session_id = session_id
+
+        # Only add status if it changed
+        history = session["status_history"]
+        if not history or history[-1] != status:
+            history.append(status)
+            if len(history) > self.HISTORY_SIZE:
+                history.pop(0)
+        session["last_status"] = status
+
+        # Only add context if it's a valid non-zero value
+        if context_percent > 0:
+            ctx_history = session["context_history"]
+            ctx_history.append(context_percent)
+            if len(ctx_history) > self.HISTORY_SIZE:
+                ctx_history.pop(0)
+            session["last_context"] = context_percent
+
+    def _get_last_context(self, session_id: str) -> float:
+        """Get last known context percent for session."""
+        session = self.sessions.get(session_id, {})
+        return session.get("last_context", 0.0)
+
     def process_hook_event(self, raw_data: dict) -> dict:
         """Process raw hook event into status/color."""
+        session_id = raw_data.get("session_id", "unknown")
         event = raw_data.get("hook_event_name", "")
         context_window = raw_data.get("context_window", {})
         context_percent = context_window.get("used_percentage", 0)
@@ -120,10 +175,22 @@ class CentralHubDaemon:
         else:
             status, color = "idle", "gray"
 
+        # Update per-session history
+        self._add_to_history(session_id, status, context_percent)
+
+        # Use last known context if current is 0
+        effective_context = context_percent if context_percent > 0 else self._get_last_context(session_id)
+
+        # Get session data for output
+        session = self._get_session(session_id)
+
         return {
+            "session_id": session_id,
             "status": status,
             "color": color,
-            "context_percent": context_percent,
+            "context_percent": effective_context,
+            "status_history": session["status_history"].copy(),
+            "context_history": session["context_history"].copy(),
             "timestamp": datetime.now().isoformat(),
         }
     
@@ -136,9 +203,10 @@ class CentralHubDaemon:
             raw_data = json.loads(self.status_raw_file.read_text())
             processed = self.process_hook_event(raw_data)
 
-            # Read existing hub data and update status
+            # Read existing hub data and update status + sessions
             hub_data = read_hub_data()
             hub_data["status"] = processed
+            hub_data["sessions"] = self.sessions  # Persist per-session tracking
             hub_data["updated_at"] = datetime.now().isoformat()
 
             # Store in instance
