@@ -1,163 +1,85 @@
 #!/bin/bash
 set -e
 
-# Central Hub Setup Script
-# Installs and configures the MCP server and desktop widget
+# Clarvis Setup Script
+# Installs MCP server and configures Claude Code
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MCP_SOURCE="$REPO_DIR/mcp-server"
-MCP_DEST="$HOME/.claude/mcp-servers/central-hub"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
 MCP_CONFIG="$HOME/.claude/.mcp.json"
-PYTHON_MIN_VERSION="3.10"
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-print_header() {
-    echo -e "${BLUE}▶ $1${NC}"
-}
+print_header() { echo -e "${BLUE}▶ $1${NC}"; }
+print_success() { echo -e "${GREEN}✓ $1${NC}"; }
+print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
+print_error() { echo -e "${RED}✗ $1${NC}"; }
 
-print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
-}
+check_dependencies() {
+    print_header "Checking dependencies..."
 
-print_warning() {
-    echo -e "${YELLOW}⚠ $1${NC}"
-}
-
-print_error() {
-    echo -e "${RED}✗ $1${NC}"
-}
-
-check_python() {
-    print_header "Checking Python version..."
-
-    # Look for python3.11, python3.10, or python3 in that order
-    PYTHON_CMD=""
-    if command -v python3.11 &> /dev/null; then
-        PYTHON_CMD="python3.11"
-    elif command -v python3.10 &> /dev/null; then
-        PYTHON_CMD="python3.10"
+    # Check for uv (preferred) or python3
+    if command -v uv &> /dev/null; then
+        print_success "uv found"
+        USE_UV=true
     elif command -v python3 &> /dev/null; then
-        PYTHON_CMD="python3"
-    fi
-
-    if [ -z "$PYTHON_CMD" ]; then
-        print_error "Python 3.10+ not found. Please install:"
-        echo "  macOS: brew install python3"
+        PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+        if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"; then
+            print_success "Python $PYTHON_VERSION found"
+            USE_UV=false
+        else
+            print_error "Python 3.10+ required. Found: $PYTHON_VERSION"
+            exit 1
+        fi
+    else
+        print_error "Neither uv nor python3 found. Install one:"
+        echo "  brew install uv    # recommended"
+        echo "  brew install python3"
         exit 1
     fi
-
-    PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-
-    # Check version is 3.10+
-    if ! $PYTHON_CMD -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"; then
-        print_error "Python 3.10+ required. Found: $PYTHON_VERSION"
-        exit 1
-    fi
-
-    print_success "Python $PYTHON_VERSION found ($PYTHON_CMD)"
-
-    # Export PYTHON_CMD for use in other functions
-    export PYTHON_CMD
 }
 
-setup_mcp_server() {
-    print_header "Setting up MCP server..."
-
-    # Create destination directory
-    mkdir -p "$MCP_DEST"
-
-    # Copy server files
-    cp "$MCP_SOURCE/server.py" "$MCP_DEST/"
-    cp "$MCP_SOURCE/thinking_feed.py" "$MCP_DEST/"
-    cp "$MCP_SOURCE/pyproject.toml" "$MCP_DEST/"
-    print_success "Copied MCP server to $MCP_DEST"
-
-    # Create/setup virtual environment
+setup_venv() {
     print_header "Setting up Python environment..."
 
-    if [ ! -d "$MCP_DEST/.venv" ]; then
-        $PYTHON_CMD -m venv "$MCP_DEST/.venv"
-        print_success "Created Python virtual environment"
-    fi
+    cd "$REPO_DIR"
 
-    # Activate venv
-    source "$MCP_DEST/.venv/bin/activate"
-
-    # Try uv first (fast), fall back to pip
-    if command -v uv &> /dev/null; then
-        print_header "Installing dependencies with uv..."
-        uv pip install -e "$MCP_DEST"
+    if [ "$USE_UV" = true ]; then
+        uv sync
         print_success "Dependencies installed with uv"
     else
-        print_warning "uv not found, using pip (slower)"
-        "$MCP_DEST/.venv/bin/pip" install -e "$MCP_DEST"
+        if [ ! -d ".venv" ]; then
+            python3 -m venv .venv
+            print_success "Created virtual environment"
+        fi
+        .venv/bin/pip install -e .
         print_success "Dependencies installed with pip"
     fi
-
-    deactivate
 }
 
-setup_git_in_mcp() {
-    print_header "Setting up git in MCP server directory..."
+configure_mcp() {
+    print_header "Configuring MCP server..."
 
-    cd "$MCP_DEST"
+    mkdir -p "$(dirname "$MCP_CONFIG")"
 
-    # Initialize git if not already a repo
-    if [ ! -d .git ]; then
-        git init
-        print_success "Git initialized in MCP server directory"
-    fi
-
-    # Set remote if original repo has one
-    if [ -d "$REPO_DIR/.git" ]; then
-        REMOTE_URL=$(cd "$REPO_DIR" && git remote get-url origin 2>/dev/null || echo "")
-        if [ -n "$REMOTE_URL" ]; then
-            git remote add origin "$REMOTE_URL" 2>/dev/null || git remote set-url origin "$REMOTE_URL"
-            print_success "Remote set to: $REMOTE_URL"
-        fi
-    fi
-
-    # Set user config from original repo if available
-    if [ -d "$REPO_DIR/.git" ]; then
-        USER_NAME=$(cd "$REPO_DIR" && git config user.name 2>/dev/null || echo "")
-        USER_EMAIL=$(cd "$REPO_DIR" && git config user.email 2>/dev/null || echo "")
-
-        if [ -n "$USER_NAME" ]; then
-            git config user.name "$USER_NAME"
-        fi
-        if [ -n "$USER_EMAIL" ]; then
-            git config user.email "$USER_EMAIL"
-        fi
-    fi
-}
-
-configure_mcp_json() {
-    print_header "Configuring MCP server in Claude settings..."
-
-    MCP_SERVER_PATH="$MCP_DEST/.venv/bin/python3"
-    MCP_SERVER_ARGS="server.py"
-
-    # Create .mcp.json if it doesn't exist
-    if [ ! -f "$MCP_CONFIG" ]; then
-        mkdir -p "$(dirname "$MCP_CONFIG")"
-        echo '{}' > "$MCP_CONFIG"
-        print_success "Created $MCP_CONFIG"
-    fi
-
-    # Check if central-hub is already configured
-    if $PYTHON_CMD -c "import json; data = json.load(open('$MCP_CONFIG')); exit(0 if 'mcpServers' in data and 'central-hub' in data['mcpServers'] else 1)" 2>/dev/null; then
-        print_success "central-hub already configured in .mcp.json"
+    # Build the command based on uv or venv
+    if [ "$USE_UV" = true ]; then
+        MCP_COMMAND="uv"
+        MCP_ARGS='["run", "--directory", "'"$REPO_DIR"'", "python", "-m", "central_hub.server"]'
     else
-        # Add central-hub to .mcp.json using Python
-        $PYTHON_CMD << EOF
+        MCP_COMMAND="$REPO_DIR/.venv/bin/python"
+        MCP_ARGS='["-m", "central_hub.server"]'
+    fi
+
+    # Create or update .mcp.json
+    python3 << EOF
 import json
-import sys
+import os
 
 config_path = "$MCP_CONFIG"
 
@@ -171,92 +93,38 @@ if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
 config['mcpServers']['central-hub'] = {
-    'command': '$MCP_SERVER_PATH',
-    'args': ['$MCP_SERVER_ARGS'],
-    'cwd': '$MCP_DEST'
+    'command': '$MCP_COMMAND',
+    'args': $MCP_ARGS
 }
 
 with open(config_path, 'w') as f:
     json.dump(config, f, indent=2)
 
-print(f"✓ Added central-hub to {config_path}")
+print("Added central-hub to", config_path)
 EOF
-    fi
+
+    print_success "MCP server configured"
 }
 
-setup_widget() {
-    print_header "Building desktop widget..."
+setup_daemon() {
+    print_header "Setting up background daemon (optional)..."
 
-    cd "$REPO_DIR"
+    PLIST_SRC="$SCRIPT_DIR/com.centralhub.daemon.plist"
+    PLIST_DST="$HOME/Library/LaunchAgents/com.central-hub.refresh.plist"
 
-    if ! command -v swiftc &> /dev/null; then
-        print_error "Swift compiler not found. Please install Xcode command line tools:"
-        echo "  xcode-select --install"
-        exit 1
-    fi
-
-    swiftc -o ClaudeStatusOverlay Display.swift ClaudeStatusOverlay.swift -framework Cocoa 2>/dev/null || {
-        print_error "Failed to build widget"
-        exit 1
-    }
-
-    print_success "Widget built: $REPO_DIR/ClaudeStatusOverlay"
-}
-
-verify_setup() {
-    print_header "Verifying setup..."
-
-    # Check MCP server
-    if [ ! -f "$MCP_DEST/server.py" ]; then
-        print_error "MCP server not found at $MCP_DEST/server.py"
-        return 1
-    fi
-    print_success "MCP server installed"
-
-    # Check venv
-    if [ ! -d "$MCP_DEST/.venv" ]; then
-        print_error "Virtual environment not found"
-        return 1
-    fi
-    print_success "Virtual environment created"
-
-    # Check MCP config
-    if [ ! -f "$MCP_CONFIG" ]; then
-        print_error "MCP config not found"
-        return 1
-    fi
-    print_success "MCP config created"
-
-    # Check widget
-    if [ ! -f "$REPO_DIR/ClaudeStatusOverlay" ]; then
-        print_error "Widget binary not found"
-        return 1
-    fi
-    print_success "Widget binary created"
-
-    # Test MCP server (optional - only if we can quickly test it)
-    print_header "Testing MCP server startup..."
-
-    # Start server in background (cross-platform compatible)
-    "$MCP_DEST/.venv/bin/python3" "$MCP_DEST/server.py" > /tmp/mcp-test.log 2>&1 &
-    MCP_PID=$!
-
-    sleep 3
-
-    if kill -0 $MCP_PID 2>/dev/null; then
-        print_success "MCP server starts successfully"
-        kill $MCP_PID 2>/dev/null || true
-        wait $MCP_PID 2>/dev/null || true
+    if [ -f "$PLIST_SRC" ]; then
+        # Update paths in plist
+        sed "s|/path/to/central-hub|$REPO_DIR|g" "$PLIST_SRC" > "$PLIST_DST"
+        launchctl unload "$PLIST_DST" 2>/dev/null || true
+        launchctl load "$PLIST_DST"
+        print_success "Daemon installed and started"
     else
-        print_warning "MCP server didn't start. This may be OK if you restart Claude Code."
-        if [ -s /tmp/mcp-test.log ]; then
-            echo "  Log: $(head -1 /tmp/mcp-test.log)"
-        fi
+        print_warning "Daemon plist not found, skipping"
     fi
 }
 
 print_next_steps() {
-    cat << 'EOF'
+    cat << EOF
 
 ════════════════════════════════════════════════════════════════
 
@@ -267,33 +135,27 @@ print_next_steps() {
 Next steps:
 
 1. RESTART CLAUDE CODE
-   • Close Claude Code completely
-   • Reopen it
-   • This loads the MCP server configuration
+   Close and reopen Claude Code to load the MCP server
 
-2. START THE DESKTOP WIDGET (optional)
-   cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-   ./ClaudeStatusOverlay &
+2. START THE WIDGET (optional)
+   $REPO_DIR/ClarvisWidget/ClarvisWidget &
 
-3. TEST THE MCP TOOLS
-   • Ask Claude: "What's the weather?"
-   • Ask Claude: "What time is it?"
-   • Ask Claude: "What's my status?"
+3. TEST MCP TOOLS
+   Ask Claude: "What's the weather?"
+   Ask Claude: "What time is it?"
 
 OPTIONAL: Enable GPS Location
-   • Install: brew install corelocationcli
-   • Run once: CoreLocationCLI -j (approve the popup)
-   • Weather will now use GPS instead of IP geolocation
+   brew install corelocationcli
+   CoreLocationCLI -j  # approve the popup once
 
 ════════════════════════════════════════════════════════════════
 
 Locations:
-  MCP Server:     ~/.claude/mcp-servers/central-hub/
-  Configuration:  ~/.claude/.mcp.json
-  Widget:         $REPO_DIR/ClaudeStatusOverlay
-  Widget Output:  /tmp/central-hub-*.json
+  Repository:     $REPO_DIR
+  MCP Config:     $MCP_CONFIG
+  Widget:         $REPO_DIR/ClarvisWidget/ClarvisWidget
 
-========== ================================================
+════════════════════════════════════════════════════════════════
 
 EOF
 }
@@ -301,25 +163,17 @@ EOF
 main() {
     echo ""
     echo "╔════════════════════════════════════════════════════════════════╗"
-    echo "║                   Central Hub Setup                             ║"
-    echo "║              Desktop Widget + MCP Data Server                   ║"
+    echo "║                      Clarvis Setup                             ║"
     echo "╚════════════════════════════════════════════════════════════════╝"
     echo ""
 
-    check_python
-    setup_mcp_server
-    setup_git_in_mcp
-    configure_mcp_json
-    setup_widget
+    check_dependencies
+    setup_venv
+    configure_mcp
+    setup_daemon
 
-    if verify_setup; then
-        echo ""
-        print_success "All systems operational!"
-        print_next_steps
-    else
-        print_error "Verification failed. Please check the errors above."
-        exit 1
-    fi
+    print_success "Setup complete!"
+    print_next_steps
 }
 
 main
