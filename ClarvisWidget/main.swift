@@ -17,8 +17,8 @@ struct Config {
     static let statusColors: [String: NSColor] = [
         "idle": NSColor(red: 0.53, green: 0.53, blue: 0.6, alpha: 1),
         "thinking": NSColor(red: 1.0, green: 0.87, blue: 0, alpha: 1),
-        "running": NSColor(red: 1.0, green: 0.6, blue: 0.2, alpha: 1),
-        "awaiting": NSColor(red: 0, green: 0.85, blue: 0.5, alpha: 1),
+        "running": NSColor(red: 0, green: 1.0, blue: 0.67, alpha: 1),
+        "awaiting": NSColor(red: 0, green: 0.8, blue: 1.0, alpha: 1),
         "resting": NSColor(red: 0.4, green: 0.4, blue: 0.53, alpha: 1),
     ]
 }
