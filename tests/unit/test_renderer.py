@@ -5,6 +5,9 @@ import pytest
 from central_hub.widget.renderer import (
     FrameRenderer,
     WeatherSystem,
+    Shape,
+    get_shape,
+    SHAPE_LIBRARY,
     ANIMATION_KEYFRAMES,
     STATUS_COLORS,
 )
@@ -182,3 +185,59 @@ class TestStatusColors:
         expected_statuses = ["idle", "thinking", "running", "awaiting", "resting"]
         for status in expected_statuses:
             assert status in STATUS_COLORS, f"Missing color for {status}"
+
+
+class TestShape:
+    """Tests for Shape dataclass."""
+
+    def test_parse_single_char(self):
+        shape = Shape.parse("*")
+        assert shape.width == 1
+        assert shape.height == 1
+        assert shape.pattern == ("*",)
+
+    def test_parse_multi_line(self):
+        shape = Shape.parse(" ~ \n~~~")
+        assert shape.width == 3
+        assert shape.height == 2
+        assert shape.pattern == (" ~ ", "~~~")
+
+    def test_width_is_max_line_length(self):
+        shape = Shape.parse("a\nabc\nab")
+        assert shape.width == 3
+        assert shape.height == 3
+
+    def test_empty_raises_error(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            Shape.parse("")
+
+    def test_pattern_is_immutable(self):
+        shape = Shape.parse("ab\ncd")
+        assert isinstance(shape.pattern, tuple)
+
+
+class TestGetShape:
+    """Tests for get_shape function."""
+
+    def test_returns_cached_shape(self):
+        shape1 = get_shape("snow_star")
+        shape2 = get_shape("snow_star")
+        assert shape1 is shape2
+
+    def test_unknown_shape_raises_keyerror(self):
+        with pytest.raises(KeyError, match="Unknown shape"):
+            get_shape("nonexistent_shape")
+
+    def test_all_library_shapes_are_valid(self):
+        for name in SHAPE_LIBRARY:
+            shape = get_shape(name)
+            assert shape.width >= 1
+            assert shape.height >= 1
+
+    def test_multi_char_shapes_parse_correctly(self):
+        cloud = get_shape("cloud_small")
+        assert cloud.height == 2
+        assert cloud.width == 3
+
+        cloud_med = get_shape("cloud_medium")
+        assert cloud_med.height == 3

@@ -9,6 +9,7 @@ Uses the layered RenderPipeline for compositing:
 
 import random
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Optional
 
 from .pipeline import RenderPipeline, Layer
@@ -171,8 +172,76 @@ SUBSTRATES = {
 
 
 # =============================================================================
-# Weather Sprites
+# Weather Shapes
 # =============================================================================
+
+@dataclass
+class Shape:
+    """Multi-character pattern for weather particles."""
+    pattern: tuple[str, ...]  # Immutable for hashability
+    width: int
+    height: int
+
+    @classmethod
+    def parse(cls, text: str) -> "Shape":
+        """Parse text into a shape. Each line becomes a row.
+
+        Use \\n to separate rows in multi-line shapes.
+        Example: " ~ \\n~~~" renders as:
+           ~
+          ~~~
+        """
+        if not text:
+            raise ValueError("Shape text cannot be empty")
+        pattern = tuple(text.split("\n"))
+        height = len(pattern)
+        width = max(len(line) for line in pattern)
+        return cls(pattern=pattern, width=width, height=height)
+
+
+# Shape library - define shapes as text, parsed on demand
+SHAPE_LIBRARY = {
+    # Snow particles (1x1)
+    "snow_star": "*",
+    "snow_plus": "+",
+    "snow_x": "x",
+    "snow_dot": ".",
+    "snow_o": "o",
+    # Rain particles (1x1)
+    "rain_drop": "|",
+    "rain_bang": "!",
+    "rain_colon": ":",
+    "rain_tick": "'",
+    "rain_comma": ",",
+    # Wind particles (1x1)
+    "wind_tilde": "~",
+    "wind_dash": "-",
+    "wind_tick": "'",
+    "wind_back": "`",
+    "wind_arrow": ">",
+    "wind_paren": ")",
+    "wind_slash": "/",
+    # Fog/cloud single chars
+    "fog_dot": ".",
+    "fog_tilde": "~",
+    "fog_dash": "-",
+    # Multi-char clouds
+    "cloud_small": " ~ \n~~~",
+    "cloud_medium": " ~~~ \n~~~~~\n ~~~ ",
+    "cloud_wisp": "~-~",
+    "cloud_puff": " ~ \n~~~\n ~ ",
+    # Multi-char fog patches
+    "fog_patch": ". .\n . ",
+    "fog_bank": "...\n. .",
+}
+
+@lru_cache(maxsize=None)
+def get_shape(name: str) -> Shape:
+    """Load shape from library by name, with caching."""
+    if name not in SHAPE_LIBRARY:
+        raise KeyError(f"Unknown shape: {name}")
+    return Shape.parse(SHAPE_LIBRARY[name])
+
 
 @dataclass
 class Particle:
@@ -180,7 +249,7 @@ class Particle:
     y: float
     vx: float
     vy: float
-    char: str
+    shape: Shape
     age: int = 0
     lifetime: int = 100
 
@@ -200,12 +269,16 @@ class BoundingBox:
 class WeatherSystem:
     """Manages weather particle spawning and physics."""
 
-    SPRITES = {
-        "snow": ["*", "+", "x", ".", "o"],
-        "rain": ["|", "!", ":", "'", ","],
-        "cloudy": ["~", "-"],
-        "fog": [".", "~", "-"],
-        "windy": ["~", "-", "'", "`", ">", ")", "/"],
+    # At intensity 1.0, spawn up to this many particles
+    MAX_PARTICLES_BASE = 25
+
+    # Shape names for each weather type (can repeat for weighting)
+    SHAPES = {
+        "snow": ["snow_star", "snow_plus", "snow_x", "snow_dot", "snow_o"],
+        "rain": ["rain_drop", "rain_drop", "rain_colon", "rain_tick", "rain_comma"],
+        "cloudy": ["cloud_small", "cloud_wisp", "cloud_puff", "fog_tilde"],
+        "fog": ["fog_patch", "fog_bank", "fog_dot", "fog_tilde"],
+        "windy": ["wind_tilde", "wind_dash", "wind_tick", "wind_arrow", "wind_slash"],
     }
 
     def __init__(self, width: int, height: int):
@@ -226,8 +299,18 @@ class WeatherSystem:
             self.particles.clear()
         self.intensity = intensity
 
+    def _is_alive(self, p: Particle) -> bool:
+        """Check if particle is still on screen (any part visible)."""
+        if p.age >= p.lifetime:
+            return False
+        # Check if any part of shape could be visible
+        return (p.y + p.shape.height > -1 and
+                p.y < self.height + 1 and
+                p.x + p.shape.width > -1 and
+                p.x < self.width + 1)
+
     def tick(self):
-        if not self.weather_type or self.weather_type not in self.SPRITES:
+        if not self.weather_type or self.weather_type not in self.SHAPES:
             return
 
         # Update existing particles
@@ -236,41 +319,44 @@ class WeatherSystem:
             p.x += p.vx
             p.y += p.vy
             p.age += 1
-            if p.age < p.lifetime and -1 < p.y < self.height + 1 and -1 < p.x < self.width + 1:
+            if self._is_alive(p):
                 alive.append(p)
         self.particles = alive
 
         # Spawn new particles
-        max_particles = int(self.intensity * 25)
+        max_particles = int(self.intensity * self.MAX_PARTICLES_BASE)
         spawn_rate = self.intensity * 0.5
 
         if len(self.particles) < max_particles and random.random() < spawn_rate:
-            chars = self.SPRITES[self.weather_type]
+            shape_names = self.SHAPES[self.weather_type]
+            shape_name = random.choice(shape_names)
+            shape = get_shape(shape_name)
+
             if self.weather_type == "snow":
                 p = Particle(
                     x=random.uniform(0, self.width),
-                    y=random.uniform(-2, 0),
+                    y=random.uniform(-shape.height, 0),
                     vx=random.uniform(-0.1, 0.1),
                     vy=random.uniform(0.15, 0.35),
-                    char=random.choice(chars),
+                    shape=shape,
                     lifetime=random.randint(40, 100),
                 )
             elif self.weather_type == "rain":
                 p = Particle(
                     x=random.uniform(0, self.width),
-                    y=random.uniform(-2, 0),
+                    y=random.uniform(-shape.height, 0),
                     vx=random.uniform(-0.03, 0.03),
                     vy=random.uniform(0.5, 0.9),
-                    char=random.choice(chars),
+                    shape=shape,
                     lifetime=random.randint(20, 50),
                 )
             elif self.weather_type == "windy":
                 p = Particle(
-                    x=random.uniform(-2, 0),  # spawn from left
+                    x=random.uniform(-shape.width, 0),
                     y=random.uniform(0, self.height),
-                    vx=random.uniform(0.4, 0.8),  # fast horizontal
-                    vy=random.uniform(-0.1, 0.1),  # slight vertical drift
-                    char=random.choice(chars),
+                    vx=random.uniform(0.4, 0.8),
+                    vy=random.uniform(-0.1, 0.1),
+                    shape=shape,
                     lifetime=random.randint(30, 60),
                 )
             else:  # cloudy, fog
@@ -279,7 +365,7 @@ class WeatherSystem:
                     y=random.uniform(0, self.height),
                     vx=random.uniform(-0.05, 0.05),
                     vy=random.uniform(-0.03, 0.03),
-                    char=random.choice(chars),
+                    shape=shape,
                     lifetime=random.randint(60, 150),
                 )
             self.particles.append(p)
@@ -288,10 +374,16 @@ class WeatherSystem:
         """Render particles to a layer, respecting exclusion zones."""
         for p in self.particles:
             px, py = int(p.x), int(p.y)
-            # Skip if inside any exclusion zone
-            if any(zone.contains(px, py) for zone in self.exclusion_zones):
-                continue
-            layer.put(px, py, p.char, color)
+            # Render each character in the shape
+            for row_idx, row in enumerate(p.shape.pattern):
+                for col_idx, char in enumerate(row):
+                    if char == " ":
+                        continue  # transparent
+                    cx, cy = px + col_idx, py + row_idx
+                    # Skip if inside any exclusion zone
+                    if any(zone.contains(cx, cy) for zone in self.exclusion_zones):
+                        continue
+                    layer.put(cx, cy, char, color)
 
 
 # =============================================================================
