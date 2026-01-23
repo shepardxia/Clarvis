@@ -54,20 +54,27 @@ async def get_weather(latitude: float = None, longitude: float = None) -> str:
 
 
 @mcp.tool()
-async def get_time(timezone: str = DEFAULT_TIMEZONE) -> str:
+async def get_time(timezone: str = None) -> str:
     """
     Get current time and write to widget file.
 
     Args:
-        timezone: Timezone name (default: America/Los_Angeles)
+        timezone: Timezone name (default: auto-detect from location, fallback to America/Los_Angeles)
 
     Returns:
         Current time string
     """
     try:
+        # Auto-detect timezone from cached location if not provided
+        if timezone is None:
+            location = get_hub_section("location")
+            timezone = location.get("timezone") if location else None
+            if not timezone:
+                timezone = DEFAULT_TIMEZONE
+
         # Call daemon to refresh time
         time_dict = refresh_time(timezone)
-        
+
         # Format display string
         from datetime import datetime
         dt = datetime.fromisoformat(time_dict['timestamp'])
