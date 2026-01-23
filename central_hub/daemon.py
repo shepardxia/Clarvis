@@ -708,10 +708,8 @@ class CentralHubDaemon:
         self.socket_server.start()
 
         # Initialize token usage service
-        config = get_config()
-        self.token_usage_service = TokenUsageService(
-            poll_interval=config.token_usage_poll_interval if hasattr(config, 'token_usage_poll_interval') else 120
-        )
+        # TODO: In Task 4 (config structure), read poll_interval from config.token_usage.poll_interval
+        self.token_usage_service = TokenUsageService(poll_interval=120)
         self.token_usage_service.start()
 
         # Start status watcher
