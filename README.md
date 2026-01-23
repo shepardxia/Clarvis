@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/logo.svg" alt="Clarvis" width="500" />
+<h1>✨ Clarvis ✨</h1>
 
 *A friendly face for Claude Code*
 
