@@ -18,40 +18,40 @@
 
 ```
 ╭─────────╮
-│  ·   ·  │  Hi! I'm Clarvis—your little window into what Claude is up to.
-│    ◡    │  I sit in the corner of your screen showing status, weather,
-│ ·  ·  · │  and animations while Claude thinks and works.
+│  ·   ·  │  Hi! I'm Clarvis.
+│    ◡    │  I live in the corner of your screen and show you
+│ ·  ·  · │  what Claude is up to while it thinks and works.
 ╰─────────╯
 ```
 
-I built Clarvis because I wanted to *see* what Claude was doing—not just read terminal output. Now there's a friendly face that blinks when idle, looks focused when thinking, and shows rain or snow based on real weather outside.
+I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see rain or snow falling around me—that's the real weather outside!
 
-## What It Does
+## What I Can Do
 
-- **Shows Claude's mood** — Idle, thinking, running tools, or waiting for you
-- **Lives on your desktop** — A tiny macOS widget that stays out of the way
-- **Knows the weather** — Rain and snow particles fall based on actual conditions
-- **Controls your Sonos** — Ask Claude to play music, and it just works
+- **Show my mood** — I look different when idle, thinking, running tools, or waiting for you
+- **Live on your desktop** — I'm a tiny macOS widget that stays out of your way
+- **Know the weather** — Rain and snow particles fall based on actual conditions outside
+- **Control your Sonos** — Ask Claude to play music, and I'll make it happen
 
-## Get Started
+## Get Me Running
 
 ```bash
-./scripts/setup.sh    # Set up the MCP server
+./scripts/setup.sh    # Set me up as an MCP server
 ```
 
-Then restart Claude Code and run the widget:
+Then restart Claude Code and launch me:
 
 ```bash
 ./ClarvisWidget/ClarvisWidget &
 ```
 
-Want accurate location? `brew install corelocationcli`
+Want me to know your exact location? `brew install corelocationcli`
 
-## How It's Built
+## How I'm Built
 
 ```
 central_hub/
-├── server.py          # MCP server entry point
+├── server.py          # My MCP server entry point
 ├── core/              # Hub data, cache, time utilities
 ├── services/          # Weather, location, Sonos, thinking feed
 └── widget/            # ASCII renderer, display service
@@ -59,7 +59,7 @@ central_hub/
 
 ## Credits
 
-Thinking Feed adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
+My thinking feed was adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
 
 ## License
 
