@@ -19,5 +19,9 @@
     "status": "thinking",
     "weather": "clear",
     "context_percent": 75.0
+  },
+  "token_usage": {
+    "enabled": true,
+    "poll_interval": 120
   }
 }
