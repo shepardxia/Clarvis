@@ -9,7 +9,7 @@
  ╚═════╝  ╚══════╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝   ╚═══╝   ╚═╝ ╚══════╝
 </pre>
 
-[![CIs](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml/badge.svg)](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml)
+[![CI](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml/badge.svg)](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/shepardxia/Clarvis/graph/badge.svg)](https://codecov.io/gh/shepardxia/Clarvis)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -23,7 +23,7 @@
 ╰─────────╯
 ```
 
-I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see rain or snow falling around me—that's the real weather outside!
+I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see rain or snow falling around me — that's the real weather outside!
 
 ## What I Can Do
 
@@ -61,7 +61,7 @@ Each frame renders in microseconds. The daemon pushes frames, the Swift widget d
 
 ```
 central_hub/
-├── server.py          # My MCP server entry point
+├── server.py          # MCP server entry point
 ├── core/              # Hub data, cache, state management
 ├── services/          # Weather, location, Sonos, thinking feed
 └── widget/            # Vectorized ASCII renderer, socket server

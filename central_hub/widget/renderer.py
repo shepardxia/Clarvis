@@ -574,6 +574,12 @@ class FrameRenderer:
         context_percent = max(0.0, min(100.0, float(context_percent)))
 
         filled = int(context_percent / 100 * self.bar_width)
+
+        # Draw empty track first (dimmed)
+        for i in range(self.bar_width):
+            self.bar_layer.put(self.bar_x + i, self.bar_y, '-', COLORS["gray"])
+
+        # Draw filled portion on top
         for i in range(filled):
             self.bar_layer.put(self.bar_x + i, self.bar_y, '#', self.current_color)
 
