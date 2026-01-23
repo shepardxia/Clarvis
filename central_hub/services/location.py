@@ -89,10 +89,11 @@ def get_location(cache_max_age: int = 60) -> tuple[float, float, str]:
     Get current location with automatic fallback.
 
     Tries in order:
-    1. Cache (if fresh)
-    2. CoreLocationCLI (if available, more accurate GPS-based)
-    3. IP geolocation API
-    4. Default (San Francisco)
+    1. Cache from CoreLocation (if fresh) - trusted GPS source
+    2. CoreLocationCLI (if available) - always prefer real GPS
+    3. Cache from IP (if fresh) - only if no GPS available
+    4. IP geolocation API
+    5. Default (San Francisco)
 
     Args:
         cache_max_age: Maximum cache age in seconds
@@ -100,18 +101,24 @@ def get_location(cache_max_age: int = 60) -> tuple[float, float, str]:
     Returns:
         Tuple of (latitude, longitude, city)
     """
-    # Check cache first
     cached = get_hub_section("location", max_age=cache_max_age)
+
+    # If cache is from CoreLocation (GPS), trust it
+    if cached and cached.get("source") == "corelocation":
+        return cached["latitude"], cached["longitude"], cached["city"]
+
+    # Always try CoreLocation if available - GPS beats IP geolocation
+    location_data = _get_location_corelocation()
+    if location_data:
+        write_hub_section("location", location_data)
+        return location_data["latitude"], location_data["longitude"], location_data["city"]
+
+    # No GPS available - use IP cache if fresh
     if cached:
         return cached["latitude"], cached["longitude"], cached["city"]
 
-    # Try CoreLocation first if available (more accurate, GPS-based)
-    location_data = _get_location_corelocation()
-
     # Fall back to IP geolocation
-    if location_data is None:
-        location_data = _get_location_ip()
-
+    location_data = _get_location_ip()
     if location_data:
         write_hub_section("location", location_data)
         return location_data["latitude"], location_data["longitude"], location_data["city"]
