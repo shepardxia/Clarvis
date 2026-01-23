@@ -572,6 +572,7 @@ class CentralHubDaemon:
         self.command_server.register("get_weather", self._cmd_get_weather)
         self.command_server.register("get_sessions", self._cmd_get_sessions)
         self.command_server.register("get_session", self._cmd_get_session)
+        self.command_server.register("get_token_usage", self.get_token_usage)
 
         # Actions
         self.command_server.register("refresh_weather", self._cmd_refresh_weather)
