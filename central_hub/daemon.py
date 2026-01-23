@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+import atexit
+import fcntl
 import json
+import os
+import signal
 import sys
 import threading
 import time
@@ -22,6 +26,124 @@ from .services.token_usage import TokenUsageService
 from .widget.renderer import FrameRenderer
 from .widget.config import get_config, watch_config, WidgetConfig, restart_daemon_and_widget
 from .widget.socket_server import WidgetSocketServer, get_socket_server
+
+
+class PidLock:
+    """Ensures only one daemon instance runs at a time using PID file locking.
+
+    Features:
+    - Atomic locking with fcntl.flock()
+    - Stale PID detection (handles crashed processes)
+    - Signal handler registration for cleanup
+    - Context manager support
+    """
+
+    DEFAULT_PID_FILE = Path("/tmp/central-hub-daemon.pid")
+
+    def __init__(self, pid_file: Path = None):
+        self.pid_file = pid_file or self.DEFAULT_PID_FILE
+        self._lock_fd: Optional[int] = None
+        self._original_handlers: Dict[int, Any] = {}
+
+    def acquire(self) -> bool:
+        """Attempt to acquire the daemon lock.
+
+        Returns:
+            True if lock acquired, False if another instance is running.
+        """
+        # Check for stale PID file first
+        if self.pid_file.exists():
+            try:
+                old_pid = int(self.pid_file.read_text().strip())
+                # Check if process is actually running
+                os.kill(old_pid, 0)  # Signal 0 = check existence
+                # Process exists - check if we can get the lock anyway
+            except (ValueError, ProcessLookupError, PermissionError):
+                # PID file is stale (process doesn't exist or invalid)
+                try:
+                    self.pid_file.unlink()
+                except OSError:
+                    pass
+
+        # Open/create PID file
+        try:
+            self._lock_fd = os.open(
+                str(self.pid_file),
+                os.O_RDWR | os.O_CREAT,
+                0o644
+            )
+        except OSError as e:
+            print(f"Error: Cannot create PID file {self.pid_file}: {e}", file=sys.stderr)
+            return False
+
+        # Try to acquire exclusive lock (non-blocking)
+        try:
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            # Another process holds the lock
+            os.close(self._lock_fd)
+            self._lock_fd = None
+            try:
+                existing_pid = self.pid_file.read_text().strip()
+                print(f"Error: Daemon already running (PID {existing_pid})", file=sys.stderr)
+            except Exception:
+                print("Error: Daemon already running", file=sys.stderr)
+            return False
+
+        # Write our PID
+        os.ftruncate(self._lock_fd, 0)
+        os.write(self._lock_fd, f"{os.getpid()}\n".encode())
+        os.fsync(self._lock_fd)
+
+        # Register cleanup handlers
+        self._register_signal_handlers()
+        atexit.register(self.release)
+
+        return True
+
+    def release(self) -> None:
+        """Release the daemon lock and clean up."""
+        if self._lock_fd is not None:
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                os.close(self._lock_fd)
+            except OSError:
+                pass
+            self._lock_fd = None
+
+        # Remove PID file
+        try:
+            self.pid_file.unlink()
+        except OSError:
+            pass
+
+        # Restore original signal handlers
+        for sig, handler in self._original_handlers.items():
+            signal.signal(sig, handler)
+        self._original_handlers.clear()
+
+    def _register_signal_handlers(self) -> None:
+        """Register signal handlers for graceful cleanup."""
+        def cleanup_handler(signum, frame):
+            self.release()
+            # Re-raise with default handler for proper exit
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self._original_handlers[sig] = signal.signal(sig, cleanup_handler)
+
+    def __enter__(self) -> "PidLock":
+        if not self.acquire():
+            raise RuntimeError("Failed to acquire daemon lock")
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.release()
+
+
+# Global lock instance for daemon
+_daemon_lock: Optional[PidLock] = None
 
 
 class StatusHandler(FileSystemEventHandler):
@@ -801,12 +923,23 @@ def refresh_all():
 
 def main():
     """Entry point for daemon mode."""
+    global _daemon_lock
+
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
+        # One-shot refresh doesn't need lock
         daemon = CentralHubDaemon()
         daemon.refresh_all()
     else:
-        daemon = CentralHubDaemon()
-        daemon.run()
+        # Acquire singleton lock before starting daemon
+        _daemon_lock = PidLock()
+        if not _daemon_lock.acquire():
+            sys.exit(1)
+
+        try:
+            daemon = CentralHubDaemon()
+            daemon.run()
+        finally:
+            _daemon_lock.release()
 
 
 if __name__ == "__main__":
