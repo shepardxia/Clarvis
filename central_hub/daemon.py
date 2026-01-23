@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Background daemon for Central Hub - handles status processing and data refreshes."""
 
+from __future__ import annotations
+
 import json
 import sys
 import threading

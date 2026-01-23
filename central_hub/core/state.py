@@ -2,7 +2,7 @@
 
 import threading
 import time
-from typing import Callable, Any
+from typing import Callable, Any, Optional
 
 
 class StateStore:
@@ -112,7 +112,7 @@ class StateStore:
 
 
 # Global instance for singleton access
-_store_instance: StateStore | None = None
+_store_instance: Optional[StateStore] = None
 _store_lock = threading.Lock()
 
 

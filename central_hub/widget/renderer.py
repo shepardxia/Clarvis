@@ -275,7 +275,8 @@ class WeatherSystem:
     # Ambient cloud settings
     AMBIENT_CLOUD_SHAPES = ["cloud_small", "cloud_wisp", "cloud_puff"]
     AMBIENT_MAX_CLOUDS = 3
-    AMBIENT_SPAWN_RATE = 0.02  # Low spawn rate for gentle background
+    AMBIENT_SPAWN_RATE = 0.03
+    AMBIENT_SPAWN_ZONE = 0.35  # Spawn in upper 35% of display
 
     # Shape names for each weather type (can repeat for weighting)
     SHAPES = {
@@ -315,15 +316,21 @@ class WeatherSystem:
                 p.x + p.shape.width > -1 and
                 p.x < self.width + 1)
 
+    def _is_cloud_visible(self, p: Particle) -> bool:
+        """Check if cloud is still on screen (persists until out of frame)."""
+        return (p.x < self.width + 1 and
+                p.x + p.shape.width > -1 and
+                p.y < self.height + 1 and
+                p.y + p.shape.height > -1)
+
     def _tick_ambient_clouds(self):
         """Update and spawn ambient background clouds."""
-        # Update existing ambient clouds
+        # Update existing ambient clouds - persist until out of frame
         alive = []
         for p in self.ambient_clouds:
             p.x += p.vx
             p.y += p.vy
-            p.age += 1
-            if self._is_alive(p):
+            if self._is_cloud_visible(p):
                 alive.append(p)
         self.ambient_clouds = alive
 
@@ -335,13 +342,14 @@ class WeatherSystem:
                 random.random() < self.AMBIENT_SPAWN_RATE):
             shape_name = random.choice(self.AMBIENT_CLOUD_SHAPES)
             shape = get_shape(shape_name)
+            max_y = int(self.height * self.AMBIENT_SPAWN_ZONE)
             p = Particle(
-                x=random.uniform(-shape.width, 0),  # Enter from left
-                y=random.uniform(0, self.height // 2),  # Upper half
-                vx=random.uniform(0.02, 0.06),  # Slow rightward drift
-                vy=random.uniform(-0.01, 0.01),  # Slight vertical wobble
+                x=random.uniform(-shape.width * 2, -shape.width),  # Start off-screen left
+                y=random.uniform(0, max_y),  # Upper portion only
+                vx=random.uniform(0.08, 0.15),  # Faster rightward drift
+                vy=random.uniform(-0.02, 0.02),  # Some vertical drift
                 shape=shape,
-                lifetime=random.randint(200, 400),  # Long-lived
+                lifetime=999999,  # Effectively infinite - removed by position check
             )
             self.ambient_clouds.append(p)
 

@@ -1,5 +1,7 @@
 """Location detection via CoreLocation (macOS) or IP geolocation fallback."""
 
+from __future__ import annotations
+
 import json
 import subprocess
 

@@ -1,5 +1,7 @@
 """Unix socket server for pushing frames to Swift widget."""
 
+from __future__ import annotations
+
 import json
 import os
 import socket

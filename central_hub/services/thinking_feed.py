@@ -5,6 +5,8 @@ https://github.com/bporterfield/watch-claude-think
 Licensed under MIT. Ported from TypeScript to Python for central-hub integration.
 """
 
+from __future__ import annotations
+
 import json
 import threading
 import time

@@ -1,5 +1,7 @@
 """Sonos speaker control via SoCo library."""
 
+from __future__ import annotations
+
 import soco
 
 
