@@ -9,6 +9,7 @@ from central_hub.widget.config import (
     ThemeConfig,
     DisplayConfig,
     TestingConfig,
+    TokenUsageConfig,
     WidgetConfig,
     CONFIG_PATH,
 )
@@ -102,6 +103,47 @@ class TestTestingConfig:
         assert config.context_percent == 75.0
 
 
+class TestTokenUsageConfig:
+    """Tests for TokenUsageConfig dataclass."""
+
+    def test_default_values(self):
+        """Should have sensible defaults."""
+        config = TokenUsageConfig()
+        assert config.enabled is True
+        assert config.poll_interval == 120
+
+    def test_custom_values(self):
+        """Should accept custom values."""
+        config = TokenUsageConfig(enabled=False, poll_interval=60)
+        assert config.enabled is False
+        assert config.poll_interval == 60
+
+    def test_to_dict(self):
+        """Should serialize to dictionary."""
+        config = TokenUsageConfig(poll_interval=60)
+        d = config.to_dict()
+        assert d["enabled"] is True
+        assert d["poll_interval"] == 60
+
+    def test_from_dict(self):
+        """Should deserialize from dictionary."""
+        config = TokenUsageConfig.from_dict({"enabled": False, "poll_interval": 30})
+        assert config.enabled is False
+        assert config.poll_interval == 30
+
+    def test_from_dict_with_defaults(self):
+        """Should use defaults for missing fields."""
+        config = TokenUsageConfig.from_dict({})
+        assert config.enabled is True
+        assert config.poll_interval == 120
+
+    def test_from_dict_invalid_input(self):
+        """Should return defaults for invalid input."""
+        config = TokenUsageConfig.from_dict("invalid")
+        assert config.enabled is True
+        assert config.poll_interval == 120
+
+
 class TestWidgetConfig:
     """Tests for WidgetConfig dataclass."""
 
@@ -117,6 +159,7 @@ class TestWidgetConfig:
         assert "theme" in d
         assert "display" in d
         assert "testing" in d
+        assert "token_usage" in d
 
     def test_from_dict_new_format(self):
         """Should parse new format config."""
@@ -124,6 +167,7 @@ class TestWidgetConfig:
             "theme": {"base": "synthwave"},
             "display": {"grid_width": 30, "fps": 10},
             "testing": {"enabled": True, "status": "running"},
+            "token_usage": {"enabled": False, "poll_interval": 60},
         }
 
         config = WidgetConfig.from_dict(d)
@@ -133,6 +177,21 @@ class TestWidgetConfig:
         assert config.display.fps == 10
         assert config.testing.enabled is True
         assert config.testing.status == "running"
+        assert config.token_usage.enabled is False
+        assert config.token_usage.poll_interval == 60
+
+    def test_from_dict_token_usage_defaults(self):
+        """Should use defaults when token_usage section is missing."""
+        d = {
+            "theme": {"base": "modern"},
+            "display": {},
+            "testing": {},
+        }
+
+        config = WidgetConfig.from_dict(d)
+
+        assert config.token_usage.enabled is True
+        assert config.token_usage.poll_interval == 120
 
     def test_from_dict_legacy_static_key(self):
         """Should handle legacy 'static' key for display settings."""

@@ -85,17 +85,44 @@ class TestingConfig:
 
 
 @dataclass
+class TokenUsageConfig:
+    """Configuration for token usage tracking."""
+    enabled: bool = True
+    poll_interval: int = 120  # seconds
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "enabled": self.enabled,
+            "poll_interval": self.poll_interval,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "TokenUsageConfig":
+        """Deserialize from dictionary."""
+        if not isinstance(d, dict):
+            return TokenUsageConfig()
+
+        return TokenUsageConfig(
+            enabled=d.get("enabled", True),
+            poll_interval=d.get("poll_interval", 120),
+        )
+
+
+@dataclass
 class WidgetConfig:
     """Main configuration combining all sections."""
     theme: ThemeConfig
     display: DisplayConfig
     testing: TestingConfig
+    token_usage: TokenUsageConfig = field(default_factory=TokenUsageConfig)
 
     def to_dict(self) -> dict:
         return {
             "theme": self.theme.to_dict(),
             "display": asdict(self.display),
             "testing": asdict(self.testing),
+            "token_usage": self.token_usage.to_dict(),
         }
 
     @classmethod
@@ -131,7 +158,11 @@ class WidgetConfig:
         testing_known = {f.name for f in TestingConfig.__dataclass_fields__.values()}
         testing = TestingConfig(**{k: v for k, v in testing_dict.items() if k in testing_known})
 
-        return cls(theme=theme, display=display, testing=testing)
+        # Handle token_usage
+        token_usage_dict = d.get("token_usage", {})
+        token_usage = TokenUsageConfig.from_dict(token_usage_dict)
+
+        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage)
 
     def save(self, path: Path = CONFIG_PATH):
         temp = path.with_suffix(".tmp")
