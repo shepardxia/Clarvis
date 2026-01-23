@@ -475,6 +475,28 @@ class TestWeatherMapping:
         assert intensity == 0.5
 
 
+class TestTokenUsageService:
+    """Tests for token usage service integration."""
+
+    def test_daemon_initializes_token_usage_service(self):
+        """Should initialize token usage service on startup."""
+        daemon = CentralHubDaemon()
+        assert hasattr(daemon, 'token_usage_service')
+
+    def test_get_token_usage_returns_data(self):
+        """Should return token usage data from service."""
+        daemon = CentralHubDaemon()
+        daemon.token_usage_service = MagicMock()
+        daemon.token_usage_service.get_usage.return_value = {
+            "five_hour": {"utilization": 6.0},
+            "is_stale": False
+        }
+
+        result = daemon.get_token_usage()
+
+        assert result["five_hour"]["utilization"] == 6.0
+
+
 class TestCommandHandlers:
     """Tests for IPC command handlers."""
 

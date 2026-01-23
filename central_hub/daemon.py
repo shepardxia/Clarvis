@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Dict, Any, List
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -17,6 +18,7 @@ from .core import get_hub_section, write_hub_section, get_current_time, read_hub
 from .core.state import StateStore, get_state_store
 from .core.ipc import DaemonServer
 from .services import get_location, get_cached_timezone, fetch_weather
+from .services.token_usage import TokenUsageService
 from .widget.renderer import FrameRenderer
 from .widget.config import get_config, watch_config, WidgetConfig, restart_daemon_and_widget
 from .widget.socket_server import WidgetSocketServer, get_socket_server
@@ -70,6 +72,7 @@ class CentralHubDaemon:
         self.state = state_store or get_state_store()
         self.socket_server = socket_server or get_socket_server()
         self.command_server = DaemonServer()
+        self.token_usage_service: Optional[TokenUsageService] = None
 
         # Threading
         self.observer: Observer | None = None
@@ -659,6 +662,16 @@ class CentralHubDaemon:
             "context_history": data.get("context_history", []),
         }
 
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get current token usage data.
+
+        Returns:
+            Dict with usage data, last_updated, and is_stale flag
+        """
+        if not self.token_usage_service:
+            return {"error": "Token usage service not initialized", "is_stale": True}
+        return self.token_usage_service.get_usage()
+
     def _cmd_refresh_weather(self, latitude: float = None, longitude: float = None) -> dict:
         """Refresh weather and return new data."""
         return self.refresh_weather(latitude, longitude)
@@ -694,6 +707,13 @@ class CentralHubDaemon:
         # Start socket server for widget connections
         self.socket_server.start()
 
+        # Initialize token usage service
+        config = get_config()
+        self.token_usage_service = TokenUsageService(
+            poll_interval=config.token_usage_poll_interval if hasattr(config, 'token_usage_poll_interval') else 120
+        )
+        self.token_usage_service.start()
+
         # Start status watcher
         self.start_status_watcher()
 
@@ -722,6 +742,10 @@ class CentralHubDaemon:
         self.stop_display()
         self.socket_server.stop()
         self.command_server.stop()
+
+        # Stop token usage service
+        if self.token_usage_service:
+            self.token_usage_service.stop()
 
     def run(self):
         """Run the daemon until interrupted."""
