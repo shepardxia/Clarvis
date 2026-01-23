@@ -3,7 +3,7 @@
 
 from mcp.server.fastmcp import FastMCP
 
-from .core import get_hub_section, DEFAULT_TIMEZONE
+from .core import get_hub_section, read_hub_data, DEFAULT_TIMEZONE
 from .daemon import refresh_location, refresh_weather, refresh_time
 from .services import get_controller, get_session_manager
 
@@ -86,7 +86,6 @@ async def get_claude_status() -> str:
         Current status information
     """
     try:
-        from .core import read_hub_data
         hub_data = read_hub_data()
         status_data = hub_data.get("status", {})
 
@@ -106,13 +105,12 @@ async def get_claude_status() -> str:
 @mcp.tool()
 async def get_clarvis_state() -> dict:
     """
-    Get Clarvis's full current state including displayed session, status, weather, and widget info.
+    Get Clarvis's full current state including displayed session, status, weather, and full history.
 
     Returns:
-        Dictionary with Clarvis's complete state
+        Dictionary with Clarvis's complete state including all tracked session histories
     """
     try:
-        from .core import read_hub_data
         hub_data = read_hub_data()
 
         status = hub_data.get("status", {})
@@ -120,11 +118,23 @@ async def get_clarvis_state() -> dict:
         time_data = hub_data.get("time", {})
         sessions = hub_data.get("sessions", {})
 
+        # Include full session data for debugging
+        session_details = {}
+        for session_id, data in sessions.items():
+            session_details[session_id] = {
+                "last_status": data.get("last_status", "unknown"),
+                "last_context": data.get("last_context", 0),
+                "status_history": data.get("status_history", []),
+                "context_history": data.get("context_history", []),
+            }
+
         return {
             "displayed_session": status.get("session_id"),
             "status": status.get("status", "unknown"),
             "color": status.get("color", "gray"),
             "context_percent": status.get("context_percent", 0),
+            "status_history": status.get("status_history", []),
+            "context_history": status.get("context_history", []),
             "weather": {
                 "type": weather.get("description", "unknown"),
                 "temperature": weather.get("temperature"),
@@ -132,7 +142,7 @@ async def get_clarvis_state() -> dict:
                 "city": weather.get("city", "unknown"),
             },
             "time": time_data.get("timestamp"),
-            "tracked_sessions": len(sessions),
+            "sessions": session_details,
             "updated_at": hub_data.get("updated_at"),
         }
     except Exception as e:
@@ -148,7 +158,6 @@ async def list_clarvis_sessions() -> list[dict]:
         List of tracked sessions with status and context history
     """
     try:
-        from .core import read_hub_data
         hub_data = read_hub_data()
 
         sessions = hub_data.get("sessions", {})
@@ -182,7 +191,6 @@ async def get_clarvis_session(session_id: str) -> dict:
         Session details including full history
     """
     try:
-        from .core import read_hub_data
         hub_data = read_hub_data()
 
         sessions = hub_data.get("sessions", {})
