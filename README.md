@@ -1,7 +1,11 @@
+<div align="center">
+
 # Clarvis
 
 [![Tests](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml/badge.svg)](https://github.com/shepardxia/Clarvis/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/shepardxia/Clarvis/graph/badge.svg)](https://codecov.io/gh/shepardxia/Clarvis)
+
+</div>
 
 ```
 ╭─────────╮
@@ -11,29 +15,30 @@
 ╰─────────╯
 ```
 
-## Features
+I built Clarvis because I wanted to *see* what Claude was doing—not just read terminal output. Now there's a friendly face that blinks when idle, looks focused when thinking, and shows rain or snow based on real weather outside.
 
-- **MCP Server** — Weather, time, Sonos control, and session monitoring tools for Claude Code
-- **Desktop Widget** — Native macOS Swift widget with animated ASCII avatar and weather particles
-- **Weather Effects** — Dynamic intensity based on wind speed, precipitation, and snowfall
-- **Status Display** — See when Claude is idle, thinking, running tools, or waiting
-- **Sonos Control** — Play music, adjust volume, manage queues via MCP tools
+## What It Does
 
-## Setup
+- **Shows Claude's mood** — Idle, thinking, running tools, or waiting for you
+- **Lives on your desktop** — A tiny macOS widget that stays out of the way
+- **Knows the weather** — Rain and snow particles fall based on actual conditions
+- **Controls your Sonos** — Ask Claude to play music, and it just works
+
+## Get Started
 
 ```bash
-./scripts/setup.sh
-# Restart Claude Code to enable MCP server
+./scripts/setup.sh    # Set up the MCP server
 ```
 
-**Run the widget:**
+Then restart Claude Code and run the widget:
+
 ```bash
 ./ClarvisWidget/ClarvisWidget &
 ```
 
-**Optional GPS location:** `brew install corelocationcli`
+Want accurate location? `brew install corelocationcli`
 
-## Architecture
+## How It's Built
 
 ```
 central_hub/
@@ -45,8 +50,8 @@ central_hub/
 
 ## Credits
 
-- **Thinking Feed** adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
+Thinking Feed adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
 
 ## License
 
-MIT License — see [LICENSE](LICENSE)
+MIT — see [LICENSE](LICENSE)
