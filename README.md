@@ -46,14 +46,25 @@ Then restart Claude Code and launch me:
 
 Want me to know your exact location? `brew install corelocationcli`
 
+## How I Draw Myself
+
+My face is rendered using a vectorized ASCII engine — think of it like a tiny 2D graphics system, but for text:
+
+- **Declarative primitives** — I'm built from Canvas, Brush, and Sprite objects, not character-by-character
+- **Layer compositing** — Weather particles, my face, and the context bar live on separate layers that merge together
+- **Real-time updates** — Status changes push instantly to the widget via Unix socket, no polling
+- **Status-driven animation** — My expressions and colors shift based on what Claude is doing
+
+Each frame renders in microseconds. The daemon pushes frames, the Swift widget displays them.
+
 ## How I'm Built
 
 ```
 central_hub/
 ├── server.py          # My MCP server entry point
-├── core/              # Hub data, cache, time utilities
+├── core/              # Hub data, cache, state management
 ├── services/          # Weather, location, Sonos, thinking feed
-└── widget/            # ASCII renderer, display service
+└── widget/            # Vectorized ASCII renderer, socket server
 ```
 
 ## Credits
