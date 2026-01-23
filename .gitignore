@@ -3,7 +3,7 @@ __pycache__/
 *.egg-info/
 .DS_Store
 *.pyc
-docs/
+docs/api/
 uv.lock
 widget/ClaudeStatusOverlay
 control-server.py
