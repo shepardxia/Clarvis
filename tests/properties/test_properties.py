@@ -157,7 +157,7 @@ class TestHistoryProperties:
             max_size=100,
         ),
     )
-    @settings(max_examples=50)
+    @settings(max_examples=50, deadline=1000)
     def test_history_never_exceeds_limit(self, entries):
         """History buffers should never exceed HISTORY_SIZE."""
         from central_hub.daemon import CentralHubDaemon

@@ -187,3 +187,122 @@ class TestSessionState:
         recent = session.get_recent_thoughts(limit=3)
         assert len(recent) == 3
         assert recent[-1].text == "Thought 9"
+
+    def test_get_recent_thoughts_empty(self):
+        """Should return empty list when no thoughts."""
+        session = SessionState(
+            session_id="test",
+            project="myproject",
+            project_path="/path",
+            file_path=Path("/tmp/test.jsonl"),
+        )
+        assert session.get_recent_thoughts() == []
+
+    def test_initial_state(self):
+        """Should initialize with correct default values."""
+        session = SessionState(
+            session_id="test",
+            project="myproject",
+            project_path="/path",
+            file_path=Path("/tmp/test.jsonl"),
+        )
+        assert session.status == SessionStatus.ACTIVE
+        assert session.thoughts == []
+        assert session.file_position == 0
+
+
+class TestThinkingBlock:
+    """Tests for ThinkingBlock dataclass."""
+
+    def test_default_message_id(self):
+        """Should have empty string as default message_id."""
+        block = ThinkingBlock(
+            text="My thought",
+            timestamp="2024-01-15T10:00:00Z",
+            session_id="sess-123",
+        )
+        assert block.message_id == ""
+
+    def test_all_fields(self):
+        """Should create block with all fields."""
+        block = ThinkingBlock(
+            text="My thought",
+            timestamp="2024-01-15T10:00:00Z",
+            session_id="sess-123",
+            message_id="msg-456:0",
+        )
+        assert block.text == "My thought"
+        assert block.timestamp == "2024-01-15T10:00:00Z"
+        assert block.session_id == "sess-123"
+        assert block.message_id == "msg-456:0"
+
+
+class TestSessionStatus:
+    """Tests for SessionStatus enum."""
+
+    def test_status_values(self):
+        """Should have expected status values."""
+        assert SessionStatus.ACTIVE.value == "active"
+        assert SessionStatus.IDLE.value == "idle"
+        assert SessionStatus.ENDED.value == "ended"
+
+
+class TestEdgeCases:
+    """Additional edge case tests."""
+
+    def test_extract_thinking_blocks_missing_message(self):
+        """Should handle missing message field."""
+        entry = {"type": "assistant"}
+        assert extract_thinking_blocks(entry) == []
+
+    def test_extract_thinking_blocks_missing_content(self):
+        """Should handle missing content field."""
+        entry = {"type": "assistant", "message": {}}
+        assert extract_thinking_blocks(entry) == []
+
+    def test_extract_thinking_blocks_empty_thinking_text(self):
+        """Should skip thinking blocks with empty text."""
+        entry = {
+            "type": "assistant",
+            "sessionId": "sess-123",
+            "timestamp": "2024-01-15T10:00:00Z",
+            "uuid": "msg-456",
+            "message": {
+                "content": [
+                    {"type": "thinking", "thinking": ""},
+                    {"type": "thinking", "thinking": "Has content"},
+                ]
+            }
+        }
+        blocks = extract_thinking_blocks(entry)
+        assert len(blocks) == 1
+        assert blocks[0].text == "Has content"
+
+    def test_is_session_stop_missing_data(self):
+        """Should handle missing data field."""
+        entry = {"type": "progress"}
+        assert is_session_stop_event(entry) is False
+
+    def test_is_session_stop_non_hook_progress(self):
+        """Should return False for non-hook_progress data."""
+        entry = {
+            "type": "progress",
+            "data": {
+                "type": "other_progress",
+                "hookEvent": "Stop"
+            }
+        }
+        assert is_session_stop_event(entry) is False
+
+    def test_parse_jsonl_whitespace_trimmed(self):
+        """Should trim whitespace before parsing."""
+        line = '  {"key": "value"}  \n'
+        result = parse_jsonl_line(line)
+        assert result == {"key": "value"}
+
+    def test_extract_project_simple_slug(self):
+        """Should handle simple project slug without leading dash."""
+        file_path = Path("/Users/test/.claude/projects/simple-project/session.jsonl")
+        name, path = extract_project_from_path(file_path)
+        assert name == "project"
+        assert path == "simple/project"
