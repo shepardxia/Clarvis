@@ -85,7 +85,7 @@ class CentralHubDaemon:
         # Per-session tracking: {session_id: {"status_history": [], "context_history": []}}
         self.HISTORY_SIZE = 20
         self.sessions: dict[str, dict] = {}
-        self.current_session_id: str | None = None
+        self.displayed_session_id: str | None = None  # Which session we're showing
 
         # Load sessions from hub data if available
         hub_data = read_hub_data()
@@ -126,7 +126,22 @@ class CentralHubDaemon:
     def _add_to_history(self, session_id: str, status: str, context_percent: float):
         """Add values to per-session history buffers."""
         session = self._get_session(session_id)
-        self.current_session_id = session_id
+
+        # Switch displayed session only if:
+        # 1. No session is being displayed yet
+        # 2. This is the currently displayed session
+        # 3. Current displayed session is idle/awaiting and this one is active
+        active_statuses = {"running", "thinking"}
+        idle_statuses = {"idle", "awaiting", "resting"}
+
+        should_switch = (
+            self.displayed_session_id is None or
+            session_id == self.displayed_session_id or
+            (self.display_status in idle_statuses and status in active_statuses)
+        )
+
+        if should_switch:
+            self.displayed_session_id = session_id
 
         # Only add status if it changed
         history = session["status_history"]
@@ -209,10 +224,11 @@ class CentralHubDaemon:
             hub_data["sessions"] = self.sessions  # Persist per-session tracking
             hub_data["updated_at"] = datetime.now().isoformat()
 
-            # Store in instance
+            # Store in instance and update display only if this is the displayed session
             with self._lock:
                 self.status = processed
-                self._update_display_from_data()
+                if processed.get("session_id") == self.displayed_session_id:
+                    self._update_display_from_data()
 
             # Write atomically
             temp_file = self.hub_data_file.with_suffix('.tmp')

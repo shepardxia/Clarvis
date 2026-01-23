@@ -89,10 +89,10 @@ async def get_claude_status() -> str:
         from .core import read_hub_data
         hub_data = read_hub_data()
         status_data = hub_data.get("status", {})
-        
+
         if not status_data:
             return "No status data found"
-        
+
         status = status_data.get("status", "unknown")
         color = status_data.get("color", "gray")
         context_percent = status_data.get("context_percent", 0)
@@ -101,6 +101,107 @@ async def get_claude_status() -> str:
 
     except Exception as e:
         return f"Error reading status: {e}"
+
+
+@mcp.tool()
+async def get_clarvis_state() -> dict:
+    """
+    Get Clarvis's full current state including displayed session, status, weather, and widget info.
+
+    Returns:
+        Dictionary with Clarvis's complete state
+    """
+    try:
+        from .core import read_hub_data
+        hub_data = read_hub_data()
+
+        status = hub_data.get("status", {})
+        weather = hub_data.get("weather", {})
+        time_data = hub_data.get("time", {})
+        sessions = hub_data.get("sessions", {})
+
+        return {
+            "displayed_session": status.get("session_id"),
+            "status": status.get("status", "unknown"),
+            "color": status.get("color", "gray"),
+            "context_percent": status.get("context_percent", 0),
+            "weather": {
+                "type": weather.get("description", "unknown"),
+                "temperature": weather.get("temperature"),
+                "intensity": weather.get("intensity", 0),
+                "city": weather.get("city", "unknown"),
+            },
+            "time": time_data.get("timestamp"),
+            "tracked_sessions": len(sessions),
+            "updated_at": hub_data.get("updated_at"),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def list_clarvis_sessions() -> list[dict]:
+    """
+    List all sessions Clarvis is tracking with their current state.
+
+    Returns:
+        List of tracked sessions with status and context history
+    """
+    try:
+        from .core import read_hub_data
+        hub_data = read_hub_data()
+
+        sessions = hub_data.get("sessions", {})
+        displayed = hub_data.get("status", {}).get("session_id")
+
+        result = []
+        for session_id, data in sessions.items():
+            result.append({
+                "session_id": session_id,
+                "is_displayed": session_id == displayed,
+                "last_status": data.get("last_status", "unknown"),
+                "last_context": data.get("last_context", 0),
+                "status_history_length": len(data.get("status_history", [])),
+                "context_history_length": len(data.get("context_history", [])),
+            })
+
+        return result if result else [{"message": "No sessions tracked"}]
+    except Exception as e:
+        return [{"error": str(e)}]
+
+
+@mcp.tool()
+async def get_clarvis_session(session_id: str) -> dict:
+    """
+    Get detailed information about a specific tracked session.
+
+    Args:
+        session_id: The session ID to look up
+
+    Returns:
+        Session details including full history
+    """
+    try:
+        from .core import read_hub_data
+        hub_data = read_hub_data()
+
+        sessions = hub_data.get("sessions", {})
+        displayed = hub_data.get("status", {}).get("session_id")
+
+        if session_id not in sessions:
+            return {"error": f"Session {session_id} not found"}
+
+        data = sessions[session_id]
+        return {
+            "session_id": session_id,
+            "is_displayed": session_id == displayed,
+            "last_status": data.get("last_status", "unknown"),
+            "last_context": data.get("last_context", 0),
+            "status_history": data.get("status_history", []),
+            "context_history": data.get("context_history", []),
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # --- Thinking Feed Tools ---
