@@ -272,6 +272,11 @@ class WeatherSystem:
     # At intensity 1.0, spawn up to this many particles
     MAX_PARTICLES_BASE = 25
 
+    # Ambient cloud settings
+    AMBIENT_CLOUD_SHAPES = ["cloud_small", "cloud_wisp", "cloud_puff"]
+    AMBIENT_MAX_CLOUDS = 3
+    AMBIENT_SPAWN_RATE = 0.02  # Low spawn rate for gentle background
+
     # Shape names for each weather type (can repeat for weighting)
     SHAPES = {
         "snow": ["snow_star", "snow_plus", "snow_x", "snow_dot", "snow_o"],
@@ -285,6 +290,7 @@ class WeatherSystem:
         self.width = width
         self.height = height
         self.particles: list[Particle] = []
+        self.ambient_clouds: list[Particle] = []
         self.weather_type: Optional[str] = None
         self.intensity = 0.0
         self.exclusion_zones: list[BoundingBox] = []
@@ -309,7 +315,40 @@ class WeatherSystem:
                 p.x + p.shape.width > -1 and
                 p.x < self.width + 1)
 
+    def _tick_ambient_clouds(self):
+        """Update and spawn ambient background clouds."""
+        # Update existing ambient clouds
+        alive = []
+        for p in self.ambient_clouds:
+            p.x += p.vx
+            p.y += p.vy
+            p.age += 1
+            if self._is_alive(p):
+                alive.append(p)
+        self.ambient_clouds = alive
+
+        # Spawn new ambient clouds (unless we have active cloudy/fog weather)
+        if self.weather_type in ("cloudy", "fog"):
+            return  # Let main weather handle clouds
+
+        if (len(self.ambient_clouds) < self.AMBIENT_MAX_CLOUDS and
+                random.random() < self.AMBIENT_SPAWN_RATE):
+            shape_name = random.choice(self.AMBIENT_CLOUD_SHAPES)
+            shape = get_shape(shape_name)
+            p = Particle(
+                x=random.uniform(-shape.width, 0),  # Enter from left
+                y=random.uniform(0, self.height // 2),  # Upper half
+                vx=random.uniform(0.02, 0.06),  # Slow rightward drift
+                vy=random.uniform(-0.01, 0.01),  # Slight vertical wobble
+                shape=shape,
+                lifetime=random.randint(200, 400),  # Long-lived
+            )
+            self.ambient_clouds.append(p)
+
     def tick(self):
+        # Always tick ambient clouds
+        self._tick_ambient_clouds()
+
         if not self.weather_type or self.weather_type not in self.SHAPES:
             return
 
@@ -370,20 +409,26 @@ class WeatherSystem:
                 )
             self.particles.append(p)
 
+    def _render_particle(self, layer: Layer, p: Particle, color: int):
+        """Render a single particle to a layer."""
+        px, py = int(p.x), int(p.y)
+        for row_idx, row in enumerate(p.shape.pattern):
+            for col_idx, char in enumerate(row):
+                if char == " ":
+                    continue  # transparent
+                cx, cy = px + col_idx, py + row_idx
+                if any(zone.contains(cx, cy) for zone in self.exclusion_zones):
+                    continue
+                layer.put(cx, cy, char, color)
+
     def render(self, layer: Layer, color: int = 8):
         """Render particles to a layer, respecting exclusion zones."""
+        # Render ambient clouds first (behind weather particles)
+        for p in self.ambient_clouds:
+            self._render_particle(layer, p, color)
+        # Render weather particles
         for p in self.particles:
-            px, py = int(p.x), int(p.y)
-            # Render each character in the shape
-            for row_idx, row in enumerate(p.shape.pattern):
-                for col_idx, char in enumerate(row):
-                    if char == " ":
-                        continue  # transparent
-                    cx, cy = px + col_idx, py + row_idx
-                    # Skip if inside any exclusion zone
-                    if any(zone.contains(cx, cy) for zone in self.exclusion_zones):
-                        continue
-                    layer.put(cx, cy, char, color)
+            self._render_particle(layer, p, color)
 
 
 # =============================================================================
