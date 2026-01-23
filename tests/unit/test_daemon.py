@@ -279,3 +279,265 @@ class TestEventSequence:
         assert "thinking" in session["status_history"]
         assert "running" in session["status_history"]
         assert "awaiting" in session["status_history"]
+
+
+class TestDisplayProperties:
+    """Tests for display property accessors."""
+
+    def test_display_color_from_state(self, temp_hub_files):
+        """display_color should return color from state."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        daemon.state.update("status", {"status": "running", "color": "green"})
+        assert daemon.display_color == "green"
+
+    def test_display_color_default(self, temp_hub_files):
+        """display_color should return gray when no state."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        daemon.state.update("status", None)
+        assert daemon.display_color == "gray"
+
+    def test_display_context_percent_from_state(self, temp_hub_files):
+        """display_context_percent should return value from state."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        daemon.state.update("status", {"context_percent": 75.5})
+        assert daemon.display_context_percent == 75.5
+
+    def test_display_context_percent_default(self, temp_hub_files):
+        """display_context_percent should return 0 when no state."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        daemon.state.update("status", None)
+        assert daemon.display_context_percent == 0.0
+
+
+class TestWeatherMapping:
+    """Tests for weather to widget mapping."""
+
+    def test_map_snow(self, temp_hub_files):
+        """Snow description should map to snow type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, intensity = daemon._map_weather_to_widget({
+            "description": "Light Snow",
+            "intensity": 0.4,
+        })
+        assert weather_type == "snow"
+        assert intensity == 0.4
+
+    def test_map_rain(self, temp_hub_files):
+        """Rain description should map to rain type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({"description": "Heavy Rain"})
+        assert weather_type == "rain"
+
+    def test_map_shower(self, temp_hub_files):
+        """Shower description should map to rain type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({"description": "Rain Showers"})
+        assert weather_type == "rain"
+
+    def test_map_drizzle(self, temp_hub_files):
+        """Drizzle description should map to rain type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({"description": "Light Drizzle"})
+        assert weather_type == "rain"
+
+    def test_map_thunder(self, temp_hub_files):
+        """Thunder description should map to rain type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({"description": "Thunderstorm"})
+        assert weather_type == "rain"
+
+    def test_map_fog(self, temp_hub_files):
+        """Fog description should map to fog type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({"description": "Dense Fog"})
+        assert weather_type == "fog"
+
+    def test_map_cloudy(self, temp_hub_files):
+        """Cloudy description should map to cloudy type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({"description": "Partly Cloudy"})
+        assert weather_type == "cloudy"
+
+    def test_map_overcast(self, temp_hub_files):
+        """Overcast description should map to cloudy type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({"description": "Overcast"})
+        assert weather_type == "cloudy"
+
+    def test_map_windy_from_clear(self, temp_hub_files):
+        """Clear with high wind should map to windy type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({
+            "description": "Clear",
+            "wind_speed": 20,
+        })
+        assert weather_type == "windy"
+
+    def test_map_windy_from_cloudy(self, temp_hub_files):
+        """Cloudy with high wind should map to windy type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({
+            "description": "Cloudy",
+            "wind_speed": 15,
+        })
+        assert weather_type == "windy"
+
+    def test_map_clear_default(self, temp_hub_files):
+        """Unknown description should map to clear type."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        weather_type, _ = daemon._map_weather_to_widget({"description": "Sunny"})
+        assert weather_type == "clear"
+
+    def test_map_default_intensity(self, temp_hub_files):
+        """Missing intensity should default to 0.5."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        _, intensity = daemon._map_weather_to_widget({"description": "Clear"})
+        assert intensity == 0.5
+
+
+class TestCommandHandlers:
+    """Tests for IPC command handlers."""
+
+    def test_cmd_get_state(self, temp_hub_files):
+        """_cmd_get_state should return full state."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        # Set up state
+        daemon.state.update("status", {
+            "session_id": "test-session",
+            "status": "running",
+            "color": "green",
+            "context_percent": 50,
+            "status_history": ["idle", "running"],
+            "context_history": [10, 50],
+        })
+        daemon.state.update("weather", {
+            "description": "Clear",
+            "temperature": 72,
+            "wind_speed": 5,
+            "intensity": 0.3,
+            "city": "Test City",
+            "widget_type": "clear",
+        })
+        daemon.state.update("time", {"timestamp": "2024-01-01T12:00:00"})
+
+        result = daemon._cmd_get_state()
+
+        assert result["displayed_session"] == "test-session"
+        assert result["status"] == "running"
+        assert result["color"] == "green"
+        assert result["context_percent"] == 50
+        assert result["weather"]["type"] == "Clear"
+        assert result["weather"]["city"] == "Test City"
+
+    def test_cmd_get_status(self, temp_hub_files):
+        """_cmd_get_status should return status dict."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        daemon.state.update("status", {"status": "thinking", "color": "yellow"})
+        result = daemon._cmd_get_status()
+
+        assert result["status"] == "thinking"
+        assert result["color"] == "yellow"
+
+    def test_cmd_get_weather(self, temp_hub_files):
+        """_cmd_get_weather should return weather dict."""
+        daemon = CentralHubDaemon(
+            status_raw_file=temp_hub_files["status_raw"],
+            hub_data_file=temp_hub_files["hub_data"],
+            output_file=temp_hub_files["widget_display"],
+        )
+
+        daemon.state.update("weather", {"description": "Rain", "temperature": 55})
+        result = daemon._cmd_get_weather()
+
+        assert result["description"] == "Rain"
+        assert result["temperature"] == 55
