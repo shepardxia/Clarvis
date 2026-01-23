@@ -10,19 +10,35 @@
 
 ## Features
 
-- **MCP Server** — Weather, time, and session monitoring tools for Claude Code
-- **Desktop Widget** — Animated ASCII avatar with weather effects (macOS)
+- **MCP Server** — Weather, time, Sonos control, and session monitoring tools for Claude Code
+- **Desktop Widget** — Native macOS Swift widget with animated ASCII avatar and weather particles
+- **Weather Effects** — Dynamic intensity based on wind speed, precipitation, and snowfall
 - **Status Display** — See when Claude is idle, thinking, running tools, or waiting
+- **Sonos Control** — Play music, adjust volume, manage queues via MCP tools
 
 ## Setup
 
 ```bash
 ./scripts/setup.sh
-# Restart Claude Code, then:
-cd widget && ./restart.sh
+# Restart Claude Code to enable MCP server
 ```
 
-**Optional GPS location:** `brew install corelocationcli && CoreLocationCLI -j`
+**Run the widget:**
+```bash
+./ClarvisWidget/ClarvisWidget &
+```
+
+**Optional GPS location:** `brew install corelocationcli`
+
+## Architecture
+
+```
+central_hub/
+├── server.py          # MCP server entry point
+├── core/              # Hub data, cache, time utilities
+├── services/          # Weather, location, Sonos, thinking feed
+└── widget/            # ASCII renderer, display service
+```
 
 ## Credits
 
