@@ -164,8 +164,8 @@ class CentralHubDaemon:
         """
         session_id = raw_data.get("session_id", "unknown")
         event = raw_data.get("hook_event_name", "")
-        context_window = raw_data.get("context_window", {})
-        context_percent = context_window.get("used_percentage", 0)
+        context_window = raw_data.get("context_window") or {}
+        context_percent = context_window.get("used_percentage") or 0
 
         # Map events to status/color
         if event == "PreToolUse":
@@ -190,8 +190,8 @@ class CentralHubDaemon:
         # Update per-session history
         self._add_to_history(session_id, status, context_percent)
 
-        # Use last known context if current is 0
-        effective_context = context_percent if context_percent > 0 else self._get_last_context(session_id)
+        # Use last known context if current is 0 or None
+        effective_context = context_percent if context_percent else self._get_last_context(session_id)
 
         # Get session data for output
         session = self._get_session(session_id)
