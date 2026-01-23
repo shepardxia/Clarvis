@@ -4,6 +4,16 @@ import json
 import pytest
 from pathlib import Path
 
+from central_hub.core import reset_state_store
+
+
+@pytest.fixture(autouse=True)
+def reset_global_state():
+    """Reset global state before each test to ensure isolation."""
+    reset_state_store()
+    yield
+    reset_state_store()
+
 
 @pytest.fixture
 def temp_hub_files(tmp_path):

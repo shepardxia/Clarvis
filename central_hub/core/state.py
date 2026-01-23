@@ -124,3 +124,10 @@ def get_state_store() -> StateStore:
             if _store_instance is None:
                 _store_instance = StateStore()
     return _store_instance
+
+
+def reset_state_store() -> None:
+    """Reset the global StateStore instance. Used for testing."""
+    global _store_instance
+    with _store_lock:
+        _store_instance = None
