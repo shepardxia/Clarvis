@@ -1,6 +1,13 @@
 <div align="center">
 
-<h1><img src="https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=700&size=40&duration=1500&pause=86400000&color=7C3AED&center=true&vCenter=true&width=300&lines=Clarvis" alt="Clarvis" /></h1>
+```
+  ██████╗██╗      █████╗ ██████╗ ██╗   ██╗██╗███████╗
+ ██╔════╝██║     ██╔══██╗██╔══██╗██║   ██║██║██╔════╝
+ ██║     ██║     ███████║██████╔╝██║   ██║██║███████╗
+ ██║     ██║     ██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║
+ ╚██████╗███████╗██║  ██║██║  ██║ ╚████╔╝ ██║███████║
+  ╚═════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝
+```
 
 *A friendly face for Claude Code*
 
