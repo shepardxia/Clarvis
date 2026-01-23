@@ -86,6 +86,7 @@ class CentralHubDaemon:
         self.HISTORY_SIZE = 20
         self.sessions: dict[str, dict] = {}
         self.displayed_session_id: str | None = None  # Which session we're showing
+        self._last_session_switch: float = 0  # Debounce session switches
 
         # Load sessions from hub data if available
         hub_data = read_hub_data()
@@ -127,20 +128,10 @@ class CentralHubDaemon:
         """Add values to per-session history buffers."""
         session = self._get_session(session_id)
 
-        # Switch displayed session only if:
-        # 1. No session is being displayed yet
-        # 2. This is the currently displayed session
-        # 3. Current displayed session is idle/awaiting and this one is active
-        active_statuses = {"running", "thinking"}
-        idle_statuses = {"idle", "awaiting", "resting"}
-
-        should_switch = (
-            self.displayed_session_id is None or
-            session_id == self.displayed_session_id or
-            (self.display_status in idle_statuses and status in active_statuses)
-        )
-
-        if should_switch:
+        # Conservative session switching to prevent flickering:
+        # - Only switch if no session displayed, OR this is the current session
+        # - Never auto-switch between sessions (prevents rapid back-and-forth)
+        if self.displayed_session_id is None:
             self.displayed_session_id = session_id
 
         # Only add status if it changed
@@ -164,8 +155,13 @@ class CentralHubDaemon:
         session = self.sessions.get(session_id, {})
         return session.get("last_context", 0.0)
 
-    def process_hook_event(self, raw_data: dict) -> dict:
-        """Process raw hook event into status/color."""
+    def process_hook_event(self, raw_data: dict, existing_status: dict = None) -> dict:
+        """Process raw hook event into status/color.
+
+        Args:
+            raw_data: Raw hook event data
+            existing_status: Optional pre-read status to avoid double file reads
+        """
         session_id = raw_data.get("session_id", "unknown")
         event = raw_data.get("hook_event_name", "")
         context_window = raw_data.get("context_window", {})
@@ -184,7 +180,8 @@ class CentralHubDaemon:
             status, color = "awaiting", "blue"
         elif context_window:
             # Statusline update - keep existing status but update context
-            existing = read_hub_data().get("status", {})
+            # Use passed-in status to avoid race condition from double read
+            existing = existing_status or {}
             status = existing.get("status", "idle")
             color = existing.get("color", "gray")
         else:
@@ -216,10 +213,12 @@ class CentralHubDaemon:
 
         try:
             raw_data = json.loads(self.status_raw_file.read_text())
-            processed = self.process_hook_event(raw_data)
 
-            # Read existing hub data and update status + sessions
+            # Read hub data ONCE and pass existing status to avoid race condition
             hub_data = read_hub_data()
+            existing_status = hub_data.get("status", {})
+            processed = self.process_hook_event(raw_data, existing_status)
+
             hub_data["status"] = processed
             hub_data["sessions"] = self.sessions  # Persist per-session tracking
             hub_data["updated_at"] = datetime.now().isoformat()
