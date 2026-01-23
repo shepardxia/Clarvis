@@ -5,6 +5,10 @@ __pycache__/
 *.pyc
 docs/api/
 uv.lock
+.hypothesis/
+.pytest_cache/
+.coverage
+htmlcov/
 widget/ClaudeStatusOverlay
 control-server.py
 control-panel.html
