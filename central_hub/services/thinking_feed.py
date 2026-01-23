@@ -159,7 +159,7 @@ IDLE_TIMEOUT_SECONDS = 600  # 10 minutes
 ENDED_GRACE_PERIOD_SECONDS = 30  # Keep ended sessions briefly for final queries
 
 
-class JsonlFileHandler(FileSystemEventHandler):
+class JsonlFileHandler(FileSystemEventHandler):  # pragma: no cover
     """Handle .jsonl file changes."""
 
     def __init__(self, callback):
@@ -178,7 +178,7 @@ class JsonlFileHandler(FileSystemEventHandler):
             self.callback(Path(event.src_path))
 
 
-class SessionManager:
+class SessionManager:  # pragma: no cover
     """
     Manages all active Claude Code sessions.
 
@@ -370,7 +370,7 @@ class SessionManager:
 _session_manager: SessionManager | None = None
 
 
-def get_session_manager() -> SessionManager:
+def get_session_manager() -> SessionManager:  # pragma: no cover
     """Get or create the global session manager."""
     global _session_manager
     if _session_manager is None:

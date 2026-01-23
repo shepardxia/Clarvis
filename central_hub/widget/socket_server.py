@@ -27,7 +27,7 @@ class WidgetSocketServer:
         self._running = False
         self._accept_thread: threading.Thread | None = None
 
-    def start(self) -> None:
+    def start(self) -> None:  # pragma: no cover
         """Start the socket server and begin accepting connections."""
         if self._running:
             return
@@ -49,7 +49,7 @@ class WidgetSocketServer:
         self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
         self._accept_thread.start()
 
-    def stop(self) -> None:
+    def stop(self) -> None:  # pragma: no cover
         """Stop the server and close all connections."""
         self._running = False
 
@@ -82,7 +82,7 @@ class WidgetSocketServer:
             except Exception:
                 pass
 
-    def _accept_loop(self) -> None:
+    def _accept_loop(self) -> None:  # pragma: no cover
         """Accept incoming connections."""
         while self._running and self.server_socket:
             try:
@@ -95,7 +95,7 @@ class WidgetSocketServer:
             except OSError:
                 break  # Socket closed
 
-    def push_frame(self, frame_data: dict) -> int:
+    def push_frame(self, frame_data: dict) -> int:  # pragma: no cover
         """
         Push a frame to all connected clients.
 

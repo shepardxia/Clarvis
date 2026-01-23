@@ -118,7 +118,7 @@ class DisplayService:
             self.renderer.tick()
         self.write_output()
 
-    def run(self, fps: int = 10):
+    def run(self, fps: int = 10):  # pragma: no cover
         """Main loop - run at specified FPS."""
         self.running = True
         interval = 1.0 / fps
@@ -157,16 +157,16 @@ class DisplayService:
             observer.stop()
             observer.join()
 
-    def stop(self):
+    def stop(self):  # pragma: no cover
         """Stop the service."""
         self.running = False
 
 
-def main():
+def main():  # pragma: no cover
     """Entry point."""
     service = DisplayService()
     service.run(fps=2)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

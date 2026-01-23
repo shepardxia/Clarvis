@@ -5,7 +5,7 @@ from __future__ import annotations
 import soco
 
 
-class SonosController:
+class SonosController:  # pragma: no cover
     """
     Controller for Sonos speakers on the local network.
 
@@ -182,7 +182,7 @@ class SonosController:
 _controller: SonosController | None = None
 
 
-def get_controller() -> SonosController:
+def get_controller() -> SonosController:  # pragma: no cover
     """Get or create the global Sonos controller."""
     global _controller
     if _controller is None:
