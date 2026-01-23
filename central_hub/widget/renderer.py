@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import Optional
 
 from .pipeline import RenderPipeline, Layer
-from ..core.colors import ANSI_COLORS as COLORS, STATUS_ANSI as STATUS_COLORS
+from ..core.colors import ANSI_COLORS as COLORS, get_status_ansi
 
 
 # =============================================================================
@@ -507,13 +507,13 @@ class FrameRenderer:
         self.keyframe_index = 0
         self.current_status = "idle"
         self.current_keyframes = ANIMATION_KEYFRAMES.get("idle", DEFAULT_KEYFRAMES)
-        self.current_color = STATUS_COLORS.get("idle", COLORS["gray"])
+        self.current_color = get_status_ansi().get("idle", COLORS["gray"])
 
     def set_status(self, status: str):
         if status != self.current_status:
             self.current_status = status
             self.current_keyframes = ANIMATION_KEYFRAMES.get(status, DEFAULT_KEYFRAMES)
-            self.current_color = STATUS_COLORS.get(status, COLORS["gray"])
+            self.current_color = get_status_ansi().get(status, COLORS["gray"])
             self.keyframe_index = 0
 
     def set_weather(self, weather_type: str, intensity: float = 0.6, wind_speed: float = 0.0):
@@ -574,11 +574,8 @@ class FrameRenderer:
         context_percent = max(0.0, min(100.0, float(context_percent)))
 
         filled = int(context_percent / 100 * self.bar_width)
-        for i in range(self.bar_width):
-            if i < filled:
-                self.bar_layer.put(self.bar_x + i, self.bar_y, '#', self.current_color)
-            else:
-                self.bar_layer.put(self.bar_x + i, self.bar_y, '-', COLORS["gray"])
+        for i in range(filled):
+            self.bar_layer.put(self.bar_x + i, self.bar_y, '#', self.current_color)
 
     def render(self, context_percent: float = 0) -> str:
         """Render complete frame."""

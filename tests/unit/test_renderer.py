@@ -9,8 +9,8 @@ from central_hub.widget.renderer import (
     get_shape,
     SHAPE_LIBRARY,
     ANIMATION_KEYFRAMES,
-    STATUS_COLORS,
 )
+from central_hub.core.colors import get_status_ansi
 
 
 class TestFrameRenderer:
@@ -182,9 +182,10 @@ class TestStatusColors:
     """Tests for status color mapping."""
 
     def test_all_statuses_have_colors(self):
+        status_colors = get_status_ansi()
         expected_statuses = ["idle", "thinking", "running", "awaiting", "resting"]
         for status in expected_statuses:
-            assert status in STATUS_COLORS, f"Missing color for {status}"
+            assert status in status_colors, f"Missing color for {status}"
 
 
 class TestShape:

@@ -1,6 +1,8 @@
 """File-based caching utilities with TTL support."""
 
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -36,10 +38,21 @@ def write_hub_section(section: str, data: dict) -> None:
     }
     hub_data["last_updated"] = datetime.now().isoformat()
 
-    # Write atomically
-    temp_file = HUB_DATA_FILE.with_suffix('.tmp')
-    temp_file.write_text(json.dumps(hub_data, indent=2))
-    temp_file.rename(HUB_DATA_FILE)
+    # Write atomically with unique temp file to avoid race conditions
+    fd, temp_path = tempfile.mkstemp(
+        suffix='.tmp',
+        prefix='central-hub-',
+        dir=HUB_DATA_FILE.parent
+    )
+    try:
+        os.write(fd, json.dumps(hub_data, indent=2).encode())
+        os.close(fd)
+        os.rename(temp_path, HUB_DATA_FILE)
+    except Exception:
+        os.close(fd)
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
 
 
 def get_hub_section(section: str, max_age: int = DEFAULT_CACHE_DURATION):

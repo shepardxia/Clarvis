@@ -10,6 +10,12 @@ from central_hub.core.colors import (
     ANSI_COLORS,
     STATUS_ANSI,
     get_status_colors_for_config,
+    get_status_ansi,
+    load_theme,
+    get_available_themes,
+    get_current_theme,
+    THEMES,
+    DEFAULT_THEME,
 )
 
 
@@ -75,14 +81,17 @@ class TestStatusColors:
     """Tests for StatusColors class."""
 
     def test_get_known_status(self):
-        """Should return color for known status."""
-        assert StatusColors.get("thinking") == Palette.YELLOW
-        assert StatusColors.get("running") == Palette.GREEN
-        assert StatusColors.get("awaiting") == Palette.BLUE
+        """Should return color for known status from current theme."""
+        # Load modern theme for predictable test
+        load_theme("modern")
+        assert StatusColors.get("thinking") == THEMES["modern"]["thinking"]
+        assert StatusColors.get("running") == THEMES["modern"]["running"]
+        assert StatusColors.get("awaiting") == THEMES["modern"]["awaiting"]
 
     def test_get_unknown_status(self):
-        """Should return IDLE for unknown status."""
-        assert StatusColors.get("nonexistent") == StatusColors.IDLE
+        """Should return idle color for unknown status."""
+        load_theme("modern")
+        assert StatusColors.get("nonexistent") == STATUS_MAP["idle"]
 
     def test_all_statuses_mapped(self):
         """All status attributes should be in STATUS_MAP."""
@@ -147,3 +156,196 @@ class TestGetStatusColorsForConfig:
             assert 0.0 <= color["r"] <= 1.0
             assert 0.0 <= color["g"] <= 1.0
             assert 0.0 <= color["b"] <= 1.0
+
+
+class TestThemeSystem:
+    """Tests for theme loading and management."""
+
+    def test_get_available_themes(self):
+        """Should return list of all theme names."""
+        themes = get_available_themes()
+        assert isinstance(themes, list)
+        assert "modern" in themes
+        assert "synthwave" in themes
+        assert "crt-amber" in themes
+        assert "crt-green" in themes
+        assert "c64" in themes
+        assert "matrix" in themes
+
+    def test_load_theme_success(self):
+        """Loading valid theme should return True."""
+        assert load_theme("modern") is True
+        assert load_theme("synthwave") is True
+        assert load_theme("matrix") is True
+
+    def test_load_theme_invalid(self):
+        """Loading invalid theme should return False."""
+        assert load_theme("nonexistent_theme") is False
+
+    def test_get_current_theme(self):
+        """Should return currently loaded theme name."""
+        load_theme("synthwave")
+        assert get_current_theme() == "synthwave"
+        load_theme("modern")
+        assert get_current_theme() == "modern"
+
+    def test_load_theme_updates_status_map(self):
+        """Loading theme should update STATUS_MAP with theme colors."""
+        # Import module to access current STATUS_MAP after theme load
+        from central_hub.core import colors
+
+        load_theme("synthwave")
+        assert colors.STATUS_MAP["thinking"] == THEMES["synthwave"]["thinking"]
+
+        load_theme("modern")
+        assert colors.STATUS_MAP["thinking"] == THEMES["modern"]["thinking"]
+
+    def test_get_status_ansi(self):
+        """Should return status to ANSI code mapping for current theme."""
+        load_theme("modern")
+        ansi_map = get_status_ansi()
+        assert isinstance(ansi_map, dict)
+        assert "thinking" in ansi_map
+        assert ansi_map["thinking"] == THEMES["modern"]["thinking"].ansi
+
+    def test_all_themes_have_all_statuses(self):
+        """Every theme should define all required statuses."""
+        required_statuses = ["idle", "resting", "thinking", "running", "executing",
+                            "awaiting", "reading", "writing", "reviewing", "offline"]
+        for theme_name, theme_colors in THEMES.items():
+            for status in required_statuses:
+                assert status in theme_colors, f"Theme {theme_name} missing {status}"
+
+    def test_all_theme_colors_valid(self):
+        """All theme colors should be valid ColorDef instances."""
+        for theme_name, theme_colors in THEMES.items():
+            for status, color in theme_colors.items():
+                assert isinstance(color, ColorDef), f"{theme_name}.{status} not ColorDef"
+                assert 0 <= color.ansi <= 255, f"{theme_name}.{status} ANSI out of range"
+                r, g, b = color.rgb
+                assert 0.0 <= r <= 1.0, f"{theme_name}.{status} R out of range"
+                assert 0.0 <= g <= 1.0, f"{theme_name}.{status} G out of range"
+                assert 0.0 <= b <= 1.0, f"{theme_name}.{status} B out of range"
+
+    def test_default_theme_exists(self):
+        """DEFAULT_THEME should be a valid theme."""
+        assert DEFAULT_THEME in THEMES
+
+    def test_load_theme_with_overrides(self):
+        """Loading theme with overrides should apply custom RGB colors."""
+        from central_hub.core import colors
+
+        # Define overrides for specific statuses
+        overrides = {
+            "thinking": [1.0, 0.0, 0.0],  # Override to red
+            "running": [0.0, 1.0, 0.0],   # Override to green
+        }
+
+        result = load_theme("modern", overrides)
+        assert result is True
+
+        # Check that overridden colors have custom RGB but retain original ANSI
+        thinking_color = colors.STATUS_MAP["thinking"]
+        assert thinking_color.rgb == (1.0, 0.0, 0.0)
+        assert thinking_color.ansi == THEMES["modern"]["thinking"].ansi
+
+        running_color = colors.STATUS_MAP["running"]
+        assert running_color.rgb == (0.0, 1.0, 0.0)
+        assert running_color.ansi == THEMES["modern"]["running"].ansi
+
+        # Non-overridden statuses should keep original theme colors
+        idle_color = colors.STATUS_MAP["idle"]
+        assert idle_color == THEMES["modern"]["idle"]
+
+    def test_load_theme_with_invalid_override_ignored(self):
+        """Overrides with wrong length should be ignored."""
+        from central_hub.core import colors
+
+        overrides = {
+            "thinking": [1.0, 0.0],  # Only 2 values, should be ignored
+            "nonexistent": [1.0, 1.0, 1.0],  # Unknown status, should be ignored
+        }
+
+        load_theme("modern", overrides)
+
+        # thinking should keep original color since override is invalid
+        assert colors.STATUS_MAP["thinking"] == THEMES["modern"]["thinking"]
+
+    def test_load_theme_with_empty_overrides(self):
+        """Empty overrides dict should work like no overrides."""
+        from central_hub.core import colors
+
+        load_theme("synthwave", {})
+        assert colors.STATUS_MAP["thinking"] == THEMES["synthwave"]["thinking"]
+
+
+class TestGetMergedThemeColors:
+    """Tests for get_merged_theme_colors function."""
+
+    def test_returns_all_statuses(self):
+        """Should return all theme statuses as RGB arrays."""
+        from central_hub.core.colors import get_merged_theme_colors
+
+        result = get_merged_theme_colors("modern")
+        expected_statuses = ["idle", "resting", "thinking", "running", "executing",
+                           "awaiting", "reading", "writing", "reviewing", "offline"]
+        for status in expected_statuses:
+            assert status in result
+            assert isinstance(result[status], list)
+            assert len(result[status]) == 3
+
+    def test_rgb_values_are_floats(self):
+        """RGB values should be floats in 0-1 range."""
+        from central_hub.core.colors import get_merged_theme_colors
+
+        result = get_merged_theme_colors("modern")
+        for status, rgb in result.items():
+            for val in rgb:
+                assert isinstance(val, float)
+                assert 0.0 <= val <= 1.0
+
+    def test_invalid_theme_falls_back_to_default(self):
+        """Invalid theme name should fall back to DEFAULT_THEME."""
+        from central_hub.core.colors import get_merged_theme_colors
+
+        result = get_merged_theme_colors("nonexistent_theme")
+        expected = get_merged_theme_colors(DEFAULT_THEME)
+        assert result == expected
+
+    def test_overrides_applied(self):
+        """Overrides should replace base theme colors."""
+        from central_hub.core.colors import get_merged_theme_colors
+
+        overrides = {
+            "thinking": [0.5, 0.5, 0.5],
+            "running": [0.1, 0.2, 0.3],
+        }
+
+        result = get_merged_theme_colors("modern", overrides)
+
+        assert result["thinking"] == [0.5, 0.5, 0.5]
+        assert result["running"] == [0.1, 0.2, 0.3]
+        # Non-overridden should be from base theme
+        assert result["idle"] == list(THEMES["modern"]["idle"].rgb)
+
+    def test_invalid_override_ignored(self):
+        """Overrides with wrong length should be ignored."""
+        from central_hub.core.colors import get_merged_theme_colors
+
+        overrides = {
+            "thinking": [0.5, 0.5],  # Only 2 values
+        }
+
+        result = get_merged_theme_colors("modern", overrides)
+
+        # Should use base theme color, not invalid override
+        assert result["thinking"] == list(THEMES["modern"]["thinking"].rgb)
+
+    def test_none_overrides_same_as_empty(self):
+        """None overrides should behave same as empty dict."""
+        from central_hub.core.colors import get_merged_theme_colors
+
+        result_none = get_merged_theme_colors("synthwave", None)
+        result_empty = get_merged_theme_colors("synthwave", {})
+
+        assert result_none == result_empty

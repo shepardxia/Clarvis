@@ -83,10 +83,10 @@ class CentralHubDaemon:
         self.renderer = FrameRenderer(
             width=config.grid_width,
             height=config.grid_height,
-            avatar_x_offset=config.static.avatar_x_offset,
-            avatar_y_offset=config.static.avatar_y_offset,
-            bar_x_offset=config.static.bar_x_offset,
-            bar_y_offset=config.static.bar_y_offset,
+            avatar_x_offset=config.display.avatar_x_offset,
+            avatar_y_offset=config.display.avatar_y_offset,
+            bar_x_offset=config.display.bar_x_offset,
+            bar_y_offset=config.display.bar_y_offset,
         )
         self.displayed_session_id: str | None = None
 
@@ -439,7 +439,7 @@ class CentralHubDaemon:
 
         with self._lock:
             # In testing mode, use config overrides
-            if config.testing:
+            if config.testing.enabled:
                 display_status = config.test_status
                 context_percent = config.test_context_percent
                 display_color = {
@@ -452,7 +452,7 @@ class CentralHubDaemon:
                 self.renderer.set_weather(
                     config.test_weather,
                     config.test_weather_intensity,
-                    config.state.test_wind_speed
+                    config.test_wind_speed
                 )
             else:
                 status = self.state.get("status")
@@ -552,13 +552,13 @@ class CentralHubDaemon:
             return
 
         # If testing mode, apply overrides immediately
-        if new_config.testing:
+        if new_config.testing.enabled:
             with self._lock:
                 self.renderer.set_status(new_config.test_status)
                 self.renderer.set_weather(
                     new_config.test_weather,
                     new_config.test_weather_intensity,
-                    new_config.state.test_wind_speed
+                    new_config.test_wind_speed
                 )
 
     def _register_command_handlers(self):

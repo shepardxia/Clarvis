@@ -3,17 +3,22 @@ import Foundation
 
 // MARK: - Configuration
 
-struct RGBColor: Codable {
-    var r: CGFloat = 0.5
-    var g: CGFloat = 0.5
-    var b: CGFloat = 0.5
+// RGB as [r, g, b] array
+typealias RGBArray = [CGFloat]
 
-    func toNSColor() -> NSColor {
-        return NSColor(red: r, green: g, blue: b, alpha: 1)
+extension RGBArray {
+    func toNSColor() -> NSColor? {
+        guard self.count == 3 else { return nil }
+        return NSColor(red: self[0], green: self[1], blue: self[2], alpha: 1)
     }
 }
 
-struct StaticConfig: Codable {
+struct ThemeConfig: Codable {
+    var base: String = "modern"
+    var overrides: [String: RGBArray]? = nil
+}
+
+struct DisplayConfig: Codable {
     var window_width: CGFloat = 280
     var window_height: CGFloat = 220
     var corner_radius: CGFloat = 24
@@ -24,8 +29,8 @@ struct StaticConfig: Codable {
 }
 
 struct WidgetConfigFile: Codable {
-    var `static`: StaticConfig = StaticConfig()
-    var colors: [String: RGBColor]? = nil
+    var theme: ThemeConfig = ThemeConfig()
+    var display: DisplayConfig = DisplayConfig()
 }
 
 struct WidgetConfig {
@@ -38,18 +43,80 @@ struct WidgetConfig {
     var pulseSpeed: Double = 0.1
     var statusColors: [String: NSColor] = [:]
 
-    // Default colors (used if not in config)
-    static let defaultColors: [String: NSColor] = [
-        "idle": NSColor(red: 0.53, green: 0.53, blue: 0.53, alpha: 1),
-        "resting": NSColor(red: 0.4, green: 0.4, blue: 0.45, alpha: 1),
-        "thinking": NSColor(red: 1.0, green: 0.87, blue: 0, alpha: 1),
-        "running": NSColor(red: 0, green: 1.0, blue: 0.67, alpha: 1),
-        "executing": NSColor(red: 0, green: 1.0, blue: 0.67, alpha: 1),
-        "awaiting": NSColor(red: 0.4, green: 0.5, blue: 1.0, alpha: 1),
-        "reading": NSColor(red: 0.4, green: 0.5, blue: 1.0, alpha: 1),
-        "writing": NSColor(red: 0.4, green: 0.5, blue: 1.0, alpha: 1),
-        "reviewing": NSColor(red: 1.0, green: 0, blue: 1.0, alpha: 1),
-        "offline": NSColor(red: 0.53, green: 0.53, blue: 0.53, alpha: 1),
+    // Theme color definitions (base themes)
+    static let themes: [String: [String: RGBArray]] = [
+        "modern": [
+            "idle": [0.53, 0.53, 0.53],
+            "resting": [0.4, 0.4, 0.45],
+            "thinking": [1.0, 0.87, 0.0],
+            "running": [0.0, 1.0, 0.67],
+            "executing": [0.0, 1.0, 0.67],
+            "awaiting": [0.4, 0.5, 1.0],
+            "reading": [0.4, 0.5, 1.0],
+            "writing": [0.4, 0.5, 1.0],
+            "reviewing": [1.0, 0.0, 1.0],
+            "offline": [0.53, 0.53, 0.53],
+        ],
+        "crt-amber": [
+            "idle": [0.6, 0.4, 0.0],
+            "resting": [0.5, 0.3, 0.0],
+            "thinking": [1.0, 0.7, 0.0],
+            "running": [1.0, 0.8, 0.2],
+            "executing": [1.0, 0.8, 0.2],
+            "awaiting": [0.8, 0.6, 0.1],
+            "reading": [0.8, 0.6, 0.1],
+            "writing": [1.0, 0.7, 0.0],
+            "reviewing": [1.0, 0.8, 0.2],
+            "offline": [0.4, 0.25, 0.0],
+        ],
+        "crt-green": [
+            "idle": [0.0, 0.5, 0.0],
+            "resting": [0.0, 0.4, 0.0],
+            "thinking": [0.0, 1.0, 0.0],
+            "running": [0.5, 1.0, 0.2],
+            "executing": [0.5, 1.0, 0.2],
+            "awaiting": [0.0, 0.7, 0.2],
+            "reading": [0.0, 0.7, 0.2],
+            "writing": [0.0, 1.0, 0.0],
+            "reviewing": [0.5, 1.0, 0.2],
+            "offline": [0.0, 0.3, 0.0],
+        ],
+        "synthwave": [
+            "idle": [0.4, 0.2, 0.6],
+            "resting": [0.3, 0.15, 0.5],
+            "thinking": [1.0, 0.2, 0.6],
+            "running": [0.0, 1.0, 1.0],
+            "executing": [0.0, 1.0, 1.0],
+            "awaiting": [0.2, 0.4, 1.0],
+            "reading": [0.2, 0.4, 1.0],
+            "writing": [1.0, 0.4, 0.8],
+            "reviewing": [1.0, 0.0, 1.0],
+            "offline": [0.3, 0.15, 0.4],
+        ],
+        "c64": [
+            "idle": [0.7, 0.7, 0.7],
+            "resting": [0.5, 0.5, 0.5],
+            "thinking": [0.6, 0.7, 1.0],
+            "running": [0.4, 0.8, 0.4],
+            "executing": [0.4, 0.8, 0.4],
+            "awaiting": [0.6, 0.5, 0.3],
+            "reading": [0.6, 0.5, 0.3],
+            "writing": [0.6, 0.5, 0.8],
+            "reviewing": [0.8, 0.5, 0.5],
+            "offline": [0.4, 0.4, 0.4],
+        ],
+        "matrix": [
+            "idle": [0.0, 0.4, 0.0],
+            "resting": [0.0, 0.3, 0.0],
+            "thinking": [0.0, 1.0, 0.0],
+            "running": [0.6, 1.0, 0.0],
+            "executing": [0.6, 1.0, 0.0],
+            "awaiting": [0.0, 0.8, 0.4],
+            "reading": [0.0, 0.8, 0.4],
+            "writing": [0.0, 1.0, 0.0],
+            "reviewing": [0.7, 1.0, 0.3],
+            "offline": [0.0, 0.25, 0.0],
+        ],
     ]
 
     static func load() -> WidgetConfig {
@@ -59,27 +126,37 @@ struct WidgetConfig {
 
         guard let data = FileManager.default.contents(atPath: configPath),
               let file = try? JSONDecoder().decode(WidgetConfigFile.self, from: data) else {
-            return WidgetConfig(statusColors: defaultColors)
+            return WidgetConfig(statusColors: getThemeColors("modern", overrides: nil))
         }
 
-        // Convert config colors to NSColor
-        var colors = defaultColors
-        if let configColors = file.colors {
-            for (status, rgb) in configColors {
-                colors[status] = rgb.toNSColor()
+        let colors = getThemeColors(file.theme.base, overrides: file.theme.overrides)
+
+        return WidgetConfig(
+            windowWidth: file.display.window_width,
+            windowHeight: file.display.window_height,
+            cornerRadius: file.display.corner_radius,
+            bgAlpha: file.display.bg_alpha,
+            fontSize: file.display.font_size,
+            borderWidth: file.display.border_width,
+            pulseSpeed: file.display.pulse_speed,
+            statusColors: colors
+        )
+    }
+
+    static func getThemeColors(_ themeName: String, overrides: [String: RGBArray]?) -> [String: NSColor] {
+        let baseTheme = themes[themeName] ?? themes["modern"]!
+        var colors: [String: NSColor] = [:]
+
+        for (status, rgb) in baseTheme {
+            // Check for override first
+            if let overrideRGB = overrides?[status], let color = overrideRGB.toNSColor() {
+                colors[status] = color
+            } else if let color = rgb.toNSColor() {
+                colors[status] = color
             }
         }
 
-        return WidgetConfig(
-            windowWidth: file.static.window_width,
-            windowHeight: file.static.window_height,
-            cornerRadius: file.static.corner_radius,
-            bgAlpha: file.static.bg_alpha,
-            fontSize: file.static.font_size,
-            borderWidth: file.static.border_width,
-            pulseSpeed: file.static.pulse_speed,
-            statusColors: colors
-        )
+        return colors
     }
 }
 

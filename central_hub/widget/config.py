@@ -1,4 +1,4 @@
-"""Widget configuration - static settings and runtime state in nested structure."""
+"""Widget configuration with clean, readable structure."""
 
 from __future__ import annotations
 
@@ -7,9 +7,16 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional, Callable
+
+from ..core.colors import (
+    load_theme,
+    get_available_themes,
+    get_merged_theme_colors,
+    DEFAULT_THEME,
+)
 
 # Project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -17,13 +24,36 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 
 
 @dataclass
-class StaticConfig:
-    """Static settings (worth tracking in git)."""
+class ThemeConfig:
+    """Theme settings with optional color overrides."""
+    base: str = DEFAULT_THEME
+    overrides: dict[str, list[float]] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        d = {"base": self.base}
+        if self.overrides:
+            d["overrides"] = self.overrides
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ThemeConfig":
+        if isinstance(d, str):
+            # Legacy: "theme": "c64" -> ThemeConfig(base="c64")
+            return cls(base=d)
+        return cls(
+            base=d.get("base", DEFAULT_THEME),
+            overrides=d.get("overrides", {}),
+        )
+
+
+@dataclass
+class DisplayConfig:
+    """Display settings for the widget window."""
     # Grid size (Python renderer)
     grid_width: int = 29
     grid_height: int = 12
 
-    # Window size (Swift widget display)
+    # Window size (Swift widget)
     window_width: int = 280
     window_height: int = 220
     corner_radius: int = 24
@@ -32,11 +62,9 @@ class StaticConfig:
     border_width: int = 2
     pulse_speed: float = 0.1
 
-    # Avatar position offsets (relative to auto-centered position)
+    # Position offsets
     avatar_x_offset: int = 0
     avatar_y_offset: int = 0
-
-    # Bar position offsets (relative to auto-centered position)
     bar_x_offset: int = 0
     bar_y_offset: int = 0
 
@@ -45,42 +73,65 @@ class StaticConfig:
 
 
 @dataclass
-class StateConfig:
-    """Runtime state (for testing)."""
-    testing: bool = False
-    test_status: str = "idle"
-    test_weather: str = "clear"
-    test_weather_intensity: float = 0.5
-    test_wind_speed: float = 5.0  # mph, affects snow drift
-    test_context_percent: float = 50.0
+class TestingConfig:
+    """Testing mode settings for development."""
+    enabled: bool = False
+    status: str = "idle"
+    weather: str = "clear"
+    weather_intensity: float = 0.5
+    wind_speed: float = 5.0
+    context_percent: float = 50.0
     paused: bool = False
 
 
 @dataclass
 class WidgetConfig:
-    """Combined config with static and state sections."""
-    static: StaticConfig
-    state: StateConfig
+    """Main configuration combining all sections."""
+    theme: ThemeConfig
+    display: DisplayConfig
+    testing: TestingConfig
 
     def to_dict(self) -> dict:
         return {
-            "static": asdict(self.static),
-            "state": asdict(self.state),
+            "theme": self.theme.to_dict(),
+            "display": asdict(self.display),
+            "testing": asdict(self.testing),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "WidgetConfig":
-        static_dict = d.get("static", {})
-        state_dict = d.get("state", {})
+        # Handle theme (supports legacy "theme": "name" format)
+        theme_data = d.get("theme", DEFAULT_THEME)
+        theme = ThemeConfig.from_dict(theme_data)
 
-        # Filter to known fields
-        static_known = {f.name for f in StaticConfig.__dataclass_fields__.values()}
-        state_known = {f.name for f in StateConfig.__dataclass_fields__.values()}
+        # Validate and load theme
+        if theme.base not in get_available_themes():
+            theme.base = DEFAULT_THEME
+        load_theme(theme.base, theme.overrides)
 
-        static = StaticConfig(**{k: v for k, v in static_dict.items() if k in static_known})
-        state = StateConfig(**{k: v for k, v in state_dict.items() if k in state_known})
+        # Handle display (supports legacy "static" key)
+        display_dict = d.get("display", d.get("static", {}))
+        display_known = {f.name for f in DisplayConfig.__dataclass_fields__.values()}
+        display = DisplayConfig(**{k: v for k, v in display_dict.items() if k in display_known})
 
-        return cls(static=static, state=state)
+        # Handle testing (supports legacy "state" key with test_ prefix)
+        testing_dict = d.get("testing", {})
+        if not testing_dict and "state" in d:
+            # Convert legacy state format
+            state = d["state"]
+            testing_dict = {
+                "enabled": state.get("testing", False),
+                "status": state.get("test_status", "idle"),
+                "weather": state.get("test_weather", "clear"),
+                "weather_intensity": state.get("test_weather_intensity", 0.5),
+                "wind_speed": state.get("test_wind_speed", 5.0),
+                "context_percent": state.get("test_context_percent", 50.0),
+                "paused": state.get("paused", False),
+            }
+        testing_known = {f.name for f in TestingConfig.__dataclass_fields__.values()}
+        testing = TestingConfig(**{k: v for k, v in testing_dict.items() if k in testing_known})
+
+        return cls(theme=theme, display=display, testing=testing)
 
     def save(self, path: Path = CONFIG_PATH):
         temp = path.with_suffix(".tmp")
@@ -91,39 +142,57 @@ class WidgetConfig:
     def load(cls, path: Path = CONFIG_PATH) -> "WidgetConfig":
         try:
             if path.exists():
-                return cls.from_dict(json.loads(path.read_text()))
+                raw_data = json.loads(path.read_text())
+                config = cls.from_dict(raw_data)
+                # Migrate legacy format to new format
+                if "static" in raw_data or "state" in raw_data or isinstance(raw_data.get("theme"), str):
+                    config.save(path)
+                return config
         except (json.JSONDecodeError, IOError):
             pass
-        return cls(static=StaticConfig(), state=StateConfig())
+        return cls(
+            theme=ThemeConfig(),
+            display=DisplayConfig(),
+            testing=TestingConfig(),
+        )
+
+    def get_colors_for_swift(self) -> dict[str, list[float]]:
+        """Get merged theme colors as RGB arrays for Swift widget."""
+        return get_merged_theme_colors(self.theme.base, self.theme.overrides)
 
     # Convenience accessors for backward compatibility
     @property
     def grid_width(self) -> int:
-        return self.static.grid_width
+        return self.display.grid_width
 
     @property
     def grid_height(self) -> int:
-        return self.static.grid_height
-
-    @property
-    def testing(self) -> bool:
-        return self.state.testing
+        return self.display.grid_height
 
     @property
     def test_status(self) -> str:
-        return self.state.test_status
+        return self.testing.status
 
     @property
     def test_weather(self) -> str:
-        return self.state.test_weather
+        return self.testing.weather
 
     @property
     def test_weather_intensity(self) -> float:
-        return self.state.test_weather_intensity
+        return self.testing.weather_intensity
 
     @property
     def test_context_percent(self) -> float:
-        return self.state.test_context_percent
+        return self.testing.context_percent
+
+    @property
+    def test_wind_speed(self) -> float:
+        return self.testing.wind_speed
+
+    # Legacy property name for testing.enabled
+    @property
+    def testing_enabled(self) -> bool:
+        return self.testing.enabled
 
 
 class ConfigWatcher:
