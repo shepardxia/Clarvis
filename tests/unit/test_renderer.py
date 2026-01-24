@@ -112,12 +112,12 @@ class TestWeatherSystem:
         for _ in range(20):
             ws.tick()
 
-        particle_count = len(ws.particles)
+        particle_count = ws.p_count
         assert particle_count > 0
 
         # Change weather type
         ws.set_weather("snow", intensity=1.0)
-        assert len(ws.particles) == 0
+        assert ws.p_count == 0
 
     def test_tick_spawns_particles(self):
         ws = WeatherSystem(20, 10)
@@ -127,7 +127,7 @@ class TestWeatherSystem:
         for _ in range(50):
             ws.tick()
 
-        assert len(ws.particles) > 0
+        assert ws.p_count > 0
 
     def test_no_particles_without_weather(self):
         ws = WeatherSystem(20, 10)
@@ -136,7 +136,7 @@ class TestWeatherSystem:
         for _ in range(10):
             ws.tick()
 
-        assert len(ws.particles) == 0
+        assert ws.p_count == 0
 
     def test_exclusion_zones(self):
         """Particles should be removed from exclusion zones."""
