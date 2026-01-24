@@ -118,15 +118,25 @@ class RenderPipeline:
 
         Color code 0 is treated as "default/theme color" and emits reset code.
         This allows Swift to use its theme color for those characters.
+
+        Each line contains exactly self.width visible characters (plus ANSI codes).
+        This ensures consistent rendering in the Swift widget.
         """
         self.render()
         lines = []
         for y in range(self.height):
             parts = []
             current_color = -1
+            visible_count = 0
             for x in range(self.width):
-                color = self.out_colors[y, x]
-                char = chr(self.out_chars[y, x])
+                color = int(self.out_colors[y, x])  # Ensure Python int
+                char_code = int(self.out_chars[y, x])  # Ensure Python int
+
+                # Validate character code - fallback to space if invalid
+                if char_code < 32 and char_code not in (9, 10):  # Allow tab and newline
+                    char_code = SPACE
+                char = chr(char_code)
+
                 if color != current_color:
                     if color == 0:
                         # Color 0 = use default/theme color
@@ -135,6 +145,13 @@ class RenderPipeline:
                         parts.append(f"\033[38;5;{color}m")
                     current_color = color
                 parts.append(char)
+                visible_count += 1
+
+            # Ensure exactly width visible characters
+            while visible_count < self.width:
+                parts.append(' ')
+                visible_count += 1
+
             parts.append("\033[0m")
             lines.append(''.join(parts))
         return '\n'.join(lines)

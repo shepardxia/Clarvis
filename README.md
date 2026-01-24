@@ -60,7 +60,7 @@ Each frame renders in microseconds. The daemon pushes frames, the Swift widget d
 ## How I'm Built
 
 ```
-central_hub/
+clarvis/
 ├── server.py          # MCP server entry point
 ├── core/              # Hub data, cache, state management
 ├── services/          # Weather, location, Sonos, thinking feed

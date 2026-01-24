@@ -24,6 +24,7 @@ struct DisplayConfig: Codable {
     var corner_radius: CGFloat = 24
     var bg_alpha: CGFloat = 0.75
     var font_size: CGFloat = 14
+    var font_name: String = "Courier"
     var border_width: CGFloat = 2
     var pulse_speed: Double = 0.1
 }
@@ -39,6 +40,7 @@ struct WidgetConfig {
     var cornerRadius: CGFloat = 24
     var bgAlpha: CGFloat = 0.75
     var fontSize: CGFloat = 14
+    var fontName: String = "Courier"
     var borderWidth: CGFloat = 2
     var pulseSpeed: Double = 0.1
     var statusColors: [String: NSColor] = [:]
@@ -137,6 +139,7 @@ struct WidgetConfig {
             cornerRadius: file.display.corner_radius,
             bgAlpha: file.display.bg_alpha,
             fontSize: file.display.font_size,
+            fontName: file.display.font_name,
             borderWidth: file.display.border_width,
             pulseSpeed: file.display.pulse_speed,
             statusColors: colors
@@ -171,9 +174,123 @@ struct Config {
     static var cornerRadius: CGFloat { widgetConfig.cornerRadius }
     static var bgAlpha: CGFloat { widgetConfig.bgAlpha }
     static var fontSize: CGFloat { widgetConfig.fontSize }
+    static var fontName: String { widgetConfig.fontName }
     static var borderWidth: CGFloat { widgetConfig.borderWidth }
     static var pulseSpeed: Double { widgetConfig.pulseSpeed }
     static var statusColors: [String: NSColor] { widgetConfig.statusColors }
+}
+
+// MARK: - ANSI Color Parsing
+
+class AnsiParser {
+    // Convert ANSI 256 color code to NSColor
+    static func ansi256ToColor(_ code: Int) -> NSColor {
+        if code < 16 {
+            // Standard colors
+            let colors: [(CGFloat, CGFloat, CGFloat)] = [
+                (0, 0, 0),       // 0: black
+                (0.8, 0, 0),     // 1: red
+                (0, 0.8, 0),     // 2: green
+                (0.8, 0.8, 0),   // 3: yellow
+                (0, 0, 0.8),     // 4: blue
+                (0.8, 0, 0.8),   // 5: magenta
+                (0, 0.8, 0.8),   // 6: cyan
+                (0.75, 0.75, 0.75), // 7: white
+                (0.5, 0.5, 0.5), // 8: bright black (gray)
+                (1, 0, 0),       // 9: bright red
+                (0, 1, 0),       // 10: bright green
+                (1, 1, 0),       // 11: bright yellow
+                (0, 0, 1),       // 12: bright blue
+                (1, 0, 1),       // 13: bright magenta
+                (0, 1, 1),       // 14: bright cyan
+                (1, 1, 1),       // 15: bright white
+            ]
+            let (r, g, b) = colors[code]
+            return NSColor(red: r, green: g, blue: b, alpha: 1)
+        } else if code < 232 {
+            // 216 color cube (6x6x6)
+            let idx = code - 16
+            let r = CGFloat((idx / 36) % 6) / 5.0
+            let g = CGFloat((idx / 6) % 6) / 5.0
+            let b = CGFloat(idx % 6) / 5.0
+            return NSColor(red: r, green: g, blue: b, alpha: 1)
+        } else {
+            // Grayscale (24 steps)
+            let gray = CGFloat(code - 232) / 23.0
+            return NSColor(white: gray, alpha: 1)
+        }
+    }
+
+    // Parse ANSI-escaped string into attributed string
+    static func parse(_ input: String, defaultColor: NSColor, font: NSFont) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        var currentColor = defaultColor
+        var i = input.startIndex
+
+        // Pre-calculate paragraph style for consistent line height
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 0
+        paragraphStyle.paragraphSpacing = 0
+        paragraphStyle.lineHeightMultiple = 1.0
+
+        while i < input.endIndex {
+            // Check for escape sequence (ESC character = 0x1B)
+            if input[i] == "\u{1b}" {
+                let nextIdx = input.index(after: i)
+                if nextIdx < input.endIndex && input[nextIdx] == "[" {
+                    // Find the end of the escape sequence (ends with 'm')
+                    var endIdx = input.index(after: nextIdx)
+                    var foundEnd = false
+                    while endIdx < input.endIndex {
+                        if input[endIdx] == "m" {
+                            foundEnd = true
+                            break
+                        }
+                        endIdx = input.index(after: endIdx)
+                    }
+
+                    if foundEnd {
+                        // Parse the escape code
+                        let codeStart = input.index(after: nextIdx)
+                        let codeStr = String(input[codeStart..<endIdx])
+
+                        if codeStr == "0" {
+                            // Reset
+                            currentColor = defaultColor
+                        } else if codeStr.hasPrefix("38;5;") {
+                            // 256 color foreground
+                            if let colorCode = Int(codeStr.dropFirst(5)) {
+                                currentColor = ansi256ToColor(colorCode)
+                            }
+                        }
+
+                        i = input.index(after: endIdx)
+                        continue
+                    } else {
+                        // Incomplete escape sequence - skip the ESC character entirely
+                        i = input.index(after: i)
+                        continue
+                    }
+                } else {
+                    // ESC not followed by '[' - skip ESC character
+                    i = input.index(after: i)
+                    continue
+                }
+            }
+
+            // Regular character - add with current color and consistent styling
+            let char = String(input[i])
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: currentColor,
+                .font: font,
+                .paragraphStyle: paragraphStyle
+            ]
+            result.append(NSAttributedString(string: char, attributes: attrs))
+            i = input.index(after: i)
+        }
+
+        return result
+    }
 }
 
 // MARK: - Data Model
@@ -385,7 +502,8 @@ class WidgetWindowController: NSWindowController {
         textField.isSelectable = false
         textField.backgroundColor = .clear
         textField.textColor = Config.statusColors["idle"]
-        textField.font = NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
+        textField.font = NSFont(name: Config.fontName, size: Config.fontSize)
+            ?? NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
         textField.alignment = .left
         textField.stringValue = "Connecting..."
 
@@ -443,15 +561,17 @@ class WidgetWindowController: NSWindowController {
     }
 
     func updateDisplay(_ data: WidgetData) {
-        if let frame = data.frame {
-            textField.stringValue = frame
-        }
-
         if let status = data.status, status != currentStatus {
             currentStatus = status
             let color = Config.statusColors[status] ?? Config.statusColors["idle"]!
             borderView.borderColor = color
-            textField.textColor = color
+        }
+
+        if let frame = data.frame {
+            let statusColor = Config.statusColors[currentStatus] ?? Config.statusColors["idle"]!
+            let font = NSFont(name: Config.fontName, size: Config.fontSize)
+                ?? NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
+            textField.attributedStringValue = AnsiParser.parse(frame, defaultColor: statusColor, font: font)
         }
     }
 
