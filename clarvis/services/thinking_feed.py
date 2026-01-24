@@ -2,7 +2,7 @@
 """
 Thinking feed parser - adapted from watch-claude-think by @bporterfield
 https://github.com/bporterfield/watch-claude-think
-Licensed under MIT. Ported from TypeScript to Python for central-hub integration.
+Licensed under MIT. Ported from TypeScript to Python for clarvis integration.
 """
 
 from __future__ import annotations

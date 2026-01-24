@@ -1,5 +1,5 @@
 #!/bin/bash
-# Uninstall LaunchAgent for central-hub daemon
+# Uninstall LaunchAgent for clarvis daemon
 
 set -e
 

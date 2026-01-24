@@ -4,7 +4,7 @@
 import tkinter as tk
 from tkinter import font as tkfont
 import math
-from central_hub.widget.renderer import FrameRenderer
+from clarvis.widget.renderer import FrameRenderer
 
 # macOS native window control
 try:

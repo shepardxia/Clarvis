@@ -1,7 +1,7 @@
 """
 Display service - renders widget frames from processed server data.
 
-Reads status/weather from central hub, generates ASCII frames, writes to widget output.
+Reads status/weather from Clarvis, generates ASCII frames, writes to widget output.
 Runs at ~10fps.
 """
 
@@ -16,7 +16,7 @@ from watchdog.events import FileSystemEventHandler
 from .renderer import FrameRenderer
 
 # File paths
-HUB_DATA_FILE = Path("/tmp/central-hub-data.json")     # Input: processed data from server
+HUB_DATA_FILE = Path("/tmp/clarvis-data.json")     # Input: processed data from server
 OUTPUT_FILE = Path("/tmp/widget-display.json")         # Output: rendered frames + metadata
 
 # Border styles by status

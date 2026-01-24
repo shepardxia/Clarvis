@@ -296,13 +296,13 @@ def watch_config(callback: Callable[[WidgetConfig], None]) -> ConfigWatcher:
 
 def restart_daemon_and_widget():
     """Restart the daemon process and widget."""
-    subprocess.run(["pkill", "-f", "central_hub"], capture_output=True)
+    subprocess.run(["pkill", "-f", "clarvis"], capture_output=True)
     subprocess.run(["pkill", "-f", "ClarvisWidget"], capture_output=True)
 
     time.sleep(0.5)
 
     subprocess.Popen(
-        [sys.executable, "-m", "central_hub.daemon"],
+        [sys.executable, "-m", "clarvis.daemon"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,

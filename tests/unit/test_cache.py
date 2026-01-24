@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from central_hub.core.cache import (
+from clarvis.core.cache import (
     read_hub_data,
     write_hub_section,
     get_hub_section,
@@ -19,7 +19,7 @@ from central_hub.core.cache import (
 def temp_hub_file(tmp_path):
     """Use a temporary file for hub data."""
     test_file = tmp_path / "test-hub-data.json"
-    with patch("central_hub.core.cache.HUB_DATA_FILE", test_file):
+    with patch("clarvis.core.cache.HUB_DATA_FILE", test_file):
         yield test_file
 
 
@@ -28,7 +28,7 @@ class TestReadHubData:
 
     def test_returns_empty_dict_when_file_missing(self, temp_hub_file):
         """Should return empty dict when file doesn't exist."""
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             result = read_hub_data()
         assert result == {}
 
@@ -37,7 +37,7 @@ class TestReadHubData:
         test_data = {"weather": {"temp": 72}, "time": {"tz": "PST"}}
         temp_hub_file.write_text(json.dumps(test_data))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             result = read_hub_data()
 
         assert result == test_data
@@ -46,7 +46,7 @@ class TestReadHubData:
         """Should return empty dict for invalid JSON."""
         temp_hub_file.write_text("not valid json {{{")
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             result = read_hub_data()
 
         assert result == {}
@@ -57,7 +57,7 @@ class TestWriteHubSection:
 
     def test_writes_new_section(self, temp_hub_file):
         """Should write a new section to empty file."""
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             write_hub_section("weather", {"temp": 72, "humidity": 50})
 
         data = json.loads(temp_hub_file.read_text())
@@ -72,7 +72,7 @@ class TestWriteHubSection:
         initial = {"weather": {"temp": 65, "updated_at": "2024-01-01T00:00:00"}}
         temp_hub_file.write_text(json.dumps(initial))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             write_hub_section("weather", {"temp": 72})
 
         data = json.loads(temp_hub_file.read_text())
@@ -83,7 +83,7 @@ class TestWriteHubSection:
         initial = {"time": {"tz": "PST", "updated_at": "2024-01-01T00:00:00"}}
         temp_hub_file.write_text(json.dumps(initial))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             write_hub_section("weather", {"temp": 72})
 
         data = json.loads(temp_hub_file.read_text())
@@ -92,7 +92,7 @@ class TestWriteHubSection:
 
     def test_adds_timestamp(self, temp_hub_file):
         """Should add updated_at timestamp."""
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             write_hub_section("test", {"value": 1})
 
         data = json.loads(temp_hub_file.read_text())
@@ -108,7 +108,7 @@ class TestGetHubSection:
         """Should return None when section doesn't exist."""
         temp_hub_file.write_text(json.dumps({}))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             result = get_hub_section("nonexistent")
 
         assert result is None
@@ -119,7 +119,7 @@ class TestGetHubSection:
         data = {"weather": {"temp": 72, "updated_at": now}}
         temp_hub_file.write_text(json.dumps(data))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             result = get_hub_section("weather", max_age=60)
 
         assert result is not None
@@ -131,7 +131,7 @@ class TestGetHubSection:
         data = {"weather": {"temp": 72, "updated_at": old_time}}
         temp_hub_file.write_text(json.dumps(data))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             result = get_hub_section("weather", max_age=60)
 
         assert result is None
@@ -141,7 +141,7 @@ class TestGetHubSection:
         data = {"weather": {"temp": 72}}  # No updated_at
         temp_hub_file.write_text(json.dumps(data))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             result = get_hub_section("weather")
 
         assert result is None
@@ -151,7 +151,7 @@ class TestGetHubSection:
         data = {"weather": {"temp": 72, "updated_at": "not-a-timestamp"}}
         temp_hub_file.write_text(json.dumps(data))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             result = get_hub_section("weather")
 
         assert result is None
@@ -163,7 +163,7 @@ class TestGetHubSection:
         data = {"weather": {"temp": 72, "updated_at": old_time}}
         temp_hub_file.write_text(json.dumps(data))
 
-        with patch("central_hub.core.cache.HUB_DATA_FILE", temp_hub_file):
+        with patch("clarvis.core.cache.HUB_DATA_FILE", temp_hub_file):
             # Should be stale with 60s max_age
             assert get_hub_section("weather", max_age=60) is None
             # Should be fresh with 120s max_age

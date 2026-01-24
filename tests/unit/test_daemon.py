@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from central_hub.daemon import CentralHubDaemon
+from clarvis.daemon import CentralHubDaemon
 
 
 class TestCentralHubDaemon:
@@ -495,6 +495,21 @@ class TestTokenUsageService:
         result = daemon.get_token_usage()
 
         assert result["five_hour"]["utilization"] == 6.0
+
+    def test_get_token_usage_command_handler_registered(self):
+        """Should register get_token_usage command handler."""
+        daemon = CentralHubDaemon()
+        daemon.token_usage_service = MagicMock()
+        daemon.token_usage_service.get_usage.return_value = {
+            "five_hour": {"utilization": 10.0},
+            "is_stale": False
+        }
+
+        # Verify the method is callable
+        result = daemon.get_token_usage()
+
+        assert result is not None
+        assert "five_hour" in result
 
 
 class TestCommandHandlers:

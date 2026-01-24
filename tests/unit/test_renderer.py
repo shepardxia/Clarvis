@@ -2,7 +2,7 @@
 
 import pytest
 
-from central_hub.widget.renderer import (
+from clarvis.widget.renderer import (
     FrameRenderer,
     WeatherSystem,
     Shape,
@@ -10,7 +10,7 @@ from central_hub.widget.renderer import (
     SHAPE_LIBRARY,
     ANIMATION_KEYFRAMES,
 )
-from central_hub.core.colors import get_status_ansi
+from clarvis.core.colors import get_status_ansi
 
 
 class TestFrameRenderer:
@@ -140,7 +140,7 @@ class TestWeatherSystem:
 
     def test_exclusion_zones(self):
         """Particles should be removed from exclusion zones."""
-        from central_hub.widget.renderer import BoundingBox
+        from clarvis.widget.renderer import BoundingBox
 
         ws = WeatherSystem(20, 10)
         ws.set_weather("rain", intensity=1.0)

@@ -4,7 +4,7 @@ import pytest
 import responses
 from responses import matchers
 
-from central_hub.services.weather import (
+from clarvis.services.weather import (
     fetch_weather,
     calculate_intensity,
     weather_code_to_desc,

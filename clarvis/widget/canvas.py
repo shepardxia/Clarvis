@@ -61,7 +61,7 @@ class Color(Enum):
 
 
 # Note: Status colors are defined centrally in core.colors
-# Import from there: from central_hub.core.colors import STATUS_MAP
+# Import from there: from clarvis.core.colors import STATUS_MAP
 
 
 # =============================================================================

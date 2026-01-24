@@ -2,7 +2,7 @@
 
 import pytest
 
-from central_hub.widget.canvas import (
+from clarvis.widget.canvas import (
     Color,
     Cell,
     Canvas,

@@ -5,7 +5,7 @@ import pytest
 import threading
 from unittest.mock import MagicMock
 
-from central_hub.core.state import (
+from clarvis.core.state import (
     StateStore,
     get_state_store,
     reset_state_store,

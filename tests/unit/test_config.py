@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from central_hub.widget.config import (
+from clarvis.widget.config import (
     ThemeConfig,
     DisplayConfig,
     TestingConfig,
@@ -13,7 +13,7 @@ from central_hub.widget.config import (
     WidgetConfig,
     CONFIG_PATH,
 )
-from central_hub.core.colors import DEFAULT_THEME, get_available_themes
+from clarvis.core.colors import DEFAULT_THEME, get_available_themes
 
 
 class TestThemeConfig:

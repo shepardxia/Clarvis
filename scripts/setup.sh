@@ -70,10 +70,10 @@ configure_mcp() {
     # Build the command based on uv or venv
     if [ "$USE_UV" = true ]; then
         MCP_COMMAND="uv"
-        MCP_ARGS='["run", "--directory", "'"$REPO_DIR"'", "python", "-m", "central_hub.server"]'
+        MCP_ARGS='["run", "--directory", "'"$REPO_DIR"'", "python", "-m", "clarvis.server"]'
     else
         MCP_COMMAND="$REPO_DIR/.venv/bin/python"
-        MCP_ARGS='["-m", "central_hub.server"]'
+        MCP_ARGS='["-m", "clarvis.server"]'
     fi
 
     # Create or update .mcp.json
@@ -92,7 +92,7 @@ except:
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
-config['mcpServers']['central-hub'] = {
+config['mcpServers']['clarvis'] = {
     'command': '$MCP_COMMAND',
     'args': $MCP_ARGS
 }
@@ -100,7 +100,7 @@ config['mcpServers']['central-hub'] = {
 with open(config_path, 'w') as f:
     json.dump(config, f, indent=2)
 
-print("Added central-hub to", config_path)
+print("Added clarvis to", config_path)
 EOF
 
     print_success "MCP server configured"
@@ -110,11 +110,11 @@ setup_daemon() {
     print_header "Setting up background daemon (optional)..."
 
     PLIST_SRC="$SCRIPT_DIR/com.centralhub.daemon.plist"
-    PLIST_DST="$HOME/Library/LaunchAgents/com.central-hub.refresh.plist"
+    PLIST_DST="$HOME/Library/LaunchAgents/com.clarvis.refresh.plist"
 
     if [ -f "$PLIST_SRC" ]; then
         # Update paths in plist
-        sed "s|/path/to/central-hub|$REPO_DIR|g" "$PLIST_SRC" > "$PLIST_DST"
+        sed "s|/path/to/clarvis|$REPO_DIR|g" "$PLIST_SRC" > "$PLIST_DST"
         launchctl unload "$PLIST_DST" 2>/dev/null || true
         launchctl load "$PLIST_DST"
         print_success "Daemon installed and started"

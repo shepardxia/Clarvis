@@ -3,9 +3,9 @@
 import pytest
 from hypothesis import given, strategies as st, settings, assume
 
-from central_hub.services.weather import calculate_intensity, WEATHER_CODE_INTENSITY
-from central_hub.widget.canvas import Canvas, Cell, Color
-from central_hub.widget.pipeline import Layer
+from clarvis.services.weather import calculate_intensity, WEATHER_CODE_INTENSITY
+from clarvis.widget.canvas import Canvas, Cell, Color
+from clarvis.widget.pipeline import Layer
 
 
 class TestIntensityProperties:
@@ -160,7 +160,7 @@ class TestHistoryProperties:
     @settings(max_examples=50, deadline=1000)
     def test_history_never_exceeds_limit(self, entries):
         """History buffers should never exceed HISTORY_SIZE."""
-        from central_hub.daemon import CentralHubDaemon
+        from clarvis.daemon import CentralHubDaemon
         from pathlib import Path
         import tempfile
 

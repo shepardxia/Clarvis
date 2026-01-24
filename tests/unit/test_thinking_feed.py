@@ -4,7 +4,7 @@ import json
 import pytest
 from pathlib import Path
 
-from central_hub.services.thinking_feed import (
+from clarvis.services.thinking_feed import (
     parse_jsonl_line,
     extract_thinking_blocks,
     is_session_stop_event,

@@ -9,12 +9,12 @@ from pathlib import Path
 # Default cache duration in seconds
 DEFAULT_CACHE_DURATION = 60
 
-# Central hub data file - single structured JSON for all widget data
-HUB_DATA_FILE = Path("/tmp/central-hub-data.json")
+# Clarvis data file - single structured JSON for all widget data
+HUB_DATA_FILE = Path("/tmp/clarvis-data.json")
 
 
 def read_hub_data() -> dict:
-    """Read the central hub data file."""
+    """Read the Clarvis data file."""
     if HUB_DATA_FILE.exists():
         try:
             return json.loads(HUB_DATA_FILE.read_text())
@@ -41,7 +41,7 @@ def write_hub_section(section: str, data: dict) -> None:
     # Write atomically with unique temp file to avoid race conditions
     fd, temp_path = tempfile.mkstemp(
         suffix='.tmp',
-        prefix='central-hub-',
+        prefix='clarvis-',
         dir=HUB_DATA_FILE.parent
     )
     try:

@@ -4,8 +4,8 @@ import json
 import pytest
 from pathlib import Path
 
-from central_hub.core import reset_state_store
-from central_hub.widget.socket_server import reset_socket_server
+from clarvis.core import reset_state_store
+from clarvis.widget.socket_server import reset_socket_server
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +23,7 @@ def temp_hub_files(tmp_path):
     """Create temp file paths for daemon tests."""
     return {
         "status_raw": tmp_path / "claude-status-raw.json",
-        "hub_data": tmp_path / "central-hub-data.json",
+        "hub_data": tmp_path / "clarvis-data.json",
         "widget_display": tmp_path / "widget-display.json",
         "config": tmp_path / "widget-config.json",
     }

@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 # Patch the daemon client
-PATCH_CLIENT = "central_hub.server.get_daemon_client"
+PATCH_CLIENT = "clarvis.server.get_daemon_client"
 
 
 def make_mock_client(call_returns=None, is_running=True):
@@ -24,7 +24,7 @@ class TestGetClarvisState:
     @pytest.mark.asyncio
     async def test_returns_full_state(self):
         """Should return complete Clarvis state with full history."""
-        from central_hub.server import get_clarvis_state
+        from clarvis.server import get_clarvis_state
 
         mock_state = {
             "displayed_session": "test-session-123",
@@ -60,7 +60,7 @@ class TestGetClarvisState:
     @pytest.mark.asyncio
     async def test_handles_empty_data(self):
         """Should handle missing data gracefully."""
-        from central_hub.server import get_clarvis_state
+        from clarvis.server import get_clarvis_state
 
         mock_state = {
             "displayed_session": None,
@@ -84,7 +84,7 @@ class TestGetClarvisState:
     @pytest.mark.asyncio
     async def test_handles_daemon_not_running(self):
         """Should return error when daemon not running."""
-        from central_hub.server import get_clarvis_state
+        from clarvis.server import get_clarvis_state
 
         mock_client = make_mock_client(is_running=False)
         with patch(PATCH_CLIENT, return_value=mock_client):
@@ -100,7 +100,7 @@ class TestListClarvisSessions:
     @pytest.mark.asyncio
     async def test_lists_all_sessions(self):
         """Should list all tracked sessions."""
-        from central_hub.server import list_clarvis_sessions
+        from clarvis.server import list_clarvis_sessions
 
         mock_sessions = [
             {
@@ -138,7 +138,7 @@ class TestListClarvisSessions:
     @pytest.mark.asyncio
     async def test_empty_sessions(self):
         """Should return message when no sessions tracked."""
-        from central_hub.server import list_clarvis_sessions
+        from clarvis.server import list_clarvis_sessions
 
         mock_client = make_mock_client({"get_sessions": []})
         with patch(PATCH_CLIENT, return_value=mock_client):
@@ -153,7 +153,7 @@ class TestGetClarvisSession:
     @pytest.mark.asyncio
     async def test_returns_session_details(self):
         """Should return full session details."""
-        from central_hub.server import get_clarvis_session
+        from clarvis.server import get_clarvis_session
 
         mock_session = {
             "session_id": "session-1",
@@ -178,7 +178,7 @@ class TestGetClarvisSession:
     @pytest.mark.asyncio
     async def test_session_not_found(self):
         """Should return error for unknown session."""
-        from central_hub.server import get_clarvis_session
+        from clarvis.server import get_clarvis_session
 
         mock_client = MagicMock()
         mock_client.is_daemon_running.return_value = True
@@ -197,7 +197,7 @@ class TestGetClaudeStatus:
     @pytest.mark.asyncio
     async def test_returns_status_string(self):
         """Should return formatted status string."""
-        from central_hub.server import get_claude_status
+        from clarvis.server import get_claude_status
 
         mock_status = {
             "status": "running",
@@ -216,7 +216,7 @@ class TestGetClaudeStatus:
     @pytest.mark.asyncio
     async def test_no_status_data(self):
         """Should handle missing status data."""
-        from central_hub.server import get_claude_status
+        from clarvis.server import get_claude_status
 
         mock_client = make_mock_client({"get_status": {}})
         with patch(PATCH_CLIENT, return_value=mock_client):

@@ -2,11 +2,13 @@
 
 import subprocess
 import json
+import logging
 import requests
 import threading
-import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 class TokenUsageService:
@@ -19,9 +21,9 @@ class TokenUsageService:
         """Initialize service.
 
         Args:
-            poll_interval: Seconds between API polls (default 120)
+            poll_interval: Seconds between API polls (default 120, minimum 10)
         """
-        self.poll_interval = poll_interval
+        self.poll_interval = max(poll_interval, 10)  # Minimum 10 seconds
         self._token: Optional[str] = None
         self._usage_data: Optional[Dict[str, Any]] = None
         self._last_updated: Optional[datetime] = None
@@ -86,10 +88,15 @@ class TokenUsageService:
                 text=False,
             )
 
+            if result.returncode != 0:
+                logger.debug("Keychain access failed: %s", result.stderr.decode().strip())
+                return None
+
             # Parse JSON response
             data = json.loads(result.stdout.decode())
             return data.get("claudeAiOauth", {}).get("accessToken")
         except Exception as e:
+            logger.debug("Failed to get token from keychain: %s", e)
             return None
 
     def _poll_loop(self) -> None:
@@ -136,4 +143,5 @@ class TokenUsageService:
             response.raise_for_status()
             return response.json()
         except Exception as e:
+            logger.debug("Failed to fetch token usage: %s", e)
             return None

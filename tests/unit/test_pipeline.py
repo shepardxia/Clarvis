@@ -2,7 +2,7 @@
 
 import pytest
 
-from central_hub.widget.pipeline import Layer, RenderPipeline
+from clarvis.widget.pipeline import Layer, RenderPipeline
 
 
 class TestLayer:

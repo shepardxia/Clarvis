@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
-from central_hub.services.token_usage import TokenUsageService
+from clarvis.services.token_usage import TokenUsageService
 
 
 class TestTokenUsageService:
@@ -19,22 +19,27 @@ class TestTokenUsageService:
         assert service._usage_data is None
 
     def test_custom_poll_interval(self):
-        """Should accept custom poll interval."""
+        """Should accept custom poll interval with minimum of 10."""
         service = TokenUsageService(poll_interval=60)
         assert service.poll_interval == 60
 
-    @patch("central_hub.services.token_usage.subprocess.run")
+        # Should enforce minimum of 10 seconds
+        service_low = TokenUsageService(poll_interval=5)
+        assert service_low.poll_interval == 10
+
+    @patch("clarvis.services.token_usage.subprocess.run")
     def test_fetch_from_keychain_success(self, mock_run):
         """Should retrieve OAuth token from Keychain."""
+        mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = b'{"claudeAiOauth":{"accessToken":"test-token-123"}}'
-        
+
         service = TokenUsageService()
         token = service._fetch_from_keychain()
-        
+
         assert token == "test-token-123"
         mock_run.assert_called_once()
 
-    @patch("central_hub.services.token_usage.subprocess.run")
+    @patch("clarvis.services.token_usage.subprocess.run")
     def test_fetch_from_keychain_failure(self, mock_run):
         """Should return None if Keychain access fails."""
         mock_run.side_effect = Exception("Keychain error")
@@ -44,7 +49,7 @@ class TestTokenUsageService:
         
         assert token is None
 
-    @patch("central_hub.services.token_usage.requests.get")
+    @patch("clarvis.services.token_usage.requests.get")
     def test_fetch_usage_success(self, mock_get):
         """Should fetch and cache usage data from API."""
         mock_response = MagicMock()
@@ -62,7 +67,7 @@ class TestTokenUsageService:
         assert "five_hour" in result
         assert "seven_day" in result
 
-    @patch("central_hub.services.token_usage.requests.get")
+    @patch("clarvis.services.token_usage.requests.get")
     def test_fetch_usage_failure(self, mock_get):
         """Should return None on API failure."""
         mock_get.side_effect = Exception("Network error")
@@ -117,8 +122,8 @@ class TestTokenUsageService:
         # Should not be marked stale (19 seconds < 20 second threshold)
         assert result.get("is_stale") is False
 
-    @patch("central_hub.services.token_usage.TokenUsageService._fetch_usage")
-    @patch("central_hub.services.token_usage.TokenUsageService._fetch_from_keychain")
+    @patch("clarvis.services.token_usage.TokenUsageService._fetch_usage")
+    @patch("clarvis.services.token_usage.TokenUsageService._fetch_from_keychain")
     def test_stop_waits_for_thread_completion(self, mock_keychain, mock_fetch):
         """Should wait for polling thread to complete on stop."""
         mock_keychain.return_value = "test-token"

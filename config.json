@@ -1,6 +1,6 @@
 {
   "theme": {
-    "base": "synthwave"
+    "base": "c64"
   },
   "display": {
     "grid_width": 30,
@@ -10,12 +10,13 @@
     "corner_radius": 30,
     "bg_alpha": 0.8,
     "font_size": 17,
+    "font_name": "Courier",
     "border_width": 2,
-    "pulse_speed": 0.1,
+    "pulse_speed": 0.01,
     "fps": 6
   },
   "testing": {
-    "enabled": true,
+    "enabled": false,
     "status": "thinking",
     "weather": "clear",
     "context_percent": 75.0

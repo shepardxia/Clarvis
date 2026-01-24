@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from central_hub.core.ipc import DaemonServer, DaemonClient
+from clarvis.core.ipc import DaemonServer, DaemonClient
 
 
 @pytest.fixture

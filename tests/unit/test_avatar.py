@@ -2,7 +2,7 @@
 
 import pytest
 
-from central_hub.widget.avatar import (
+from clarvis.widget.avatar import (
     BORDERS,
     EYES,
     EYE_POSITIONS,

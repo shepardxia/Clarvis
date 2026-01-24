@@ -114,7 +114,11 @@ class RenderPipeline:
         return '\n'.join(''.join(chr(c) for c in row) for row in self.out_chars)
 
     def to_ansi(self) -> str:
-        """Render and return ANSI-colored text."""
+        """Render and return ANSI-colored text.
+
+        Color code 0 is treated as "default/theme color" and emits reset code.
+        This allows Swift to use its theme color for those characters.
+        """
         self.render()
         lines = []
         for y in range(self.height):
@@ -124,7 +128,11 @@ class RenderPipeline:
                 color = self.out_colors[y, x]
                 char = chr(self.out_chars[y, x])
                 if color != current_color:
-                    parts.append(f"\033[38;5;{color}m")
+                    if color == 0:
+                        # Color 0 = use default/theme color
+                        parts.append("\033[0m")
+                    else:
+                        parts.append(f"\033[38;5;{color}m")
                     current_color = color
                 parts.append(char)
             parts.append("\033[0m")

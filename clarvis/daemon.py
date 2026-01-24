@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Background daemon for Central Hub - handles status processing and data refreshes."""
+"""Background daemon for Clarvis - handles status processing and data refreshes."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ from .core.state import StateStore, get_state_store
 from .core.ipc import DaemonServer
 from .services import get_location, get_cached_timezone, fetch_weather
 from .services.token_usage import TokenUsageService
+from .services.thinking_feed import get_session_manager
+from .services.whimsy_verb import generate_whimsy_verb
 from .widget.renderer import FrameRenderer
 from .widget.config import get_config, watch_config, WidgetConfig, restart_daemon_and_widget
 from .widget.socket_server import WidgetSocketServer, get_socket_server
@@ -38,7 +40,7 @@ class PidLock:
     - Context manager support
     """
 
-    DEFAULT_PID_FILE = Path("/tmp/central-hub-daemon.pid")
+    DEFAULT_PID_FILE = Path("/tmp/clarvis-daemon.pid")
 
     def __init__(self, pid_file: Path = None):
         self.pid_file = pid_file or self.DEFAULT_PID_FILE
@@ -167,7 +169,7 @@ class StatusHandler(FileSystemEventHandler):
 
 
 class CentralHubDaemon:
-    """Background daemon for Central Hub - uses StateStore as single source of truth."""
+    """Background daemon for Clarvis - uses StateStore as single source of truth."""
 
     # Configuration
     HISTORY_SIZE = 20
@@ -185,7 +187,7 @@ class CentralHubDaemon:
     ):
         # File paths
         self.status_raw_file = status_raw_file or Path("/tmp/claude-status-raw.json")
-        self.hub_data_file = hub_data_file or Path("/tmp/central-hub-data.json")
+        self.hub_data_file = hub_data_file or Path("/tmp/clarvis-data.json")
         self.output_file = output_file or Path("/tmp/widget-display.json")
         self.refresh_interval = refresh_interval
         self.display_fps = display_fps
@@ -224,6 +226,16 @@ class CentralHubDaemon:
             "idle": {"width": 1, "pulse": False},
             "offline": {"width": 1, "pulse": False},
         }
+
+        # Whimsy verb tracking
+        self._last_whimsy_time: float = 0
+        self._whimsy_cooldown: float = 5.0  # seconds
+        self._current_whimsy_verb: str | None = None
+        # Cost estimate: ~614 input tokens (114 system + 500 context) + ~5 output
+        # Haiku 4.5: $1/M input, $5/M output = ~$0.00064/call
+        self._whimsy_cost_per_call: float = 0.00065
+        self._whimsy_stats_file: Path = Path("/tmp/clarvis-whimsy-stats.json")
+        self._whimsy_call_count, self._whimsy_total_cost = self._load_whimsy_stats()
 
         # Load initial state from hub file
         self._load_initial_state()
@@ -437,11 +449,121 @@ class CentralHubDaemon:
                 with self._lock:
                     self.renderer.set_status(processed.get("status", "idle"))
 
+            # Trigger whimsy verb on user prompt submit (with cooldown)
+            self._maybe_trigger_whimsy(raw_data.get("hook_event_name"))
+
             # Periodically clean up stale sessions
             self._cleanup_stale_sessions()
 
         except (json.JSONDecodeError, IOError):
             pass
+
+    def _maybe_trigger_whimsy(self, event: str | None):
+        """Trigger whimsy verb generation when switching to thinking status."""
+        if not event:
+            return
+
+        # Clear verb when awaiting (Stop or Notification)
+        if event in ("Stop", "Notification"):
+            self._current_whimsy_verb = None
+            return
+
+        # Trigger only on user prompt submit
+        if event != "UserPromptSubmit":
+            return
+
+        now = time.time()
+
+        # Check cooldown (10 seconds)
+        if now - self._last_whimsy_time < 10.0:
+            return
+
+        self._last_whimsy_time = now
+
+        # Generate in background thread to not block
+        thread = threading.Thread(target=self._generate_whimsy, daemon=True)
+        thread.start()
+
+    def _generate_whimsy(self):
+        """Generate whimsy verb from chat history context."""
+        try:
+            context = self._get_chat_context()
+
+            if not context:
+                return
+
+            verb = generate_whimsy_verb(context)
+            self._current_whimsy_verb = verb
+            self._whimsy_call_count += 1
+            self._whimsy_total_cost += self._whimsy_cost_per_call
+            self._save_whimsy_stats()
+
+            # Store in state for access
+            self.state.update("whimsy", {
+                "verb": verb,
+                "call_count": self._whimsy_call_count,
+                "total_cost": self._whimsy_total_cost,
+                "timestamp": datetime.now().isoformat(),
+            })
+
+        except Exception as e:
+            print(f"Whimsy generation error: {e}")
+
+    def _get_chat_context(self, max_messages: int = 10) -> str:
+        """Extract recent chat context from transcript file."""
+        try:
+            # Get transcript path from raw status
+            if not self.status_raw_file.exists():
+                return ""
+
+            raw_data = json.loads(self.status_raw_file.read_text())
+            transcript_path = raw_data.get("transcript_path")
+
+            if not transcript_path or not Path(transcript_path).exists():
+                return ""
+
+            # Read last N lines from transcript (it's JSONL)
+            messages = []
+            with open(transcript_path, 'r') as f:
+                lines = f.readlines()
+
+            # Process from end, collect user/assistant messages
+            for line in reversed(lines[-100:]):  # Check last 100 lines
+                try:
+                    entry = json.loads(line)
+                    entry_type = entry.get("type")
+
+                    if entry_type in ("user", "assistant"):
+                        msg = entry.get("message", {})
+                        content = msg.get("content", "")
+
+                        # Extract text from content blocks
+                        if isinstance(content, list):
+                            texts = []
+                            for c in content:
+                                if isinstance(c, dict) and c.get("type") == "text":
+                                    text = c.get("text", "")
+                                    # Skip system reminders
+                                    if not text.startswith("<system"):
+                                        texts.append(text)
+                            content = " ".join(texts)
+
+                        if content and not content.startswith("<system"):
+                            role = "User" if entry_type == "user" else "Assistant"
+                            messages.append(f"{role}: {content[:500]}")
+
+                            if len(messages) >= max_messages:
+                                break
+                except json.JSONDecodeError:
+                    continue
+
+            # Reverse to chronological order and join
+            messages.reverse()
+            return "\n\n".join(messages)
+
+        except Exception as e:
+            print(f"Error reading chat context: {e}")
+            return ""
 
     # --- Status Watcher ---
 
@@ -585,7 +707,7 @@ class CentralHubDaemon:
                 display_status = status.get("status", "idle") if status else "idle"
                 display_color = status.get("color", "gray") if status else "gray"
 
-            frame = self.renderer.render(context_percent)
+            frame = self.renderer.render_colored(context_percent, self._current_whimsy_verb)
             border = self.border_styles.get(display_status, {"width": 1, "pulse": False})
 
             output = {
@@ -595,6 +717,7 @@ class CentralHubDaemon:
                 "border_width": border["width"],
                 "border_pulse": border["pulse"],
                 "context_percent": context_percent,
+                "whimsy_verb": self._current_whimsy_verb,
                 "timestamp": time.time(),
             }
 
@@ -701,6 +824,11 @@ class CentralHubDaemon:
         self.command_server.register("refresh_time", self._cmd_refresh_time)
         self.command_server.register("refresh_location", self._cmd_refresh_location)
         self.command_server.register("refresh_all", self._cmd_refresh_all)
+
+        # Whimsy verbs
+        self.command_server.register("get_thinking_context", self._cmd_get_thinking_context)
+        self.command_server.register("get_whimsy_verb", self._cmd_get_whimsy_verb)
+        self.command_server.register("get_whimsy_stats", self._cmd_get_whimsy_stats)
 
         # Utility
         self.command_server.register("ping", lambda: "pong")
@@ -812,6 +940,74 @@ class CentralHubDaemon:
         """Refresh all data sources."""
         self.refresh_all()
         return "ok"
+
+    def _cmd_get_thinking_context(self, limit: int = 500) -> dict:
+        """Get latest thinking context from active sessions."""
+        manager = get_session_manager()
+        latest = manager.get_latest_thought()
+        if not latest:
+            return {"context": None, "session_id": None}
+
+        # Truncate to limit
+        text = latest.get("text", "")
+        if len(text) > limit:
+            text = text[-limit:]
+
+        return {
+            "context": text,
+            "session_id": latest.get("session_id"),
+            "project": latest.get("project"),
+            "timestamp": latest.get("timestamp"),
+        }
+
+    def _cmd_get_whimsy_verb(self, context: str = None) -> dict:
+        """Generate whimsy verb from context or latest thinking."""
+        if not context:
+            ctx_data = self._cmd_get_thinking_context()
+            context = ctx_data.get("context")
+
+        if not context:
+            return {"verb": None, "error": "No context available"}
+
+        try:
+            verb = generate_whimsy_verb(context)
+            self._whimsy_call_count += 1
+            self._whimsy_total_cost += self._whimsy_cost_per_call
+            self._save_whimsy_stats()
+            return {"verb": verb, "context_length": len(context)}
+        except Exception as e:
+            return {"verb": None, "error": str(e)}
+
+    def _cmd_get_whimsy_stats(self) -> dict:
+        """Get whimsy verb usage statistics."""
+        return {
+            "current_verb": self._current_whimsy_verb,
+            "call_count": self._whimsy_call_count,
+            "total_cost": round(self._whimsy_total_cost, 6),
+            "cost_per_call": self._whimsy_cost_per_call,
+            "cooldown_seconds": self._whimsy_cooldown,
+        }
+
+    def _load_whimsy_stats(self) -> tuple[int, float]:
+        """Load whimsy stats from file."""
+        try:
+            if self._whimsy_stats_file.exists():
+                data = json.loads(self._whimsy_stats_file.read_text())
+                return data.get("call_count", 0), data.get("total_cost", 0.0)
+        except Exception:
+            pass
+        return 0, 0.0
+
+    def _save_whimsy_stats(self):
+        """Save whimsy stats to file."""
+        try:
+            data = {
+                "call_count": self._whimsy_call_count,
+                "total_cost": self._whimsy_total_cost,
+            }
+            self._whimsy_stats_file.write_text(json.dumps(data))
+        except Exception:
+            pass
 
     def start(self):
         """Start the daemon."""

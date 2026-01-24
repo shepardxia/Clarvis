@@ -2,7 +2,7 @@
 
 import pytest
 
-from central_hub.core.colors import (
+from clarvis.core.colors import (
     ColorDef,
     Palette,
     StatusColors,
@@ -192,7 +192,7 @@ class TestThemeSystem:
     def test_load_theme_updates_status_map(self):
         """Loading theme should update STATUS_MAP with theme colors."""
         # Import module to access current STATUS_MAP after theme load
-        from central_hub.core import colors
+        from clarvis.core import colors
 
         load_theme("synthwave")
         assert colors.STATUS_MAP["thinking"] == THEMES["synthwave"]["thinking"]
@@ -233,7 +233,7 @@ class TestThemeSystem:
 
     def test_load_theme_with_overrides(self):
         """Loading theme with overrides should apply custom RGB colors."""
-        from central_hub.core import colors
+        from clarvis.core import colors
 
         # Define overrides for specific statuses
         overrides = {
@@ -259,7 +259,7 @@ class TestThemeSystem:
 
     def test_load_theme_with_invalid_override_ignored(self):
         """Overrides with wrong length should be ignored."""
-        from central_hub.core import colors
+        from clarvis.core import colors
 
         overrides = {
             "thinking": [1.0, 0.0],  # Only 2 values, should be ignored
@@ -273,7 +273,7 @@ class TestThemeSystem:
 
     def test_load_theme_with_empty_overrides(self):
         """Empty overrides dict should work like no overrides."""
-        from central_hub.core import colors
+        from clarvis.core import colors
 
         load_theme("synthwave", {})
         assert colors.STATUS_MAP["thinking"] == THEMES["synthwave"]["thinking"]
@@ -284,7 +284,7 @@ class TestGetMergedThemeColors:
 
     def test_returns_all_statuses(self):
         """Should return all theme statuses as RGB arrays."""
-        from central_hub.core.colors import get_merged_theme_colors
+        from clarvis.core.colors import get_merged_theme_colors
 
         result = get_merged_theme_colors("modern")
         expected_statuses = ["idle", "resting", "thinking", "running", "executing",
@@ -296,7 +296,7 @@ class TestGetMergedThemeColors:
 
     def test_rgb_values_are_floats(self):
         """RGB values should be floats in 0-1 range."""
-        from central_hub.core.colors import get_merged_theme_colors
+        from clarvis.core.colors import get_merged_theme_colors
 
         result = get_merged_theme_colors("modern")
         for status, rgb in result.items():
@@ -306,7 +306,7 @@ class TestGetMergedThemeColors:
 
     def test_invalid_theme_falls_back_to_default(self):
         """Invalid theme name should fall back to DEFAULT_THEME."""
-        from central_hub.core.colors import get_merged_theme_colors
+        from clarvis.core.colors import get_merged_theme_colors
 
         result = get_merged_theme_colors("nonexistent_theme")
         expected = get_merged_theme_colors(DEFAULT_THEME)
@@ -314,7 +314,7 @@ class TestGetMergedThemeColors:
 
     def test_overrides_applied(self):
         """Overrides should replace base theme colors."""
-        from central_hub.core.colors import get_merged_theme_colors
+        from clarvis.core.colors import get_merged_theme_colors
 
         overrides = {
             "thinking": [0.5, 0.5, 0.5],
@@ -330,7 +330,7 @@ class TestGetMergedThemeColors:
 
     def test_invalid_override_ignored(self):
         """Overrides with wrong length should be ignored."""
-        from central_hub.core.colors import get_merged_theme_colors
+        from clarvis.core.colors import get_merged_theme_colors
 
         overrides = {
             "thinking": [0.5, 0.5],  # Only 2 values
@@ -343,7 +343,7 @@ class TestGetMergedThemeColors:
 
     def test_none_overrides_same_as_empty(self):
         """None overrides should behave same as empty dict."""
-        from central_hub.core.colors import get_merged_theme_colors
+        from clarvis.core.colors import get_merged_theme_colors
 
         result_none = get_merged_theme_colors("synthwave", None)
         result_empty = get_merged_theme_colors("synthwave", {})
