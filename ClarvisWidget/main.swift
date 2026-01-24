@@ -227,29 +227,17 @@ class AnsiParser {
         var currentColor = defaultColor
         var i = input.startIndex
 
-        // Pre-calculate paragraph style for consistent line height
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = 0
-        paragraphStyle.paragraphSpacing = 0
-        paragraphStyle.lineHeightMultiple = 1.0
-
         while i < input.endIndex {
-            // Check for escape sequence (ESC character = 0x1B)
-            if input[i] == "\u{1b}" {
+            // Check for escape sequence
+            if input[i] == "\u{1b}" || input[i] == "\u{001b}" {
                 let nextIdx = input.index(after: i)
                 if nextIdx < input.endIndex && input[nextIdx] == "[" {
                     // Find the end of the escape sequence (ends with 'm')
                     var endIdx = input.index(after: nextIdx)
-                    var foundEnd = false
-                    while endIdx < input.endIndex {
-                        if input[endIdx] == "m" {
-                            foundEnd = true
-                            break
-                        }
+                    while endIdx < input.endIndex && input[endIdx] != "m" {
                         endIdx = input.index(after: endIdx)
                     }
-
-                    if foundEnd {
+                    if endIdx < input.endIndex {
                         // Parse the escape code
                         let codeStart = input.index(after: nextIdx)
                         let codeStr = String(input[codeStart..<endIdx])
@@ -259,31 +247,21 @@ class AnsiParser {
                             currentColor = defaultColor
                         } else if codeStr.hasPrefix("38;5;") {
                             // 256 color foreground
-                            if let colorCode = Int(codeStr.dropFirst(5)) {
-                                currentColor = ansi256ToColor(colorCode)
-                            }
+                            let colorCode = Int(codeStr.dropFirst(5)) ?? 7
+                            currentColor = ansi256ToColor(colorCode)
                         }
 
                         i = input.index(after: endIdx)
                         continue
-                    } else {
-                        // Incomplete escape sequence - skip the ESC character entirely
-                        i = input.index(after: i)
-                        continue
                     }
-                } else {
-                    // ESC not followed by '[' - skip ESC character
-                    i = input.index(after: i)
-                    continue
                 }
             }
 
-            // Regular character - add with current color and consistent styling
+            // Regular character - add with current color
             let char = String(input[i])
             let attrs: [NSAttributedString.Key: Any] = [
                 .foregroundColor: currentColor,
-                .font: font,
-                .paragraphStyle: paragraphStyle
+                .font: font
             ]
             result.append(NSAttributedString(string: char, attributes: attrs))
             i = input.index(after: i)

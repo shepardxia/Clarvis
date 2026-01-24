@@ -875,7 +875,12 @@ class FrameRenderer:
         self.weather.render(self.weather_layer, color=COLORS["white"])
 
     def _render_avatar(self):
-        """Render avatar layer."""
+        """Render avatar layer.
+
+        Uses non-breaking space (U+00A0) for internal padding instead of regular space.
+        This makes the avatar fully opaque - particles can never show through.
+        Regular space (U+0020) is treated as transparent in compositing.
+        """
         self.avatar_layer.clear()
 
         eyes, mouth = self.current_keyframes[self.keyframe_index]
@@ -889,12 +894,16 @@ class FrameRenderer:
         # Use color 0 = default/theme color (lets Swift use its theme color for border sync)
         color = 0
 
-        # Build face lines with rounded corners
+        # Use non-breaking space (NBSP) for internal padding - visually identical to space
+        # but won't be treated as transparent during compositing (SPACE = ord(' ') = 32)
+        nbsp = '\u00a0'  # Non-breaking space, ord = 160
+
+        # Build face lines with rounded corners, using NBSP for padding
         lines = [
             f"╭{border * 9}╮",
-            f"│{' ' * l}{eye_char}{' ' * g}{eye_char}{' ' * r}│",
-            f"│    {mouth_char}    │",
-            f"│{substrate}│",
+            f"│{nbsp * l}{eye_char}{nbsp * g}{eye_char}{nbsp * r}│",
+            f"│{nbsp * 4}{mouth_char}{nbsp * 4}│",
+            f"│{substrate.replace(' ', nbsp)}│",
             f"╰{border * 9}╯",
         ]
 
