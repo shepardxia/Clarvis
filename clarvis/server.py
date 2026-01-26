@@ -4,7 +4,7 @@
 from mcp.server.fastmcp import FastMCP
 
 from .core.ipc import get_daemon_client, DaemonClient
-from .services import get_controller, get_session_manager
+from .services import get_session_manager
 
 mcp = FastMCP("clarvis")
 
@@ -259,106 +259,6 @@ async def get_whimsy_verb(context: str = None) -> str:
         return f"Error: {e}"
 
 
-# --- Sonos Tools ---
-
-@mcp.tool()
-async def sonos_discover() -> list[str]:
-    """
-    Discover all Sonos speakers on the network.
-
-    Returns:
-        List of speaker names
-    """
-    controller = get_controller()
-    names = controller.discover()
-    return names if names else ["No Sonos speakers found"]
-
-
-@mcp.tool()
-async def sonos_now_playing(speaker: str = None) -> dict:
-    """
-    Get current track info from a Sonos speaker.
-
-    Args:
-        speaker: Speaker name (default: first found)
-
-    Returns:
-        Track info (title, artist, album, position, duration)
-    """
-    return get_controller().now_playing(speaker)
-
-
-@mcp.tool()
-async def sonos_play(speaker: str = None) -> str:
-    """
-    Start playback on a Sonos speaker.
-
-    Args:
-        speaker: Speaker name (default: first found)
-    """
-    return get_controller().play(speaker)
-
-
-@mcp.tool()
-async def sonos_pause(speaker: str = None) -> str:
-    """
-    Pause playback on a Sonos speaker.
-
-    Args:
-        speaker: Speaker name (default: first found)
-    """
-    return get_controller().pause(speaker)
-
-
-@mcp.tool()
-async def sonos_next(speaker: str = None) -> str:
-    """
-    Skip to next track on a Sonos speaker.
-
-    Args:
-        speaker: Speaker name (default: first found)
-    """
-    return get_controller().next_track(speaker)
-
-
-@mcp.tool()
-async def sonos_previous(speaker: str = None) -> str:
-    """
-    Go to previous track on a Sonos speaker.
-
-    Args:
-        speaker: Speaker name (default: first found)
-    """
-    return get_controller().previous_track(speaker)
-
-
-@mcp.tool()
-async def sonos_volume(speaker: str = None, level: int = None) -> str:
-    """
-    Get or set volume on a Sonos speaker.
-
-    Args:
-        speaker: Speaker name (default: first found)
-        level: Volume level 0-100 (omit to get current)
-
-    Returns:
-        Current or new volume level
-    """
-    return get_controller().volume(speaker, level)
-
-
-@mcp.tool()
-async def sonos_mute(speaker: str = None, mute: bool = None) -> str:
-    """
-    Get or set mute state on a Sonos speaker.
-
-    Args:
-        speaker: Speaker name (default: first found)
-        mute: True to mute, False to unmute (omit to toggle)
-    """
-    return get_controller().mute(speaker, mute)
-
-
 # --- Vinyl Tools (Clautify) ---
 
 # Cached Clautify instances by speaker name
@@ -382,7 +282,7 @@ def _clear_vinyl_cache():
 
 
 @mcp.tool()
-async def vinyl_search(query: str, category: str = "tracks", limit: int = 10) -> list[dict]:
+async def search(query: str, category: str = "tracks", limit: int = 10) -> list[dict]:
     """
     Search Spotify for music. Results are stored for queueing by index.
 
@@ -393,7 +293,7 @@ async def vinyl_search(query: str, category: str = "tracks", limit: int = 10) ->
 
     Returns:
         List of results with index, id, title, artist, album, duration.
-        Use the index with vinyl_queue to add tracks to the queue.
+        Use the index with queue to add tracks to the queue.
     """
     try:
         vinyl = _get_vinyl()
@@ -403,7 +303,7 @@ async def vinyl_search(query: str, category: str = "tracks", limit: int = 10) ->
 
 
 @mcp.tool()
-async def vinyl_search_and_play(
+async def search_and_play(
     query: str,
     category: str = "tracks",
     index: int = 0,
@@ -435,7 +335,7 @@ async def vinyl_search_and_play(
 
 
 @mcp.tool()
-async def vinyl_queue(
+async def queue(
     indices: list[int],
     speaker: str = None,
     position: int = None,
@@ -446,7 +346,7 @@ async def vinyl_queue(
     Add tracks to the Sonos queue by index from last search results.
 
     Args:
-        indices: List of indices from the last vinyl_search results (0-based)
+        indices: List of indices from the last search results (0-based)
         speaker: Speaker name (default: first found)
         position: Queue position to insert at (default: end)
         play: Start playback after queueing
@@ -463,7 +363,7 @@ async def vinyl_queue(
 
 
 @mcp.tool()
-async def vinyl_play_album(
+async def play_album(
     index: int,
     start_at: str = None,
     clear: bool = True,
@@ -473,7 +373,7 @@ async def vinyl_play_album(
     Queue an album and start playing, optionally at a specific track.
 
     Args:
-        index: Index of album from last vinyl_search results
+        index: Index of album from last search results
         start_at: Track to start at - partial track title to match (e.g. "野猿")
         clear: Clear queue before adding (default: True)
         speaker: Speaker name (default: first found)
@@ -489,7 +389,7 @@ async def vinyl_play_album(
 
 
 @mcp.tool()
-async def vinyl_now_playing(speaker: str = None) -> dict:
+async def now_playing(speaker: str = None) -> dict:
     """
     Get detailed current track info from Sonos.
 
@@ -507,7 +407,7 @@ async def vinyl_now_playing(speaker: str = None) -> dict:
 
 
 @mcp.tool()
-async def vinyl_play(speaker: str = None) -> dict:
+async def play(speaker: str = None) -> dict:
     """
     Start or resume playback.
 
@@ -525,7 +425,7 @@ async def vinyl_play(speaker: str = None) -> dict:
 
 
 @mcp.tool()
-async def vinyl_pause(speaker: str = None) -> dict:
+async def pause(speaker: str = None) -> dict:
     """
     Pause playback.
 
@@ -543,7 +443,7 @@ async def vinyl_pause(speaker: str = None) -> dict:
 
 
 @mcp.tool()
-async def vinyl_skip(speaker: str = None, count: int = 1) -> dict:
+async def skip(speaker: str = None, count: int = 1) -> dict:
     """
     Skip to next track(s).
 
@@ -562,7 +462,7 @@ async def vinyl_skip(speaker: str = None, count: int = 1) -> dict:
 
 
 @mcp.tool()
-async def vinyl_previous(speaker: str = None) -> dict:
+async def previous(speaker: str = None) -> dict:
     """
     Go to previous track.
 
@@ -580,7 +480,7 @@ async def vinyl_previous(speaker: str = None) -> dict:
 
 
 @mcp.tool()
-async def vinyl_volume(speaker: str = None, level: int = None) -> dict:
+async def volume(speaker: str = None, level: int = None) -> dict:
     """
     Get or set volume.
 
@@ -599,7 +499,52 @@ async def vinyl_volume(speaker: str = None, level: int = None) -> dict:
 
 
 @mcp.tool()
-async def vinyl_get_queue(speaker: str = None, limit: int = 20) -> list[dict]:
+async def mute(speaker: str = None, mute: bool = None) -> dict:
+    """
+    Get or set mute state.
+
+    Args:
+        speaker: Speaker name (default: first found)
+        mute: True to mute, False to unmute (omit to toggle)
+
+    Returns:
+        Dict with muted state
+    """
+    try:
+        from clautify.speakers import get_coordinator
+        coord = get_coordinator(speaker)
+        if mute is None:
+            # Toggle
+            coord.mute = not coord.mute
+        else:
+            coord.mute = mute
+        return {"muted": coord.mute, "speaker": coord.player_name}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def refresh_speakers() -> dict:
+    """
+    Re-discover Sonos speakers on the network.
+
+    Use this if speakers have been added, removed, or changed while
+    the daemon is running.
+
+    Returns:
+        Dict with list of discovered speaker names
+    """
+    try:
+        from clautify.speakers import discover_speakers
+        _clear_vinyl_cache()
+        speakers = discover_speakers(force_refresh=True)
+        return {"speakers": speakers, "refreshed": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_queue(speaker: str = None, limit: int = 20) -> list[dict]:
     """
     Get current queue contents.
 
@@ -618,7 +563,7 @@ async def vinyl_get_queue(speaker: str = None, limit: int = 20) -> list[dict]:
 
 
 @mcp.tool()
-async def vinyl_clear_queue(speaker: str = None) -> dict:
+async def clear_queue(speaker: str = None) -> dict:
     """
     Clear the queue.
 
@@ -636,7 +581,7 @@ async def vinyl_clear_queue(speaker: str = None) -> dict:
 
 
 @mcp.tool()
-async def vinyl_shuffle(speaker: str = None, enabled: bool = None) -> dict:
+async def shuffle(speaker: str = None, enabled: bool = None) -> dict:
     """
     Get or set shuffle mode.
 
@@ -655,7 +600,7 @@ async def vinyl_shuffle(speaker: str = None, enabled: bool = None) -> dict:
 
 
 @mcp.tool()
-async def vinyl_repeat(speaker: str = None, mode: str = None) -> dict:
+async def repeat(speaker: str = None, mode: str = None) -> dict:
     """
     Get or set repeat mode.
 
@@ -674,7 +619,7 @@ async def vinyl_repeat(speaker: str = None, mode: str = None) -> dict:
 
 
 @mcp.tool()
-async def vinyl_spotify_playlists(limit: int = 50) -> list[dict]:
+async def spotify_playlists(limit: int = 50) -> list[dict]:
     """
     Get user's Spotify playlists.
 
@@ -692,7 +637,7 @@ async def vinyl_spotify_playlists(limit: int = 50) -> list[dict]:
 
 
 @mcp.tool()
-async def vinyl_spotify_playlist_tracks(playlist_id: str, limit: int = 100) -> list[dict]:
+async def spotify_playlist_tracks(playlist_id: str, limit: int = 100) -> list[dict]:
     """
     Get tracks from a Spotify playlist.
 
@@ -711,7 +656,7 @@ async def vinyl_spotify_playlist_tracks(playlist_id: str, limit: int = 100) -> l
 
 
 @mcp.tool()
-async def vinyl_sonos_playlists() -> list[dict]:
+async def sonos_playlists() -> list[dict]:
     """
     Get saved Sonos playlists.
 
@@ -726,7 +671,7 @@ async def vinyl_sonos_playlists() -> list[dict]:
 
 
 @mcp.tool()
-async def vinyl_check_auth() -> dict:
+async def check_auth() -> dict:
     """
     Check Spotify authentication status.
 
@@ -742,7 +687,7 @@ async def vinyl_check_auth() -> dict:
 
 
 @mcp.tool()
-async def vinyl_batch(operations: list[dict], speaker: str = None) -> list[dict]:
+async def batch(operations: list[dict], speaker: str = None) -> list[dict]:
     """
     Execute multiple vinyl operations in one call for speed.
 

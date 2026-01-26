@@ -28,6 +28,7 @@ from .services.whimsy_verb import generate_whimsy_verb
 from .widget.renderer import FrameRenderer
 from .widget.config import get_config, watch_config, WidgetConfig, restart_daemon_and_widget
 from .widget.socket_server import WidgetSocketServer, get_socket_server
+from .core.colors import StatusColors
 
 
 class PidLock:
@@ -689,10 +690,6 @@ class CentralHubDaemon:
             if config.testing.enabled:
                 display_status = config.test_status
                 context_percent = config.test_context_percent
-                display_color = {
-                    "idle": "gray", "thinking": "yellow", "running": "green",
-                    "awaiting": "blue", "resting": "gray"
-                }.get(display_status, "gray")
 
                 # Apply test weather if different from current
                 self.renderer.set_status(display_status)
@@ -705,7 +702,10 @@ class CentralHubDaemon:
                 status = self.state.get("status")
                 context_percent = status.get("context_percent", 0) if status else 0
                 display_status = status.get("status", "idle") if status else "idle"
-                display_color = status.get("color", "gray") if status else "gray"
+
+            # Get RGB color from theme
+            color_def = StatusColors.get(display_status)
+            display_color = list(color_def.rgb)  # [r, g, b] as floats 0.0-1.0
 
             frame = self.renderer.render_colored(context_percent, self._current_whimsy_verb)
             border = self.border_styles.get(display_status, {"width": 1, "pulse": False})

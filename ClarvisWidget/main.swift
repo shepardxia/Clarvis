@@ -43,83 +43,6 @@ struct WidgetConfig {
     var fontName: String = "Courier"
     var borderWidth: CGFloat = 2
     var pulseSpeed: Double = 0.1
-    var statusColors: [String: NSColor] = [:]
-
-    // Theme color definitions (base themes)
-    static let themes: [String: [String: RGBArray]] = [
-        "modern": [
-            "idle": [0.53, 0.53, 0.53],
-            "resting": [0.4, 0.4, 0.45],
-            "thinking": [1.0, 0.87, 0.0],
-            "running": [0.0, 1.0, 0.67],
-            "executing": [0.0, 1.0, 0.67],
-            "awaiting": [0.4, 0.5, 1.0],
-            "reading": [0.4, 0.5, 1.0],
-            "writing": [0.4, 0.5, 1.0],
-            "reviewing": [1.0, 0.0, 1.0],
-            "offline": [0.53, 0.53, 0.53],
-        ],
-        "crt-amber": [
-            "idle": [0.6, 0.4, 0.0],
-            "resting": [0.5, 0.3, 0.0],
-            "thinking": [1.0, 0.7, 0.0],
-            "running": [1.0, 0.8, 0.2],
-            "executing": [1.0, 0.8, 0.2],
-            "awaiting": [0.8, 0.6, 0.1],
-            "reading": [0.8, 0.6, 0.1],
-            "writing": [1.0, 0.7, 0.0],
-            "reviewing": [1.0, 0.8, 0.2],
-            "offline": [0.4, 0.25, 0.0],
-        ],
-        "crt-green": [
-            "idle": [0.0, 0.5, 0.0],
-            "resting": [0.0, 0.4, 0.0],
-            "thinking": [0.0, 1.0, 0.0],
-            "running": [0.5, 1.0, 0.2],
-            "executing": [0.5, 1.0, 0.2],
-            "awaiting": [0.0, 0.7, 0.2],
-            "reading": [0.0, 0.7, 0.2],
-            "writing": [0.0, 1.0, 0.0],
-            "reviewing": [0.5, 1.0, 0.2],
-            "offline": [0.0, 0.3, 0.0],
-        ],
-        "synthwave": [
-            "idle": [0.4, 0.2, 0.6],
-            "resting": [0.3, 0.15, 0.5],
-            "thinking": [1.0, 0.2, 0.6],
-            "running": [0.0, 1.0, 1.0],
-            "executing": [0.0, 1.0, 1.0],
-            "awaiting": [0.2, 0.4, 1.0],
-            "reading": [0.2, 0.4, 1.0],
-            "writing": [1.0, 0.4, 0.8],
-            "reviewing": [1.0, 0.0, 1.0],
-            "offline": [0.3, 0.15, 0.4],
-        ],
-        "c64": [
-            "idle": [0.7, 0.7, 0.7],
-            "resting": [0.5, 0.5, 0.5],
-            "thinking": [0.6, 0.7, 1.0],
-            "running": [0.4, 0.8, 0.4],
-            "executing": [0.4, 0.8, 0.4],
-            "awaiting": [0.6, 0.5, 0.3],
-            "reading": [0.6, 0.5, 0.3],
-            "writing": [0.6, 0.5, 0.8],
-            "reviewing": [0.8, 0.5, 0.5],
-            "offline": [0.4, 0.4, 0.4],
-        ],
-        "matrix": [
-            "idle": [0.0, 0.4, 0.0],
-            "resting": [0.0, 0.3, 0.0],
-            "thinking": [0.0, 1.0, 0.0],
-            "running": [0.6, 1.0, 0.0],
-            "executing": [0.6, 1.0, 0.0],
-            "awaiting": [0.0, 0.8, 0.4],
-            "reading": [0.0, 0.8, 0.4],
-            "writing": [0.0, 1.0, 0.0],
-            "reviewing": [0.7, 1.0, 0.3],
-            "offline": [0.0, 0.25, 0.0],
-        ],
-    ]
 
     static func load() -> WidgetConfig {
         let binaryPath = CommandLine.arguments[0]
@@ -128,10 +51,8 @@ struct WidgetConfig {
 
         guard let data = FileManager.default.contents(atPath: configPath),
               let file = try? JSONDecoder().decode(WidgetConfigFile.self, from: data) else {
-            return WidgetConfig(statusColors: getThemeColors("modern", overrides: nil))
+            return WidgetConfig()
         }
-
-        let colors = getThemeColors(file.theme.base, overrides: file.theme.overrides)
 
         return WidgetConfig(
             windowWidth: file.display.window_width,
@@ -141,25 +62,8 @@ struct WidgetConfig {
             fontSize: file.display.font_size,
             fontName: file.display.font_name,
             borderWidth: file.display.border_width,
-            pulseSpeed: file.display.pulse_speed,
-            statusColors: colors
+            pulseSpeed: file.display.pulse_speed
         )
-    }
-
-    static func getThemeColors(_ themeName: String, overrides: [String: RGBArray]?) -> [String: NSColor] {
-        let baseTheme = themes[themeName] ?? themes["modern"]!
-        var colors: [String: NSColor] = [:]
-
-        for (status, rgb) in baseTheme {
-            // Check for override first
-            if let overrideRGB = overrides?[status], let color = overrideRGB.toNSColor() {
-                colors[status] = color
-            } else if let color = rgb.toNSColor() {
-                colors[status] = color
-            }
-        }
-
-        return colors
     }
 }
 
@@ -177,7 +81,6 @@ struct Config {
     static var fontName: String { widgetConfig.fontName }
     static var borderWidth: CGFloat { widgetConfig.borderWidth }
     static var pulseSpeed: Double { widgetConfig.pulseSpeed }
-    static var statusColors: [String: NSColor] { widgetConfig.statusColors }
 }
 
 // MARK: - ANSI Color Parsing
@@ -227,6 +130,14 @@ class AnsiParser {
         var currentColor = defaultColor
         var i = input.startIndex
 
+        // Fixed paragraph style to prevent line height variations and wrapping
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 0
+        paragraphStyle.paragraphSpacing = 0
+        paragraphStyle.minimumLineHeight = font.pointSize * 1.2
+        paragraphStyle.maximumLineHeight = font.pointSize * 1.2
+        paragraphStyle.lineBreakMode = .byClipping
+
         while i < input.endIndex {
             // Check for escape sequence
             if input[i] == "\u{1b}" || input[i] == "\u{001b}" {
@@ -257,11 +168,12 @@ class AnsiParser {
                 }
             }
 
-            // Regular character - add with current color
+            // Regular character - add with current color and fixed line height
             let char = String(input[i])
             let attrs: [NSAttributedString.Key: Any] = [
                 .foregroundColor: currentColor,
-                .font: font
+                .font: font,
+                .paragraphStyle: paragraphStyle
             ]
             result.append(NSAttributedString(string: char, attributes: attrs))
             i = input.index(after: i)
@@ -276,11 +188,18 @@ class AnsiParser {
 struct WidgetData: Codable {
     let status: String?
     let frame: String?
-    let color: String?
+    let color: [Double]?  // RGB array [r, g, b] from daemon
     let context_percent: Double?
     let timestamp: Double?
     let border_width: Int?
     let border_pulse: Bool?
+
+    var nsColor: NSColor {
+        guard let rgb = color, rgb.count == 3 else {
+            return NSColor.gray
+        }
+        return NSColor(red: CGFloat(rgb[0]), green: CGFloat(rgb[1]), blue: CGFloat(rgb[2]), alpha: 1.0)
+    }
 }
 
 // MARK: - Socket Client
@@ -398,7 +317,7 @@ class SocketClient {
 // MARK: - Pulsing Border View
 
 class PulsingBorderView: NSView {
-    var borderColor: NSColor = Config.statusColors["idle"]!
+    var borderColor: NSColor = NSColor.gray
     var pulsePhase: Double = 0
 
     override func draw(_ dirtyRect: NSRect) {
@@ -479,7 +398,7 @@ class WidgetWindowController: NSWindowController {
         textField.isBordered = false
         textField.isSelectable = false
         textField.backgroundColor = .clear
-        textField.textColor = Config.statusColors["idle"]
+        textField.textColor = .gray
         textField.font = NSFont(name: Config.fontName, size: Config.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
         textField.alignment = .left
@@ -539,17 +458,18 @@ class WidgetWindowController: NSWindowController {
     }
 
     func updateDisplay(_ data: WidgetData) {
-        if let status = data.status, status != currentStatus {
+        // Get color from daemon (RGB array)
+        let color = data.nsColor
+        borderView.borderColor = color
+
+        if let status = data.status {
             currentStatus = status
-            let color = Config.statusColors[status] ?? Config.statusColors["idle"]!
-            borderView.borderColor = color
         }
 
         if let frame = data.frame {
-            let statusColor = Config.statusColors[currentStatus] ?? Config.statusColors["idle"]!
             let font = NSFont(name: Config.fontName, size: Config.fontSize)
                 ?? NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
-            textField.attributedStringValue = AnsiParser.parse(frame, defaultColor: statusColor, font: font)
+            textField.attributedStringValue = AnsiParser.parse(frame, defaultColor: color, font: font)
         }
     }
 
