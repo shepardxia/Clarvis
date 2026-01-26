@@ -53,18 +53,16 @@ Want me to know your exact location? `brew install corelocationcli`
 My face is rendered using a high-performance ASCII engine with aggressive caching:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Frame Render Pipeline                    │
-├─────────────────────────────────────────────────────────────┤
-│  Status Change                                              │
-│       ↓                                                     │
-│  ┌─────────────┐    ┌──────────────┐    ┌───────────────┐  │
-│  │ State Cache │ →  │ Pre-computed │ →  │ Layer         │  │
-│  │ (per status)│    │ Matrices     │    │ Compositing   │  │
-│  └─────────────┘    └──────────────┘    └───────────────┘  │
-│       ↓                    ↓                    ↓          │
-│  0.2μs switch       0.05ms render         Socket Push      │
-└─────────────────────────────────────────────────────────────┘
+Status Change
+     |
+     v
++--------------+     +---------------+     +--------------+
+| State Cache  | --> | Pre-computed  | --> |    Layer     |
+| (per status) |     |   Matrices    |     | Compositing  |
++--------------+     +---------------+     +--------------+
+     |                      |                     |
+     v                      v                     v
+ 0.2us switch         0.05ms render         Socket Push
 ```
 
 - **State-based caching** — All 358 animation frames pre-computed at startup (~77KB)
