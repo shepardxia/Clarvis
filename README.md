@@ -2,7 +2,7 @@
 
 <pre>
  ██████╗  ██╗       █████╗  ██████╗  ██╗   ██╗ ██╗ ███████╗
-██╔════╝  ██║      ██╔══██╗ ██╔══██╗ ██║   ██║ ██║ ██╔════╝
+██╔════╝  ██║      ██╔══██╗ ██╔══██╝ ██║   ██║ ██║ ██╔════╝
 ██║       ██║      ███████║ ██████╔╝ ██║   ██║ ██║ ███████╗
 ██║       ██║      ██╔══██║ ██╔══██╗ ╚██╗ ██╔╝ ██║ ╚════██║
 ╚██████╗  ███████╗ ██║  ██║ ██║  ██║  ╚████╔╝  ██║ ███████║
@@ -46,30 +46,117 @@ Then restart Claude Code and launch me:
 
 Want me to know your exact location? `brew install corelocationcli`
 
-## How I Draw Myself
+## Architecture
 
-My face is rendered using a vectorized ASCII engine — think of it like a tiny 2D graphics system, but for text:
+### Rendering Pipeline
 
-- **Declarative primitives** — I'm built from Canvas, Brush, and Sprite objects, not character-by-character
-- **Layer compositing** — Weather particles, my face, and the context bar live on separate layers that merge together
-- **Real-time updates** — Status changes push instantly to the widget via Unix socket, no polling
-- **Status-driven animation** — My expressions and colors shift based on what Claude is doing
+My face is rendered using a high-performance ASCII engine with aggressive caching:
 
-Each frame renders in microseconds. The daemon pushes frames, the Swift widget displays them.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Frame Render Pipeline                    │
+├─────────────────────────────────────────────────────────────┤
+│  Status Change                                              │
+│       ↓                                                     │
+│  ┌─────────────┐    ┌──────────────┐    ┌───────────────┐  │
+│  │ State Cache │ →  │ Pre-computed │ →  │ Layer         │  │
+│  │ (per status)│    │ Matrices     │    │ Compositing   │  │
+│  └─────────────┘    └──────────────┘    └───────────────┘  │
+│       ↓                    ↓                    ↓          │
+│  0.2μs switch       0.05ms render         Socket Push      │
+└─────────────────────────────────────────────────────────────┘
+```
 
-## How I'm Built
+- **State-based caching** — All 358 animation frames pre-computed at startup (~77KB)
+- **Instant status switches** — Cached matrices mean 0.2μs state transitions
+- **Layer compositing** — Weather, face, and progress bar on separate layers
+- **Socket streaming** — Frames push to widget via Unix socket, no polling
+
+### Animation System
+
+Animations are defined in declarative YAML with composable sequences:
+
+```yaml
+# clarvis/elements/animations/idle.yaml
+sequences:
+  blink:
+    - { eyes: "half", mouth: "smile" }
+    - { eyes: "closed", mouth: "smile" }
+    - { eyes: "half", mouth: "smile" }
+  rest:
+    - happy    # ← preset expands to full frame
+    - happy
+
+frames:
+  - $rest      # ← sequence reference
+  - $blink
+  - $rest
+```
+
+**Shorthand system** — Write `eyes: "sparkle"` instead of `eyes: "✧"`. See [Animation Design Guide](clarvis/elements/animations/README.md).
+
+### Weather Particles
+
+Weather uses Numba JIT-compiled batch processing:
+
+```python
+@njit(cache=True)
+def _tick_physics_batch(p_x, p_y, p_vx, p_vy, ...):
+    # All particles updated in single compiled call
+    for i in range(n):
+        p_x[i] += p_vx[i]
+        p_y[i] += p_vy[i]
+```
+
+| Particles | Physics | Render |
+|-----------|---------|--------|
+| 50 | 0.002ms | 0.02ms |
+| 100 | 0.002ms | 0.03ms |
+
+### Performance Summary
+
+| Component | Time | Notes |
+|-----------|------|-------|
+| Status switch | 0.2μs | Cached matrix swap |
+| Full render | 0.06ms | Pre-computed frames |
+| Weather tick | 0.002ms | JIT-compiled batch |
+| **Total frame** | **~0.1ms** | vs 333ms budget @ 3 FPS |
+
+**CPU usage: ~0.03%** for rendering. The daemon spends most time sleeping.
+
+### Tool-Aware Animations
+
+The daemon maps Claude's tool calls to semantic states:
+
+| Tools | Status | Animation |
+|-------|--------|-----------|
+| Read, Grep, Glob | `reading` | Eyes scan left/right |
+| Write, Edit | `writing` | Sparkle borders, talking |
+| Bash | `executing` | Focused dots, arrow pulse |
+| Task | `thinking` | Eyes drift, pondering |
+| AskUserQuestion | `awaiting` | Curious, watching |
+
+## Project Structure
 
 ```
 clarvis/
-├── server.py          # MCP server entry point
-├── core/              # Hub data, cache, state management
-├── services/          # Weather, location, Sonos, thinking feed
-└── widget/            # Vectorized ASCII renderer, socket server
+├── server.py              # MCP server entry point
+├── daemon.py              # Central hub daemon
+├── core/                  # State management, caching
+├── services/              # Weather, location, Sonos
+├── archetypes/            # Face, weather, progress renderers
+│   ├── face.py            # State-cached face animations
+│   ├── weather.py         # JIT-compiled particle system
+│   └── progress.py        # Percentage-cached progress bar
+├── elements/              # Declarative YAML definitions
+│   └── animations/        # Status animations + shorthands
+└── widget/                # Renderer, socket server
 ```
 
 ## Credits
 
-My thinking feed was adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
+- Thinking feed adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
+- Token usage API discovery via [codelynx.dev](https://codelynx.dev/posts/claude-code-usage-limits-statusline)
 
 ## License
 

@@ -400,6 +400,41 @@ class WeatherArchetype(Archetype):
         self._render_out_shape = np.zeros(max_output, dtype=np.int32)
         self._render_out_cell = np.zeros(max_output, dtype=np.int32)
 
+    def prewarm_shapes(self) -> dict[str, int]:
+        """Pre-build shape arrays for all weather types.
+        
+        Weather particles are dynamic (positions change each tick),
+        but shape data can be pre-computed for instant weather switching.
+        
+        Returns stats dict with weather type -> particle count.
+        """
+        stats = {}
+        original_type = self.weather_type
+        
+        # Get all weather types
+        weather_names = self.registry.list_names('weather')
+        
+        for name in weather_names:
+            self.weather_type = name
+            self._rebuild_shape_cache()
+            stats[name] = len(self._shape_cache)
+        
+        # Restore original state
+        self.weather_type = original_type
+        if original_type:
+            self._rebuild_shape_cache()
+        
+        return stats
+
+    def cache_stats(self) -> dict:
+        """Return shape cache statistics."""
+        return {
+            'current_weather': self.weather_type,
+            'cached_shapes': len(self._shape_cache),
+            'active_particles': self.p_count,
+            'ambient_clouds': len(self.ambient_clouds)
+        }
+
     def set_exclusion_zones(self, zones: list[BoundingBox]) -> None:
         """Set areas where particles should not render."""
         self.exclusion_zones = zones

@@ -26,21 +26,29 @@ class SessionTracker:
             sessions[session_id] = {
                 "status_history": [],
                 "context_history": [],
+                "tool_history": [],
                 "last_status": "idle",
                 "last_context": 0.0,
+                "last_tool": "",
                 "last_seen": time.time(),
             }
             self.state.update("sessions", sessions)
+        # Ensure tool_history exists for legacy sessions
+        if "tool_history" not in sessions[session_id]:
+            sessions[session_id]["tool_history"] = []
+            sessions[session_id]["last_tool"] = ""
         return sessions[session_id]
 
-    def update(self, session_id: str, status: str, context: float) -> None:
-        """Update session with new status and context."""
+    def update(self, session_id: str, status: str, context: float, tool_name: str = "") -> None:
+        """Update session with new status, context, and tool info."""
         sessions = self.state.get("sessions")
         session = sessions.get(session_id) or {
             "status_history": [],
             "context_history": [],
+            "tool_history": [],
             "last_status": "idle",
             "last_context": 0.0,
+            "last_tool": "",
         }
 
         session["last_seen"] = time.time()
@@ -66,6 +74,15 @@ class SessionTracker:
                 ctx_history.pop(0)
             session["context_history"] = ctx_history
             session["last_context"] = context
+
+        # Add tool if provided
+        if tool_name:
+            tool_history = session.get("tool_history", [])
+            tool_history.append(tool_name)
+            if len(tool_history) > self.HISTORY_SIZE:
+                tool_history.pop(0)
+            session["tool_history"] = tool_history
+            session["last_tool"] = tool_name
 
         sessions[session_id] = session
         self.state.update("sessions", sessions)

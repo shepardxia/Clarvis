@@ -44,6 +44,7 @@ class ColorDef:
 
 # Each theme maps status names to ColorDef instances
 # Statuses: idle, resting, thinking, running, executing, awaiting, reading, writing, reviewing, offline
+# Special: eureka, celebration (triggered on task completion)
 
 THEMES: dict[str, dict[str, ColorDef]] = {
     # Modern - current bright colors
@@ -52,12 +53,14 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "resting": ColorDef(8, (0.4, 0.4, 0.45)),
         "thinking": ColorDef(11, (1.0, 0.87, 0.0)),
         "running": ColorDef(10, (0.0, 1.0, 0.67)),
-        "executing": ColorDef(10, (0.0, 1.0, 0.67)),
+        "executing": ColorDef(208, (1.0, 0.5, 0.0)),      # orange - shell commands
         "awaiting": ColorDef(12, (0.4, 0.5, 1.0)),
-        "reading": ColorDef(12, (0.4, 0.5, 1.0)),
-        "writing": ColorDef(12, (0.4, 0.5, 1.0)),
+        "reading": ColorDef(51, (0.0, 0.9, 0.9)),         # cyan - absorbing info
+        "writing": ColorDef(207, (1.0, 0.4, 0.8)),        # pink/magenta - creative
         "reviewing": ColorDef(13, (1.0, 0.0, 1.0)),
         "offline": ColorDef(8, (0.53, 0.53, 0.53)),
+        "eureka": ColorDef(220, (1.0, 0.85, 0.0)),        # bright gold - breakthrough!
+        "celebration": ColorDef(214, (1.0, 0.7, 0.0)),    # warm gold - task complete!
     },
 
     # CRT Amber - classic amber phosphor terminal
@@ -72,6 +75,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "writing": ColorDef(214, (1.0, 0.7, 0.0)),
         "reviewing": ColorDef(220, (1.0, 0.8, 0.2)),
         "offline": ColorDef(94, (0.4, 0.25, 0.0)),    # very dim amber
+        "eureka": ColorDef(226, (1.0, 1.0, 0.3)),     # bright white-amber
+        "celebration": ColorDef(226, (1.0, 1.0, 0.3)),
     },
 
     # CRT Green - classic green phosphor terminal
@@ -86,6 +91,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "writing": ColorDef(46, (0.0, 1.0, 0.0)),
         "reviewing": ColorDef(118, (0.5, 1.0, 0.2)),
         "offline": ColorDef(22, (0.0, 0.3, 0.0)),     # very dim green
+        "eureka": ColorDef(156, (0.7, 1.0, 0.5)),     # bright lime
+        "celebration": ColorDef(156, (0.7, 1.0, 0.5)),
     },
 
     # Synthwave - 80s neon aesthetic
@@ -94,12 +101,14 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "resting": ColorDef(54, (0.3, 0.15, 0.5)),    # dark purple
         "thinking": ColorDef(199, (1.0, 0.2, 0.6)),   # hot pink
         "running": ColorDef(51, (0.0, 1.0, 1.0)),     # electric cyan
-        "executing": ColorDef(51, (0.0, 1.0, 1.0)),
+        "executing": ColorDef(208, (1.0, 0.5, 0.2)),  # neon orange
         "awaiting": ColorDef(33, (0.2, 0.4, 1.0)),    # electric blue
-        "reading": ColorDef(33, (0.2, 0.4, 1.0)),
+        "reading": ColorDef(51, (0.0, 1.0, 1.0)),     # electric cyan
         "writing": ColorDef(207, (1.0, 0.4, 0.8)),    # pink
         "reviewing": ColorDef(201, (1.0, 0.0, 1.0)),  # magenta
         "offline": ColorDef(54, (0.3, 0.15, 0.4)),    # dim purple
+        "eureka": ColorDef(226, (1.0, 1.0, 0.4)),     # neon yellow
+        "celebration": ColorDef(226, (1.0, 1.0, 0.4)),
     },
 
     # C64 - Commodore 64 palette
@@ -108,12 +117,14 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "resting": ColorDef(244, (0.5, 0.5, 0.5)),    # medium gray
         "thinking": ColorDef(117, (0.6, 0.7, 1.0)),   # light blue
         "running": ColorDef(71, (0.4, 0.8, 0.4)),     # green
-        "executing": ColorDef(71, (0.4, 0.8, 0.4)),
+        "executing": ColorDef(208, (0.9, 0.6, 0.2)),  # orange
         "awaiting": ColorDef(137, (0.6, 0.5, 0.3)),   # brown
-        "reading": ColorDef(137, (0.6, 0.5, 0.3)),
+        "reading": ColorDef(80, (0.4, 0.7, 0.7)),     # cyan
         "writing": ColorDef(98, (0.6, 0.5, 0.8)),     # purple
         "reviewing": ColorDef(168, (0.8, 0.5, 0.5)),  # light red
         "offline": ColorDef(240, (0.4, 0.4, 0.4)),    # dark gray
+        "eureka": ColorDef(227, (1.0, 1.0, 0.5)),     # yellow
+        "celebration": ColorDef(227, (1.0, 1.0, 0.5)),
     },
 
     # Matrix - 90s hacker aesthetic
@@ -128,6 +139,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "writing": ColorDef(46, (0.0, 1.0, 0.0)),
         "reviewing": ColorDef(154, (0.7, 1.0, 0.3)),  # yellow-green
         "offline": ColorDef(22, (0.0, 0.25, 0.0)),    # very dark green
+        "eureka": ColorDef(231, (1.0, 1.0, 1.0)),     # white flash
+        "celebration": ColorDef(231, (1.0, 1.0, 1.0)),
     },
 }
 
@@ -201,6 +214,10 @@ class Palette:
     BLUE = ColorDef(12, (0.4, 0.5, 1.0))
     MAGENTA = ColorDef(13, (1.0, 0.0, 1.0))
     RED = ColorDef(9, (1.0, 0.33, 0.33))
+    CYAN = ColorDef(51, (0.0, 0.9, 0.9))
+    ORANGE = ColorDef(208, (1.0, 0.5, 0.0))
+    GOLD = ColorDef(220, (1.0, 0.85, 0.0))
+    PINK = ColorDef(207, (1.0, 0.4, 0.8))
 
 
 # =============================================================================
@@ -232,6 +249,10 @@ ANSI_COLORS = {
     "green": Palette.GREEN.ansi,
     "blue": Palette.BLUE.ansi,
     "magenta": Palette.MAGENTA.ansi,
+    "cyan": Palette.CYAN.ansi,
+    "orange": Palette.ORANGE.ansi,
+    "gold": Palette.GOLD.ansi,
+    "pink": Palette.PINK.ansi,
 }
 
 

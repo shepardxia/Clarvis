@@ -68,6 +68,30 @@ class FrameRenderer:
         # Animation state
         self.current_status = "idle"
         self.current_color = get_status_ansi().get("idle", COLORS["gray"])
+        
+        # Pre-warm all caches for instant runtime performance
+        self.prewarm_caches()
+
+    def prewarm_caches(self) -> dict:
+        """Pre-warm all archetype caches for instant runtime performance.
+        
+        Call at startup to avoid computation during rendering.
+        Returns combined stats from all archetypes.
+        """
+        stats = {
+            'face': self.face.prewarm_cache(),
+            'progress': self.progress.prewarm_cache(),
+            'weather': self.weather.prewarm_shapes(),
+        }
+        return stats
+
+    def cache_stats(self) -> dict:
+        """Return combined cache statistics from all archetypes."""
+        return {
+            'face': self.face.cache_stats(),
+            'progress': self.progress.cache_stats(),
+            'weather': self.weather.cache_stats(),
+        }
 
     def _recalculate_layout(self):
         """Calculate element positions using proportional math."""

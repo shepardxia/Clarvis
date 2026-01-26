@@ -1,7 +1,49 @@
 kind: animation
 name: thinking
+# Deep contemplation - eyes wander thoughtfully
+# Using shorthands for cleaner definitions
+
+sequences:
+  focus:
+    - pondering
+    - pondering
+
+  look_up:
+    - { eyes: "half", mouth: "neutral", border: "medium", corners: "heavy" }
+    - { eyes: "half", mouth: "neutral", border: "medium", corners: "heavy" }
+    - pondering
+
+  look_left:
+    - { eyes: "left", mouth: "neutral", border: "medium", corners: "heavy" }
+    - { eyes: "left", mouth: "neutral", border: "medium", corners: "heavy" }
+    - pondering
+
+  look_right:
+    - { eyes: "right", mouth: "neutral", border: "medium", corners: "heavy" }
+    - { eyes: "right", mouth: "neutral", border: "medium", corners: "heavy" }
+    - pondering
+
+  ponder:
+    - { eyes: "open", mouth: "hmm", border: "medium", corners: "heavy" }
+    - { eyes: "open", mouth: "hmm", border: "thick", corners: "heavy" }
+    - pondering
+
+  getting_somewhere:
+    - { eyes: "open", mouth: "smile", border: "medium", corners: "heavy" }
+    - { eyes: "open", mouth: "smile", border: "thick", corners: "heavy" }
+    - pondering
+
 frames:
-  - { eyes: looking_left, mouth: think }
-  - { eyes: normal, mouth: think }
-  - { eyes: looking_right, mouth: think }
-  - { eyes: normal, mouth: think }
+  - $focus
+  - $look_up
+  - $focus
+  - $look_left
+  - $ponder
+  - $focus
+  - $look_right
+  - $focus
+  - $look_up
+  - $getting_somewhere
+  - $focus
+  - $look_left
+  - $focus

@@ -1,7 +1,11 @@
 kind: animation
 name: reviewing
+# Analyzing carefully - examining with double borders
+
 frames:
-  - { eyes: looking_left, mouth: think }
-  - { eyes: normal, mouth: think }
-  - { eyes: looking_right, mouth: think }
-  - { eyes: normal, mouth: think }
+  - reviewing
+  - examining                                    # examining
+  - { eyes: "wide", mouth: "frown", border: "thick" }   # hmm
+  - reviewing
+  - { eyes: "open", mouth: "smile", border: "thick" }   # found it
+  - reviewing

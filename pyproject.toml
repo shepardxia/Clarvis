@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-clautify = { git = "https://github.com/shepardxia/clautify.git" }
+clautify = { path = "../clautify", editable = true }
 
 [project.scripts]
 clarvis = "clarvis.server:main"

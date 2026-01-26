@@ -1,16 +1,16 @@
-"""Generate whimsical verbs describing Claude's activity using DSPy."""
+"""Generate whimsical verbs describing Claude's activity."""
 
 from __future__ import annotations
 
 import json
 import os
+import random
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-import dspy
+from litellm import completion
 
 # Load .env
 _env = Path(__file__).parent.parent.parent / ".env"
@@ -20,24 +20,45 @@ if _env.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-SYSTEM_PROMPT = """Analyze this message and come up with a single positive, cheerful and delightful verb in gerund form that's related to the message. Only include the word with no other text or punctuation. The word should have the first letter capitalized. Add some whimsy and surprise to entertain the user. Ensure the word is highly relevant to the user's message. Synonyms are welcome, including obscure words. Be careful to avoid words that might look alarming or concerning to the software engineer seeing it as a status notification, such as Connecting, Disconnecting, Retrying, Lagging, Freezing, etc. NEVER use a destructive word, such as Terminating, Killing, Deleting, Destroying, Stopping, Exiting, or similar. NEVER use a word that may be derogatory, offensive, or inappropriate in a non-coding context, such as Penetrating."""
+# Mood hints for variety - one is randomly selected each call
+MOOD_HINTS = [
+    "whimsical Victorian",
+    "cozy cottage-core",
+    "adventurous explorer",
+    "serene zen",
+    "playful cartoon",
+    "mysterious noir",
+    "warm nostalgic",
+    "curious scientist",
+    "dreamy ethereal",
+    "cheerful woodland creature",
+]
+
+SYSTEM_PROMPT = """Generate ONE {mood} gerund for a coding assistant status. Match the context mood. Prefer obscure/delightful words. NEVER: Terminating, Killing, Deleting. Output ONLY the word."""
 
 
 def generate_whimsy_verb(context: str) -> str:
-    """Generate a whimsical gerund verb for the given context."""
-    lm = dspy.LM(
-        model="anthropic/claude-haiku-4-5",
-        api_key=os.environ.get("ANTHROPIC_API_KEY"),
-        max_tokens=20,
+    """Generate a whimsical gerund verb for the given context.
+
+    Uses ~180 tokens total, costs ~$0.0002 per call on Haiku 3.5.
+    """
+    mood = random.choice(MOOD_HINTS)
+    prompt = SYSTEM_PROMPT.format(mood=mood)
+
+    response = completion(
+        model="anthropic/claude-3-5-haiku-20241022",
+        messages=[
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": context[:1200]},
+        ],
+        max_tokens=10,
         temperature=0.9,
     )
 
-    response = lm(messages=[
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": context[:2000]},  # Truncate
-    ])
-
-    return response[0].strip().split()[0].title()
+    verb = response.choices[0].message.content.strip()
+    # Clean: first word, no punctuation, capitalized
+    verb = verb.split()[0].rstrip(".,!?:;")
+    return verb.title()
 
 
 class WhimsyManager:
@@ -45,22 +66,25 @@ class WhimsyManager:
 
     # Configuration
     DEFAULT_COOLDOWN = 5.0  # seconds between generations
-    COST_PER_CALL = 0.00065  # ~614 input + ~5 output tokens on Haiku
+    COST_PER_CALL = 0.0002  # ~180 input + 6 output tokens on Haiku 3.5
+    ALERT_THRESHOLD = 5.0  # Alert every $5 spent
 
     def __init__(
         self,
         stats_file: Path = None,
         cooldown: float = DEFAULT_COOLDOWN,
         context_provider: Callable[[], str] = None,
+        on_cost_alert: Callable[[float, int], None] = None,
     ):
         self._stats_file = stats_file or Path("/tmp/clarvis-whimsy-stats.json")
         self._cooldown = cooldown
         self._context_provider = context_provider
+        self._on_cost_alert = on_cost_alert  # callback(total_cost, call_count)
 
         self._lock = threading.Lock()
         self._last_time: float = 0
         self._current_verb: Optional[str] = None
-        self._call_count, self._total_cost = self._load_stats()
+        self._call_count, self._total_cost, self._last_alerted = self._load_stats()
 
     @property
     def current_verb(self) -> Optional[str]:
@@ -72,12 +96,15 @@ class WhimsyManager:
     def stats(self) -> dict:
         """Get usage statistics."""
         with self._lock:
+            next_alert = ((self._total_cost // self.ALERT_THRESHOLD) + 1) * self.ALERT_THRESHOLD
             return {
                 "current_verb": self._current_verb,
                 "call_count": self._call_count,
                 "total_cost": round(self._total_cost, 6),
                 "cost_per_call": self.COST_PER_CALL,
                 "cooldown_seconds": self._cooldown,
+                "next_alert_at": next_alert,
+                "calls_until_alert": int((next_alert - self._total_cost) / self.COST_PER_CALL),
             }
 
     def clear(self) -> None:
@@ -133,6 +160,7 @@ class WhimsyManager:
                 self._call_count += 1
                 self._total_cost += self.COST_PER_CALL
             self._save_stats()
+            self._check_cost_alert()
             return {"verb": verb, "context_length": len(context)}
         except Exception as e:
             return {"verb": None, "error": str(e)}
@@ -155,19 +183,24 @@ class WhimsyManager:
                 self._total_cost += self.COST_PER_CALL
 
             self._save_stats()
+            self._check_cost_alert()
 
         except Exception as e:
             print(f"Whimsy generation error: {e}")
 
-    def _load_stats(self) -> tuple[int, float]:
+    def _load_stats(self) -> tuple[int, float, float]:
         """Load stats from file."""
         try:
             if self._stats_file.exists():
                 data = json.loads(self._stats_file.read_text())
-                return data.get("call_count", 0), data.get("total_cost", 0.0)
+                return (
+                    data.get("call_count", 0),
+                    data.get("total_cost", 0.0),
+                    data.get("last_alerted", 0.0),
+                )
         except Exception:
             pass
-        return 0, 0.0
+        return 0, 0.0, 0.0
 
     def _save_stats(self) -> None:
         """Save stats to file."""
@@ -176,10 +209,42 @@ class WhimsyManager:
                 data = {
                     "call_count": self._call_count,
                     "total_cost": self._total_cost,
+                    "last_alerted": self._last_alerted,
                 }
             self._stats_file.write_text(json.dumps(data))
         except Exception:
             pass
+
+    def _check_cost_alert(self) -> None:
+        """Check if we've crossed a cost threshold and alert."""
+        should_alert = False
+        cost = 0.0
+        count = 0
+        next_threshold = 0.0
+
+        with self._lock:
+            # Calculate which $5 threshold we're at
+            current_threshold = (self._total_cost // self.ALERT_THRESHOLD) * self.ALERT_THRESHOLD
+
+            # If we've crossed a new threshold
+            if current_threshold > self._last_alerted and current_threshold > 0:
+                self._last_alerted = current_threshold
+                should_alert = True
+                cost = self._total_cost
+                count = self._call_count
+                next_threshold = current_threshold + self.ALERT_THRESHOLD
+
+        # Alert outside the lock
+        if should_alert:
+            msg = f"[Whimsy Cost Alert] ${cost:.2f} spent ({count:,} calls). Next alert at ${next_threshold:.0f}."
+            print(msg)
+
+            # Call custom handler if provided
+            if self._on_cost_alert:
+                try:
+                    self._on_cost_alert(cost, count)
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":

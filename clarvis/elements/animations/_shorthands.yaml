@@ -1,0 +1,127 @@
+kind: shorthands
+name: _shorthands
+# See README.md for full animation design guide
+
+# Component-level shorthands for eyes, mouth, border
+# Usage: { eyes: "open", mouth: "smile" }
+
+eyes:
+  # Basic states
+  open: "◕"
+  closed: "─"
+  half: "◔"
+  wide: "◎"
+
+  # Focused/intense
+  dot: "●"
+  intense: "◉"
+
+  # Directional
+  left: "◐"
+  right: "◑"
+  up: "◔"
+  down: "◕"
+
+  # Expressive
+  sleepy: "◡"
+  sparkle: "✧"
+  star: "★"
+  bright: "✦"
+  hollow_star: "☆"
+
+mouth:
+  # Basic
+  smile: "◡"
+  grin: "◠"
+  neutral: "─"
+  flat: "━"
+
+  # Expressive
+  open: "○"
+  sleep: "ω"
+  soft: "‿"
+  hmm: "∪"
+  frown: "△"
+
+border:
+  # Lines
+  thin: "─"
+  medium: "━"
+  thick: "═"
+
+  # Dotted (for waiting)
+  dotted: "┉"
+  dotted_sparse: "┅"
+
+  # Arrows (for running/executing)
+  arrow: "▸"
+  arrow_thin: "▹"
+  arrow_thick: "►"
+
+  # Decorative
+  sparkle: "✧"
+  star: "✦"
+  bright_star: "★"
+
+corners:
+  normal: "normal"
+  heavy: "heavy"
+  rounded: "rounded"
+
+# Frame-level presets - complete frame definitions
+# Usage: frames: [happy, thinking, blink]
+presets:
+  # Basic expressions
+  happy: { eyes: "◕", mouth: "◡", border: "─" }
+  neutral: { eyes: "◕", mouth: "─", border: "─" }
+  sad: { eyes: "◔", mouth: "─", border: "─" }
+
+  # Active states
+  thinking: { eyes: "◔", mouth: "─", border: "─" }
+  focused: { eyes: "●", mouth: "━", border: "▸", corners: "heavy" }
+  intense: { eyes: "◉", mouth: "━", border: "═", corners: "heavy" }
+
+  # Blink frames
+  blink_start: { eyes: "◔", mouth: "◡", border: "─" }
+  blink_closed: { eyes: "─", mouth: "◡", border: "─" }
+  blink_end: { eyes: "◔", mouth: "◡", border: "─" }
+
+  # Sleep/rest
+  asleep: { eyes: "◡", mouth: "ω", border: "─" }
+  dreaming: { eyes: "◡", mouth: "‿", border: "─" }
+
+  # Surprise/eureka
+  surprised: { eyes: "◎", mouth: "○", border: "═", corners: "heavy" }
+  eureka: { eyes: "✧", mouth: "◡", border: "✦" }
+
+  # Celebration
+  party: { eyes: "★", mouth: "◠", border: "✦", corners: "heavy" }
+  sparkle: { eyes: "✧", mouth: "◡", border: "✧" }
+  satisfied: { eyes: "◕", mouth: "◡", border: "─" }
+
+  # Running/executing
+  running: { eyes: "●", mouth: "━", border: "▸", corners: "heavy" }
+  running_intense: { eyes: "◉", mouth: "━", border: "►", corners: "heavy" }
+
+  # Reading
+  scan_left: { eyes: "◐", mouth: "─", border: "─" }
+  scan_right: { eyes: "◑", mouth: "─", border: "─" }
+  reading: { eyes: "◕", mouth: "─", border: "─" }
+
+  # Writing
+  creating: { eyes: "◕", mouth: "◡", border: "✦" }
+  inspired: { eyes: "✧", mouth: "◠", border: "✦" }
+
+  # Awaiting
+  waiting: { eyes: "◕", mouth: "◡", border: "┉" }
+  curious: { eyes: "◎", mouth: "◡", border: "┉" }
+
+  # Thinking (deep)
+  pondering: { eyes: "◕", mouth: "─", border: "━", corners: "heavy" }
+
+  # Reviewing
+  reviewing: { eyes: "◕", mouth: "─", border: "═" }
+  examining: { eyes: "◎", mouth: "─", border: "═" }
+
+  # Offline
+  offline: { eyes: "─", mouth: "─", border: "─" }

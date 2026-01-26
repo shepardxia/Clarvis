@@ -1,7 +1,42 @@
 kind: animation
 name: idle
+# Relaxed & present - friendly with lots of breathing room
+# Using shorthands for cleaner definitions
+
+sequences:
+  blink:
+    - { eyes: "half", mouth: "smile", border: "thin" }
+    - { eyes: "closed", mouth: "smile", border: "thin" }
+    - { eyes: "half", mouth: "smile", border: "thin" }
+
+  rest:
+    - happy
+    - happy
+    - happy
+    - happy
+
+  glance_up:
+    - { eyes: "up", mouth: "smile", border: "thin" }
+    - { eyes: "up", mouth: "smile", border: "thin" }
+    - happy
+
+  soft_smile:
+    - { eyes: "open", mouth: "soft", border: "thin" }
+    - { eyes: "open", mouth: "soft", border: "thin" }
+    - happy
+
 frames:
-  - { eyes: dots, mouth: neutral }
-  - { eyes: dots, mouth: neutral }
-  - { eyes: normal, mouth: neutral }
-  - { eyes: dots, mouth: neutral }
+  - $rest
+  - $rest
+  - $blink
+  - $rest
+  - neutral      # preset: neutral expression
+  - happy        # preset: happy expression
+  - $rest
+  - $glance_up
+  - $rest
+  - $rest
+  - $blink
+  - $rest
+  - $soft_smile
+  - $rest

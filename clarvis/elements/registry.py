@@ -65,6 +65,7 @@ class ElementRegistry:
         self._listeners: list[Callable[[str, str], None]] = []
         self._observers: list[Observer] = []
         self._watching = False
+        self._shorthands: Optional[dict] = None
 
     def load_all(self) -> None:
         """Discover and load all YAML files from element paths."""
@@ -91,6 +92,11 @@ class ElementRegistry:
             # e.g., elements/eyes/normal.yaml -> kind='eyes', name='normal'
             kind, name = self._parse_path(file_path)
 
+            # Expand sequences and shorthands for animations
+            if kind == 'animations' and 'frames' in data:
+                data = self._expand_sequences(data)
+                data = self._expand_shorthands(data)
+
             # Store with kind as key
             if kind not in self._elements:
                 self._elements[kind] = {}
@@ -101,6 +107,143 @@ class ElementRegistry:
             # Log but don't crash on bad files
             print(f"Warning: Failed to load {file_path}: {e}")
             return None
+
+    def _expand_sequences(self, data: dict) -> dict:
+        """
+        Expand sequence references in animation frames.
+        
+        Supports:
+        - sequences: Define reusable frame snippets
+        - $sequence_name: Reference to expand inline
+        - $sequence_name*N: Repeat sequence N times
+        
+        Example YAML:
+            sequences:
+              blink:
+                - { eyes: "◔" }
+                - { eyes: "─" }
+                - { eyes: "◔" }
+              sparkle:
+                - { eyes: "✧", border: "✦" }
+                - { eyes: "✦", border: "✧" }
+            
+            frames:
+              - { eyes: "◕", mouth: "◡" }
+              - $blink
+              - { eyes: "◕", mouth: "◡" }
+              - $sparkle*2
+        """
+        sequences = data.get('sequences', {})
+        frames = data.get('frames', [])
+        
+        if not sequences:
+            return data
+        
+        expanded_frames = []
+        for frame in frames:
+            if isinstance(frame, str) and frame.startswith('$'):
+                # Parse sequence reference: $name or $name*N
+                ref = frame[1:]  # Remove $
+                repeat = 1
+                if '*' in ref:
+                    ref, repeat_str = ref.split('*', 1)
+                    repeat = int(repeat_str) if repeat_str.isdigit() else 1
+                
+                # Expand sequence
+                if ref in sequences:
+                    seq_frames = sequences[ref]
+                    for _ in range(repeat):
+                        expanded_frames.extend(seq_frames)
+                else:
+                    # Unknown sequence, keep as-is (will be ignored)
+                    expanded_frames.append(frame)
+            else:
+                expanded_frames.append(frame)
+        
+        # Return modified data with expanded frames
+        result = dict(data)
+        result['frames'] = expanded_frames
+        return result
+
+    def _load_shorthands(self) -> dict:
+        """
+        Load shorthands definition file (cached).
+        
+        Returns:
+            Dict with 'eyes', 'mouth', 'border', 'corners', 'presets' mappings.
+        """
+        if self._shorthands is not None:
+            return self._shorthands
+        
+        # Look for _shorthands.yaml in animations directory
+        for base_path in self.paths:
+            shorthand_file = base_path / 'animations' / '_shorthands.yaml'
+            if shorthand_file.exists():
+                try:
+                    with open(shorthand_file, 'r') as f:
+                        self._shorthands = yaml.safe_load(f) or {}
+                        return self._shorthands
+                except (yaml.YAMLError, IOError):
+                    pass
+        
+        self._shorthands = {}
+        return self._shorthands
+
+    def _expand_shorthands(self, data: dict) -> dict:
+        """
+        Expand shorthand names in animation frames.
+        
+        Supports:
+        - Component shorthands: { eyes: "open" } -> { eyes: "◕" }
+        - Frame presets: "happy" -> { eyes: "◕", mouth: "◡", border: "─" }
+        
+        Example YAML:
+            frames:
+              - happy                           # Preset expands to full frame
+              - { eyes: "open", mouth: "smile" }  # Component shorthands expand
+              - { eyes: "◕", mouth: "◡" }       # Already Unicode, unchanged
+        """
+        shorthands = self._load_shorthands()
+        if not shorthands:
+            return data
+        
+        frames = data.get('frames', [])
+        if not frames:
+            return data
+        
+        presets = shorthands.get('presets', {})
+        component_maps = {
+            'eyes': shorthands.get('eyes', {}),
+            'mouth': shorthands.get('mouth', {}),
+            'border': shorthands.get('border', {}),
+            'corners': shorthands.get('corners', {}),
+        }
+        
+        expanded_frames = []
+        for frame in frames:
+            if isinstance(frame, str):
+                # Check if it's a preset name (not a sequence reference)
+                if not frame.startswith('$') and frame in presets:
+                    expanded_frames.append(dict(presets[frame]))
+                else:
+                    # Unknown string, keep as-is
+                    expanded_frames.append(frame)
+            elif isinstance(frame, dict):
+                # Expand component shorthands in dict
+                expanded_frame = {}
+                for key, value in frame.items():
+                    if key in component_maps and isinstance(value, str):
+                        # Try to expand shorthand, fall back to original
+                        expanded_frame[key] = component_maps[key].get(value, value)
+                    else:
+                        expanded_frame[key] = value
+                expanded_frames.append(expanded_frame)
+            else:
+                expanded_frames.append(frame)
+        
+        result = dict(data)
+        result['frames'] = expanded_frames
+        return result
 
     def _parse_path(self, file_path: Path) -> tuple[str, str]:
         """

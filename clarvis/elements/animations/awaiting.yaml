@@ -1,7 +1,46 @@
 kind: animation
 name: awaiting
+# Curious & patient - friendly waiting with personality
+# Using shorthands for cleaner definitions
+
+sequences:
+  wait:
+    - waiting
+    - waiting
+    - waiting
+
+  glance_up:
+    - { eyes: "half", mouth: "smile", border: "dotted" }
+    - { eyes: "half", mouth: "smile", border: "dotted" }
+    - waiting
+
+  curious:
+    - curious
+    - { eyes: "wide", mouth: "smile", border: "dotted_sparse" }
+    - waiting
+
+  hmm:
+    - { eyes: "open", mouth: "open", border: "dotted" }
+    - { eyes: "open", mouth: "open", border: "dotted_sparse" }
+    - waiting
+
+  border_shift:
+    - { eyes: "open", mouth: "smile", border: "dotted_sparse" }
+    - waiting
+
 frames:
-  - { eyes: normal, mouth: dots }
-  - { eyes: looking_left, mouth: dots }
-  - { eyes: normal, mouth: dots }
-  - { eyes: looking_right, mouth: dots }
+  - $wait
+  - $wait
+  - $glance_up
+  - $wait
+  - $border_shift
+  - $wait
+  - $curious
+  - $wait
+  - $wait
+  - $hmm
+  - $wait
+  - $glance_up
+  - $wait
+  - $border_shift
+  - $wait

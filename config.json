@@ -13,7 +13,7 @@
     "font_name": "Courier",
     "border_width": 2,
     "pulse_speed": 0.05,
-    "fps": 6
+    "fps": 3
   },
   "testing": {
     "enabled": false,

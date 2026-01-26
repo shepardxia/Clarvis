@@ -1,0 +1,37 @@
+kind: animation
+name: celebration
+# Task complete! Stars and sparkles party
+# Using shorthands for cleaner definitions
+
+sequences:
+  finishing:
+    - { eyes: "open", mouth: "smile", border: "thin" }
+    - { eyes: "open", mouth: "grin", border: "medium" }
+    - { eyes: "open", mouth: "grin", border: "medium" }
+
+  party:
+    - party
+    - { eyes: "hollow_star", mouth: "smile", border: "sparkle" }
+    - party
+    - { eyes: "bright", mouth: "smile", border: "bright_star" }
+    - { eyes: "hollow_star", mouth: "grin", border: "sparkle" }
+    - { eyes: "star", mouth: "grin", border: "star" }
+
+  sparkle_down:
+    - sparkle
+    - { eyes: "sparkle", mouth: "smile", border: "sparkle" }
+    - satisfied
+
+  satisfied:
+    - satisfied
+    - satisfied
+    - satisfied
+    - { eyes: "open", mouth: "soft", border: "thin" }
+
+frames:
+  - $finishing
+  - $party
+  - $party
+  - $sparkle_down
+  - $satisfied
+  - $satisfied

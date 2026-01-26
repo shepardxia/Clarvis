@@ -1,0 +1,46 @@
+# Shared animation sequences - reusable frame snippets
+# NOTE: This file documents available sequences. Each animation file
+# defines its own sequences section for now (YAML doesn't support imports).
+#
+# Common patterns to copy into animation files:
+#
+# sequences:
+#   blink:
+#     - { eyes: "◔" }
+#     - { eyes: "─" }
+#     - { eyes: "◔" }
+#
+#   scan:
+#     - { eyes: "◐" }
+#     - { eyes: "◕" }
+#     - { eyes: "◑" }
+#     - { eyes: "◕" }
+#
+#   sparkle_eyes:
+#     - { eyes: "✧" }
+#     - { eyes: "✦" }
+#     - { eyes: "★" }
+#     - { eyes: "✦" }
+#
+#   sparkle_border:
+#     - { border: "✦" }
+#     - { border: "✧" }
+#
+#   talk:
+#     - { mouth: "◡" }
+#     - { mouth: "○" }
+#     - { mouth: "◡" }
+#     - { mouth: "─" }
+#
+#   arrow_pulse:
+#     - { border: "▸" }
+#     - { border: "▹" }
+#     - { border: "▸" }
+#     - { border: "►" }
+#
+# Usage in frames:
+#   frames:
+#     - { eyes: "◕", mouth: "◡" }
+#     - $blink              # Expands to 3 frames
+#     - { eyes: "◕", mouth: "◡" }
+#     - $sparkle_eyes*2     # Repeats sequence 2 times (8 frames)

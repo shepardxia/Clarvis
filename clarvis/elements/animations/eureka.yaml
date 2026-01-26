@@ -1,0 +1,37 @@
+kind: animation
+name: eureka
+# Breakthrough moment! Building excitement then joy
+# Using shorthands for cleaner definitions
+
+sequences:
+  thinking:
+    - { eyes: "open", mouth: "neutral", border: "medium", corners: "heavy" }
+    - { eyes: "open", mouth: "neutral", border: "medium", corners: "heavy" }
+
+  realizing:
+    - { eyes: "open", mouth: "open", border: "medium", corners: "heavy" }
+    - surprised
+    - surprised
+
+  eureka_burst:
+    - eureka
+    - { eyes: "bright", mouth: "grin", border: "sparkle" }
+    - { eyes: "star", mouth: "grin", border: "star" }
+    - { eyes: "star", mouth: "grin", border: "sparkle" }
+    - { eyes: "bright", mouth: "grin", border: "star" }
+    - eureka
+
+  happy_settle:
+    - { eyes: "sparkle", mouth: "smile", border: "thin" }
+    - satisfied
+    - satisfied
+    - satisfied
+
+frames:
+  - $thinking
+  - $thinking
+  - $realizing
+  - $eureka_burst
+  - $eureka_burst
+  - $happy_settle
+  - $happy_settle

@@ -1,7 +1,38 @@
 kind: animation
 name: executing
+# Mechanical precision - focused with pulsing borders
+# Using shorthands for cleaner definitions
+
+sequences:
+  focus:
+    - focused
+    - focused
+
+  pulse:
+    - { eyes: "dot", mouth: "flat", border: "arrow_thick", corners: "heavy" }
+    - focused
+    - { eyes: "dot", mouth: "flat", border: "thick", corners: "heavy" }
+    - focused
+
+  intense:
+    - intense
+    - intense
+    - focused
+
+  output:
+    - { eyes: "dot", mouth: "open", border: "thick", corners: "heavy" }
+    - { eyes: "dot", mouth: "open", border: "thick", corners: "heavy" }
+    - focused
+
 frames:
-  - { eyes: wide, mouth: open }
-  - { eyes: normal, mouth: open }
-  - { eyes: wide, mouth: smile }
-  - { eyes: normal, mouth: open }
+  - $focus
+  - $pulse
+  - $focus
+  - $pulse
+  - $intense
+  - $focus
+  - $pulse
+  - $output
+  - $focus
+  - $pulse
+  - $focus

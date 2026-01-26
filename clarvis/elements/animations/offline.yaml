@@ -1,5 +1,5 @@
 kind: animation
 name: offline
+# Disconnected - static, no animation
 frames:
-  - { eyes: closed, mouth: flat }
-  - { eyes: closed, mouth: flat }
+  - offline

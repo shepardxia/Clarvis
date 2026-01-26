@@ -1,7 +1,37 @@
 kind: animation
 name: resting
+# Peaceful sleep - gentle breathing rhythm
+# Using shorthands for cleaner definitions
+
+sequences:
+  sleep:
+    - asleep
+    - asleep
+    - asleep
+    - asleep
+
+  breathe_in:
+    - asleep
+    - asleep
+
+  breathe_out:
+    - asleep
+    - asleep
+
+  dream_smile:
+    - dreaming
+    - dreaming
+    - asleep
+
 frames:
-  - { eyes: sleepy, mouth: flat }
-  - { eyes: closed, mouth: flat }
-  - { eyes: sleepy, mouth: flat }
-  - { eyes: closed, mouth: flat }
+  - $sleep
+  - $breathe_in
+  - $sleep
+  - $breathe_out
+  - $sleep
+  - $dream_smile
+  - $sleep
+  - $breathe_in
+  - $sleep
+  - $breathe_out
+  - $sleep

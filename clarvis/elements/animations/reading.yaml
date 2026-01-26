@@ -1,7 +1,48 @@
 kind: animation
 name: reading
+# Absorbing information - eyes scan with occasional discoveries
+# Using shorthands for cleaner definitions
+
+sequences:
+  scan_left:
+    - scan_left
+    - scan_left
+
+  scan_right:
+    - scan_right
+    - scan_right
+
+  center:
+    - reading
+    - reading
+
+  ooh:
+    - { eyes: "open", mouth: "smile", border: "thin" }
+    - { eyes: "wide", mouth: "open", border: "medium" }
+    - { eyes: "wide", mouth: "open", border: "medium" }
+    - { eyes: "open", mouth: "smile", border: "thin" }
+    - reading
+
+  hmm:
+    - reading
+    - { eyes: "half", mouth: "neutral", border: "thin" }
+    - reading
+
 frames:
-  - { eyes: normal, mouth: open }
-  - { eyes: looking_left, mouth: open }
-  - { eyes: normal, mouth: open }
-  - { eyes: looking_right, mouth: open }
+  - $scan_left
+  - $center
+  - $scan_right
+  - $center
+  - $scan_left
+  - $center
+  - $scan_right
+  - $center
+  - $ooh
+  - $center
+  - $scan_left
+  - $center
+  - $scan_right
+  - $hmm
+  - $center
+  - $scan_left
+  - $center

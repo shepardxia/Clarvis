@@ -21,7 +21,11 @@ class TestCentralHubDaemon:
         )
 
         assert daemon.status_raw_file == temp_hub_files["status_raw"]
-        assert daemon.display_status in ["idle", "running", "thinking", "awaiting", "resting"]
+        # All valid statuses (includes tool-based refinements like reading/writing/executing)
+        valid_statuses = ["idle", "running", "thinking", "awaiting", "resting",
+                          "reading", "writing", "executing", "reviewing",
+                          "celebration", "eureka"]
+        assert daemon.display_status in valid_statuses
         assert daemon.session_tracker.HISTORY_SIZE == 20
 
     def test_get_session_creates_new(self, temp_hub_files):

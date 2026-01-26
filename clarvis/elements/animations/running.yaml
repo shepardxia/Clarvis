@@ -1,7 +1,38 @@
 kind: animation
 name: running
+# Active & energetic - arrows pulsing with determination
+# Using shorthands for cleaner definitions
+
+sequences:
+  steady:
+    - running
+    - running
+
+  arrow_pulse:
+    - { eyes: "dot", mouth: "flat", border: "arrow_thin", corners: "heavy" }
+    - running
+    - { eyes: "dot", mouth: "flat", border: "arrow_thick", corners: "heavy" }
+    - running
+
+  brief_smile:
+    - { eyes: "open", mouth: "smile", border: "arrow", corners: "heavy" }
+    - { eyes: "open", mouth: "smile", border: "arrow", corners: "heavy" }
+    - running
+
+  intense:
+    - running_intense
+    - { eyes: "intense", mouth: "flat", border: "arrow_thick", corners: "heavy" }
+    - running
+
 frames:
-  - { eyes: wide, mouth: smile }
-  - { eyes: normal, mouth: smile }
-  - { eyes: wide, mouth: open }
-  - { eyes: normal, mouth: smile }
+  - $steady
+  - $arrow_pulse
+  - $steady
+  - $arrow_pulse
+  - $brief_smile
+  - $steady
+  - $arrow_pulse
+  - $intense
+  - $steady
+  - $arrow_pulse
+  - $steady

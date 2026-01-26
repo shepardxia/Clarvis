@@ -1,7 +1,48 @@
 kind: animation
 name: writing
+# Creative expression - sparkles and talking
+# Using shorthands for cleaner definitions
+
+sequences:
+  create:
+    - creating
+    - creating
+
+  talk:
+    - { eyes: "open", mouth: "open", border: "sparkle" }
+    - creating
+    - { eyes: "open", mouth: "open", border: "sparkle" }
+    - creating
+
+  think_words:
+    - { eyes: "half", mouth: "smile", border: "star" }
+    - { eyes: "half", mouth: "smile", border: "star" }
+    - creating
+
+  inspired:
+    - inspired
+    - { eyes: "sparkle", mouth: "grin", border: "sparkle" }
+    - { eyes: "bright", mouth: "grin", border: "star" }
+    - creating
+
+  flow:
+    - { eyes: "open", mouth: "open", border: "sparkle" }
+    - creating
+    - { eyes: "open", mouth: "open", border: "sparkle" }
+    - { eyes: "open", mouth: "neutral", border: "star" }
+    - creating
+
 frames:
-  - { eyes: normal, mouth: think }
-  - { eyes: wide, mouth: think }
-  - { eyes: normal, mouth: flat }
-  - { eyes: wide, mouth: think }
+  - $create
+  - $talk
+  - $create
+  - $think_words
+  - $talk
+  - $create
+  - $flow
+  - $create
+  - $inspired
+  - $create
+  - $talk
+  - $think_words
+  - $create

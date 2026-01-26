@@ -179,7 +179,7 @@ class CentralHubDaemon:
         hub_data_file: Path = None,
         output_file: Path = None,
         refresh_interval: int = 30,
-        display_fps: int = 2,
+        display_fps: int = None,  # Now defaults to config value
         state_store: StateStore = None,
         socket_server: WidgetSocketServer = None,
     ):
@@ -188,7 +188,12 @@ class CentralHubDaemon:
         self.hub_data_file = hub_data_file or Path("/tmp/clarvis-data.json")
         self.output_file = output_file or Path("/tmp/widget-display.json")
         self.refresh_interval = refresh_interval
-        self.display_fps = display_fps
+
+        # Load config
+        config = get_config()
+        
+        # Use config FPS if not explicitly provided
+        self.display_fps = display_fps if display_fps is not None else config.display.fps
 
         # Core state
         self.state = state_store or get_state_store()
@@ -201,8 +206,7 @@ class CentralHubDaemon:
         self.running = False
         self._lock = threading.Lock()
 
-        # Display manager
-        config = get_config()
+        # Display manager with pre-warmed renderer
         renderer = FrameRenderer(
             width=config.grid_width,
             height=config.grid_height,
@@ -216,12 +220,12 @@ class CentralHubDaemon:
             renderer=renderer,
             socket_server=self.socket_server,
             output_file=self.output_file,
-            fps=display_fps,
+            fps=self.display_fps,
         )
 
         # Whimsy verb manager
         self.whimsy = WhimsyManager(
-            context_provider=lambda: self._get_chat_context(),
+            context_provider=lambda: self._get_rich_context(),
         )
 
         # Refresh manager (created after display for dependency)
@@ -306,24 +310,50 @@ class CentralHubDaemon:
     # --- Status Processing ---
 
     def process_hook_event(self, raw_data: dict) -> dict:
-        """Process raw hook event into status/color."""
+        """Process raw hook event into status/color based on tool_name."""
         session_id = raw_data.get("session_id", "unknown")
         event = raw_data.get("hook_event_name", "")
+        tool_name = raw_data.get("tool_name", "")
         context_window = raw_data.get("context_window") or {}
         context_percent = context_window.get("used_percentage") or 0
 
         # Get existing status from state
         existing_status = self.state.get("status")
 
-        # Map events to status/color
+        # Tool categories for semantic status mapping
+        READING_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch"}
+        WRITING_TOOLS = {"Write", "Edit"}
+        EXECUTING_TOOLS = {"Bash"}
+        THINKING_TOOLS = {"Task"}
+        AWAITING_TOOLS = {"AskUserQuestion"}
+
+        # Map events to status/color with tool-based refinement
         if event == "PreToolUse":
-            status, color = "running", "green"
+            # Use tool_name to determine specific status
+            if tool_name in READING_TOOLS or tool_name.startswith("mcp__") and "read" in tool_name.lower():
+                status, color = "reading", "cyan"
+            elif tool_name in WRITING_TOOLS:
+                status, color = "writing", "magenta"
+            elif tool_name in EXECUTING_TOOLS:
+                status, color = "executing", "orange"
+            elif tool_name in THINKING_TOOLS:
+                status, color = "thinking", "yellow"
+            elif tool_name in AWAITING_TOOLS:
+                status, color = "awaiting", "blue"
+            else:
+                # Default for unknown tools
+                status, color = "running", "green"
         elif event == "PostToolUse":
             status, color = "thinking", "yellow"
         elif event == "UserPromptSubmit":
             status, color = "thinking", "yellow"
         elif event == "Stop":
-            status, color = "awaiting", "blue"
+            # Check for special animation triggers
+            special = self._check_special_animation(session_id, raw_data)
+            if special:
+                status, color = special
+            else:
+                status, color = "awaiting", "blue"
         elif event == "Notification":
             status, color = "awaiting", "blue"
         elif context_window:
@@ -332,8 +362,8 @@ class CentralHubDaemon:
         else:
             status, color = "idle", "gray"
 
-        # Update session history
-        self.session_tracker.update(session_id, status, context_percent)
+        # Update session history with tool info
+        self.session_tracker.update(session_id, status, context_percent, tool_name)
 
         # Use last known context if current is 0
         effective_context = context_percent or self.session_tracker.get_last_context(session_id)
@@ -348,6 +378,7 @@ class CentralHubDaemon:
             "context_percent": effective_context,
             "status_history": session.get("status_history", []).copy(),
             "context_history": session.get("context_history", []).copy(),
+            "tool_history": session.get("tool_history", []).copy(),
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -376,15 +407,97 @@ class CentralHubDaemon:
         except (json.JSONDecodeError, IOError):
             pass
 
+
+    def _check_special_animation(self, session_id: str, raw_data: dict) -> tuple[str, str] | None:
+        """Check if Stop event should trigger a special animation.
+        
+        Returns (status, color) tuple if special animation should play, None otherwise.
+        
+        Triggers:
+        - celebration: Stop after 5+ tool uses in session (productive work)
+        - eureka: Stop after Write/Edit in recent tool history (created something)
+        """
+        session = self.session_tracker.get(session_id)
+        tool_history = session.get("tool_history", [])
+        
+        # Need some activity to trigger special animations
+        if len(tool_history) < 3:
+            return None
+        
+        # Check for productive session (5+ tools = celebration)
+        if len(tool_history) >= 5:
+            # Check if recent tools include Write/Edit (created something = eureka)
+            recent_tools = tool_history[-5:]
+            creative_tools = {"Write", "Edit"}
+            if any(t in creative_tools for t in recent_tools):
+                return ("eureka", "gold")
+            else:
+                return ("celebration", "gold")
+        
+        # Check for any Write/Edit in shorter sessions
+        if any(t in {"Write", "Edit"} for t in tool_history[-3:]):
+            return ("eureka", "gold")
+        
+        return None
+
     def _maybe_trigger_whimsy(self, event: str | None):
         """Trigger whimsy verb generation when switching to thinking status."""
         if event:
             self.whimsy.maybe_generate(event)
 
-    def _get_chat_context(self, max_messages: int = 10) -> str:
-        """Extract recent chat context from transcript file."""
+    def _get_rich_context(self, max_messages: int = 5, max_chars: int = 1200) -> str:
+        """Build compact context for whimsy verb generation (~400 tokens).
+
+        Combines: weather, time, music, activity, conversation.
+        """
+        parts = []
+
+        # Weather + Time (compact)
+        weather = self.state.get("weather")
+        if weather and weather.get("temperature"):
+            temp = weather.get("temperature", "")
+            desc = weather.get("description", "").lower()
+            parts.append(f"{temp}°F {desc}")
+
+        time_data = self.state.get("time")
+        if time_data and time_data.get("timestamp"):
+            try:
+                dt = datetime.fromisoformat(time_data["timestamp"])
+                hour = dt.hour
+                period = "morning" if 5 <= hour < 12 else "afternoon" if 12 <= hour < 17 else "evening" if 17 <= hour < 21 else "night"
+                parts.append(f"{dt.strftime('%A')} {period}")
+            except (ValueError, KeyError):
+                pass
+
+        # Music (compact)
         try:
-            # Get transcript path from raw status
+            from clautify import Clautify
+            now = Clautify().now_playing()
+            if now and now.get("state") == "PLAYING":
+                title = now.get("title", "")[:30]
+                artist = now.get("artist", "")[:20]
+                if title and artist:
+                    parts.append(f"playing: {title} by {artist}")
+        except Exception:
+            pass
+
+        # Activity (compact)
+        status = self.state.get("status")
+        if status and status.get("tool_history"):
+            tools = list(dict.fromkeys(status["tool_history"][-3:]))
+            parts.append(f"activity: {', '.join(t.lower() for t in tools)}")
+
+        # Conversation (bulk of context)
+        chat = self._get_chat_context(max_messages, max_msg_len=150)
+        if chat:
+            parts.append(f"chat:\n{chat}")
+
+        result = "\n".join(parts)
+        return result[:max_chars] if len(result) > max_chars else result
+
+    def _get_chat_context(self, max_messages: int = 5, max_msg_len: int = 150) -> str:
+        """Extract recent chat context from transcript file (compact format)."""
+        try:
             if not self.status_raw_file.exists():
                 return ""
 
@@ -394,47 +507,38 @@ class CentralHubDaemon:
             if not transcript_path or not Path(transcript_path).exists():
                 return ""
 
-            # Read last N lines from transcript (it's JSONL)
             messages = []
             with open(transcript_path, 'r') as f:
                 lines = f.readlines()
 
-            # Process from end, collect user/assistant messages
-            for line in reversed(lines[-100:]):  # Check last 100 lines
+            for line in reversed(lines[-50:]):
                 try:
                     entry = json.loads(line)
                     entry_type = entry.get("type")
 
                     if entry_type in ("user", "assistant"):
-                        msg = entry.get("message", {})
-                        content = msg.get("content", "")
+                        content = entry.get("message", {}).get("content", "")
 
-                        # Extract text from content blocks
                         if isinstance(content, list):
-                            texts = []
-                            for c in content:
-                                if isinstance(c, dict) and c.get("type") == "text":
-                                    text = c.get("text", "")
-                                    # Skip system reminders
-                                    if not text.startswith("<system"):
-                                        texts.append(text)
+                            texts = [c.get("text", "") for c in content
+                                     if c.get("type") == "text" and not c.get("text", "").startswith("<system")]
                             content = " ".join(texts)
 
                         if content and not content.startswith("<system"):
-                            role = "User" if entry_type == "user" else "Assistant"
-                            messages.append(f"{role}: {content[:500]}")
+                            role = "U" if entry_type == "user" else "A"
+                            # Truncate and clean
+                            content = content[:max_msg_len].replace("\n", " ").strip()
+                            messages.append(f"{role}: {content}")
 
                             if len(messages) >= max_messages:
                                 break
                 except json.JSONDecodeError:
                     continue
 
-            # Reverse to chronological order and join
             messages.reverse()
-            return "\n\n".join(messages)
+            return "\n".join(messages)
 
         except Exception as e:
-            print(f"Error reading chat context: {e}")
             return ""
 
     # --- Status Watcher ---
