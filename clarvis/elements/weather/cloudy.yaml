@@ -1,0 +1,13 @@
+kind: weather_type
+name: cloudy
+particles:
+  - cloud_small
+  - cloud_wisp
+  - cloud_puff
+  - fog_tilde
+spawn:
+  position: random
+  vx_base: 0.0
+  vx_variance: 0.05
+  vy_range: [-0.03, 0.03]
+  lifetime_range: [60, 150]

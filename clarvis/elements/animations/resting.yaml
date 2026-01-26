@@ -1,0 +1,7 @@
+kind: animation
+name: resting
+frames:
+  - { eyes: sleepy, mouth: flat }
+  - { eyes: closed, mouth: flat }
+  - { eyes: sleepy, mouth: flat }
+  - { eyes: closed, mouth: flat }

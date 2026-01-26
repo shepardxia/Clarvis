@@ -1,0 +1,7 @@
+kind: animation
+name: idle
+frames:
+  - { eyes: dots, mouth: neutral }
+  - { eyes: dots, mouth: neutral }
+  - { eyes: normal, mouth: neutral }
+  - { eyes: dots, mouth: neutral }

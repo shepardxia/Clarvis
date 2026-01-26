@@ -1,0 +1,7 @@
+kind: animation
+name: running
+frames:
+  - { eyes: wide, mouth: smile }
+  - { eyes: normal, mouth: smile }
+  - { eyes: wide, mouth: open }
+  - { eyes: normal, mouth: smile }

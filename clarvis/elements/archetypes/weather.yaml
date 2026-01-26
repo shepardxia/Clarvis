@@ -1,0 +1,15 @@
+kind: archetype_config
+archetype: weather
+physics:
+  death_prob: 0.04
+  max_particles_base: 40
+  speed_multiplier: 2.5
+  batch_size: 128
+ambient:
+  shapes:
+    - cloud_small
+    - cloud_wisp
+    - cloud_puff
+  max_clouds: 3
+  spawn_rate: 0.03
+  spawn_zone: 0.35

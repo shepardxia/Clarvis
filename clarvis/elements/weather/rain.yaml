@@ -1,0 +1,14 @@
+kind: weather_type
+name: rain
+particles:
+  - rain_drop
+  - rain_drop
+  - rain_colon
+  - rain_tick
+  - rain_comma
+spawn:
+  position: top
+  vx_base: 0.0
+  vx_variance: 0.03
+  vy_range: [0.5, 0.9]
+  lifetime_range: [20, 50]

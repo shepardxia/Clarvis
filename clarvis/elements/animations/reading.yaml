@@ -1,0 +1,7 @@
+kind: animation
+name: reading
+frames:
+  - { eyes: normal, mouth: open }
+  - { eyes: looking_left, mouth: open }
+  - { eyes: normal, mouth: open }
+  - { eyes: looking_right, mouth: open }

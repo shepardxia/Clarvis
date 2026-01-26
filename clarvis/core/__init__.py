@@ -1,4 +1,4 @@
-"""Core utilities - caching, time services, state management, IPC, and colors."""
+"""Core utilities - caching, time services, state management, IPC, colors, and managers."""
 
 from .cache import read_hub_data, write_hub_section, get_hub_section
 from .time_service import get_current_time, TimeData, DEFAULT_TIMEZONE
@@ -13,17 +13,24 @@ from .colors import (
     STATUS_ANSI,
     get_status_colors_for_config,
 )
+from .session_tracker import SessionTracker
+from .display_manager import DisplayManager
+from .refresh_manager import RefreshManager
 
 __all__ = [
+    # Cache
     "read_hub_data",
     "write_hub_section",
     "get_hub_section",
+    # Time
     "get_current_time",
     "TimeData",
     "DEFAULT_TIMEZONE",
+    # State
     "StateStore",
     "get_state_store",
     "reset_state_store",
+    # IPC
     "DaemonServer",
     "DaemonClient",
     "get_daemon_client",
@@ -35,4 +42,8 @@ __all__ = [
     "ANSI_COLORS",
     "STATUS_ANSI",
     "get_status_colors_for_config",
+    # Managers
+    "SessionTracker",
+    "DisplayManager",
+    "RefreshManager",
 ]

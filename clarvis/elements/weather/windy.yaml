@@ -1,0 +1,14 @@
+kind: weather_type
+name: windy
+particles:
+  - wind_tilde
+  - wind_dash
+  - wind_tick
+  - wind_arrow
+  - wind_slash
+spawn:
+  position: left
+  vx_base: 0.4
+  vx_variance: 0.2
+  vy_range: [-0.1, 0.1]
+  lifetime_range: [30, 60]

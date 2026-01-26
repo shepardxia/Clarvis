@@ -1,0 +1,6 @@
+kind: archetype_config
+archetype: face
+dimensions:
+  width: 11
+  height: 5
+default_animation: idle

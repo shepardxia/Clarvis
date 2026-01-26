@@ -2,14 +2,9 @@
 
 import pytest
 
-from clarvis.widget.renderer import (
-    FrameRenderer,
-    WeatherSystem,
-    Shape,
-    get_shape,
-    SHAPE_LIBRARY,
-    ANIMATION_KEYFRAMES,
-)
+from clarvis.widget.renderer import FrameRenderer
+from clarvis.archetypes.weather import WeatherArchetype, Shape, BoundingBox
+from clarvis.elements.registry import ElementRegistry
 from clarvis.core.colors import get_status_ansi
 
 
@@ -31,11 +26,10 @@ class TestFrameRenderer:
         renderer.set_status("running")
         assert renderer.current_status == "running"
 
-    def test_set_status_changes_keyframes(self):
+    def test_set_status_changes_face_status(self):
         renderer = FrameRenderer()
         renderer.set_status("thinking")
-
-        assert renderer.current_keyframes == ANIMATION_KEYFRAMES.get("thinking", [])
+        assert renderer.face.status == "thinking"
 
     def test_render_returns_string(self):
         renderer = FrameRenderer(width=15, height=8)
@@ -62,11 +56,11 @@ class TestFrameRenderer:
         renderer = FrameRenderer()
         renderer.set_status("running")
 
-        initial_index = renderer.keyframe_index
+        initial_index = renderer.face.frame_index
         renderer.tick()
 
         # Should advance (or wrap around)
-        assert renderer.keyframe_index != initial_index or len(renderer.current_keyframes) <= 1
+        assert renderer.face.frame_index != initial_index or len(renderer.face._frames) <= 1
 
     def test_set_weather(self):
         renderer = FrameRenderer()
@@ -89,23 +83,30 @@ class TestFrameRenderer:
         assert isinstance(frame, str)
 
 
-class TestWeatherSystem:
-    """Tests for WeatherSystem class."""
+class TestWeatherArchetype:
+    """Tests for WeatherArchetype class."""
 
-    def test_create_weather_system(self):
-        ws = WeatherSystem(20, 10)
+    @pytest.fixture
+    def registry(self):
+        """Create and load a registry for testing."""
+        reg = ElementRegistry()
+        reg.load_all()
+        return reg
+
+    def test_create_weather_archetype(self, registry):
+        ws = WeatherArchetype(registry, 20, 10)
         assert ws.width == 20
         assert ws.height == 10
 
-    def test_set_weather(self):
-        ws = WeatherSystem(20, 10)
+    def test_set_weather(self, registry):
+        ws = WeatherArchetype(registry, 20, 10)
         ws.set_weather("snow", intensity=0.7)
 
         assert ws.weather_type == "snow"
         assert ws.intensity == 0.7
 
-    def test_change_weather_clears_particles(self):
-        ws = WeatherSystem(20, 10)
+    def test_change_weather_clears_particles(self, registry):
+        ws = WeatherArchetype(registry, 20, 10)
         ws.set_weather("rain", intensity=1.0)
 
         # Tick to spawn particles
@@ -119,8 +120,8 @@ class TestWeatherSystem:
         ws.set_weather("snow", intensity=1.0)
         assert ws.p_count == 0
 
-    def test_tick_spawns_particles(self):
-        ws = WeatherSystem(20, 10)
+    def test_tick_spawns_particles(self, registry):
+        ws = WeatherArchetype(registry, 20, 10)
         ws.set_weather("rain", intensity=1.0)
 
         # Tick many times to ensure spawning
@@ -129,8 +130,8 @@ class TestWeatherSystem:
 
         assert ws.p_count > 0
 
-    def test_no_particles_without_weather(self):
-        ws = WeatherSystem(20, 10)
+    def test_no_particles_without_weather(self, registry):
+        ws = WeatherArchetype(registry, 20, 10)
         # No weather set
 
         for _ in range(10):
@@ -138,11 +139,9 @@ class TestWeatherSystem:
 
         assert ws.p_count == 0
 
-    def test_exclusion_zones(self):
+    def test_exclusion_zones(self, registry):
         """Particles should be removed from exclusion zones."""
-        from clarvis.widget.renderer import BoundingBox
-
-        ws = WeatherSystem(20, 10)
+        ws = WeatherArchetype(registry, 20, 10)
         ws.set_weather("rain", intensity=1.0)
 
         # Set exclusion zone covering most of the area
@@ -153,29 +152,32 @@ class TestWeatherSystem:
         for _ in range(20):
             ws.tick()
 
-        # All particles should be culled by exclusion zone
-        # (render would filter them, but they may still exist in list)
 
+class TestAnimationData:
+    """Tests for animation data loaded from YAML."""
 
-class TestAnimationKeyframes:
-    """Tests for animation keyframe data."""
+    @pytest.fixture
+    def registry(self):
+        reg = ElementRegistry()
+        reg.load_all()
+        return reg
 
-    def test_all_statuses_have_keyframes(self):
-        """Each status should have keyframes defined."""
+    def test_all_statuses_have_animations(self, registry):
+        """Each status should have animation defined."""
         expected_statuses = ["idle", "thinking", "running", "awaiting", "resting"]
         for status in expected_statuses:
-            assert status in ANIMATION_KEYFRAMES, f"Missing keyframes for {status}"
-            assert len(ANIMATION_KEYFRAMES[status]) > 0
+            anim = registry.get('animations', status)
+            assert anim is not None, f"Missing animation for {status}"
+            assert 'frames' in anim
+            assert len(anim['frames']) > 0
 
-    def test_keyframes_are_valid(self):
-        """Keyframes should be tuples of (eyes, mouth)."""
-        for status, frames in ANIMATION_KEYFRAMES.items():
-            for frame in frames:
-                assert isinstance(frame, tuple)
-                assert len(frame) == 2  # (eyes, mouth)
-                eyes, mouth = frame
-                assert isinstance(eyes, str)
-                assert isinstance(mouth, str)
+    def test_animation_frames_are_valid(self, registry):
+        """Animation frames should have eyes and mouth keys."""
+        for name in registry.list_names('animations'):
+            anim = registry.get('animations', name)
+            for frame in anim.get('frames', []):
+                assert 'eyes' in frame
+                assert 'mouth' in frame
 
 
 class TestStatusColors:
@@ -217,28 +219,47 @@ class TestShape:
         assert isinstance(shape.pattern, tuple)
 
 
-class TestGetShape:
-    """Tests for get_shape function."""
+class TestElementRegistry:
+    """Tests for element registry."""
 
-    def test_returns_cached_shape(self):
-        shape1 = get_shape("snow_star")
-        shape2 = get_shape("snow_star")
-        assert shape1 is shape2
+    @pytest.fixture
+    def registry(self):
+        reg = ElementRegistry()
+        reg.load_all()
+        return reg
 
-    def test_unknown_shape_raises_keyerror(self):
-        with pytest.raises(KeyError, match="Unknown shape"):
-            get_shape("nonexistent_shape")
+    def test_loads_eyes(self, registry):
+        """Should load eye elements."""
+        eyes = registry.list_names('eyes')
+        assert 'normal' in eyes
+        assert 'closed' in eyes
 
-    def test_all_library_shapes_are_valid(self):
-        for name in SHAPE_LIBRARY:
-            shape = get_shape(name)
-            assert shape.width >= 1
-            assert shape.height >= 1
+    def test_loads_mouths(self, registry):
+        """Should load mouth elements."""
+        mouths = registry.list_names('mouths')
+        assert 'neutral' in mouths
+        assert 'smile' in mouths
 
-    def test_multi_char_shapes_parse_correctly(self):
-        cloud = get_shape("cloud_small")
-        assert cloud.height == 2
-        assert cloud.width == 3
+    def test_loads_particles(self, registry):
+        """Should load particle elements."""
+        particles = registry.list_names('particles')
+        assert 'snow_star' in particles
+        assert 'rain_drop' in particles
 
-        cloud_med = get_shape("cloud_medium")
-        assert cloud_med.height == 3
+    def test_loads_weather_types(self, registry):
+        """Should load weather type definitions."""
+        weather = registry.list_names('weather')
+        assert 'snow' in weather
+        assert 'rain' in weather
+
+    def test_get_returns_element(self, registry):
+        """Get should return element definition."""
+        elem = registry.get('eyes', 'normal')
+        assert elem is not None
+        assert 'char' in elem
+        assert elem['char'] == 'o'
+
+    def test_get_unknown_returns_none(self, registry):
+        """Get unknown element should return None."""
+        elem = registry.get('eyes', 'nonexistent')
+        assert elem is None

@@ -1,0 +1,5 @@
+kind: particle
+name: fog_bank
+pattern: |
+  ...
+  . .

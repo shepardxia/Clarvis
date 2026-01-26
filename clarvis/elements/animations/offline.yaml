@@ -1,0 +1,5 @@
+kind: animation
+name: offline
+frames:
+  - { eyes: closed, mouth: flat }
+  - { eyes: closed, mouth: flat }

@@ -1,0 +1,7 @@
+kind: animation
+name: executing
+frames:
+  - { eyes: wide, mouth: open }
+  - { eyes: normal, mouth: open }
+  - { eyes: wide, mouth: smile }
+  - { eyes: normal, mouth: open }

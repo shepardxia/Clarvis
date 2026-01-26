@@ -1,0 +1,6 @@
+kind: particle
+name: cloud_puff
+pattern: |
+  ~
+  ~~~
+  ~

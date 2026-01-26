@@ -1,0 +1,4 @@
+kind: element
+name: dots
+char: "."
+position: [3, 1, 3]

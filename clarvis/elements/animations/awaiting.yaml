@@ -1,0 +1,7 @@
+kind: animation
+name: awaiting
+frames:
+  - { eyes: normal, mouth: dots }
+  - { eyes: looking_left, mouth: dots }
+  - { eyes: normal, mouth: dots }
+  - { eyes: looking_right, mouth: dots }

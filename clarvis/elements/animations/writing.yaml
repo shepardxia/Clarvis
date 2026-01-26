@@ -1,0 +1,7 @@
+kind: animation
+name: writing
+frames:
+  - { eyes: normal, mouth: think }
+  - { eyes: wide, mouth: think }
+  - { eyes: normal, mouth: flat }
+  - { eyes: wide, mouth: think }

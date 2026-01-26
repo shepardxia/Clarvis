@@ -1,0 +1,7 @@
+kind: animation
+name: thinking
+frames:
+  - { eyes: looking_left, mouth: think }
+  - { eyes: normal, mouth: think }
+  - { eyes: looking_right, mouth: think }
+  - { eyes: normal, mouth: think }

@@ -1,0 +1,13 @@
+kind: weather_type
+name: fog
+particles:
+  - fog_patch
+  - fog_bank
+  - fog_dot
+  - fog_tilde
+spawn:
+  position: random
+  vx_base: 0.0
+  vx_variance: 0.05
+  vy_range: [-0.03, 0.03]
+  lifetime_range: [60, 150]
