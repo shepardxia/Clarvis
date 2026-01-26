@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from clarvis.daemon import CentralHubDaemon
+from clarvis.core.session_tracker import SessionTracker
 
 
 class TestCentralHubDaemon:
@@ -20,9 +21,8 @@ class TestCentralHubDaemon:
         )
 
         assert daemon.status_raw_file == temp_hub_files["status_raw"]
-        # display_status depends on loaded data, check it's a valid status
         assert daemon.display_status in ["idle", "running", "thinking", "awaiting", "resting"]
-        assert daemon.HISTORY_SIZE == 20
+        assert daemon.session_tracker.HISTORY_SIZE == 20
 
     def test_get_session_creates_new(self, temp_hub_files):
         """Test session creation on first access."""
@@ -32,7 +32,7 @@ class TestCentralHubDaemon:
             output_file=temp_hub_files["widget_display"],
         )
 
-        session = daemon._get_session("new-session-id")
+        session = daemon.session_tracker.get("new-session-id")
 
         assert "new-session-id" in daemon.sessions
         assert session["status_history"] == []
@@ -47,7 +47,6 @@ class TestCentralHubDaemon:
             output_file=temp_hub_files["widget_display"],
         )
 
-        # Create session with some data via state store
         daemon.state.update("sessions", {
             "existing-session": {
                 "status_history": ["idle", "running"],
@@ -57,7 +56,7 @@ class TestCentralHubDaemon:
             }
         })
 
-        session = daemon._get_session("existing-session")
+        session = daemon.session_tracker.get("existing-session")
         assert session["last_status"] == "running"
         assert session["last_context"] == 20
 
@@ -157,7 +156,7 @@ class TestProcessHookEvent:
 
 
 class TestHistoryTracking:
-    """Tests for per-session history tracking."""
+    """Tests for per-session history tracking via SessionTracker."""
 
     def test_add_to_history(self, temp_hub_files):
         """Test adding entries to history."""
@@ -167,8 +166,8 @@ class TestHistoryTracking:
             output_file=temp_hub_files["widget_display"],
         )
 
-        daemon._add_to_history("session-1", "running", 25.0)
-        daemon._add_to_history("session-1", "thinking", 30.0)
+        daemon.session_tracker.update("session-1", "running", 25.0)
+        daemon.session_tracker.update("session-1", "thinking", 30.0)
 
         session = daemon.sessions["session-1"]
         assert session["status_history"] == ["running", "thinking"]
@@ -182,13 +181,13 @@ class TestHistoryTracking:
             output_file=temp_hub_files["widget_display"],
         )
 
-        daemon._add_to_history("session-1", "running", 25.0)
-        daemon._add_to_history("session-1", "running", 26.0)
-        daemon._add_to_history("session-1", "running", 27.0)
+        daemon.session_tracker.update("session-1", "running", 25.0)
+        daemon.session_tracker.update("session-1", "running", 26.0)
+        daemon.session_tracker.update("session-1", "running", 27.0)
 
         session = daemon.sessions["session-1"]
-        assert session["status_history"] == ["running"]  # Only one entry
-        assert len(session["context_history"]) == 3  # But context still tracked
+        assert session["status_history"] == ["running"]
+        assert len(session["context_history"]) == 3
 
     def test_history_max_size(self, temp_hub_files):
         """History should not exceed HISTORY_SIZE."""
@@ -198,15 +197,13 @@ class TestHistoryTracking:
             output_file=temp_hub_files["widget_display"],
         )
 
-        # Add more than HISTORY_SIZE entries
         for i in range(30):
-            # Alternate statuses to avoid deduplication
             status = "running" if i % 2 == 0 else "thinking"
-            daemon._add_to_history("session-1", status, float(i))
+            daemon.session_tracker.update("session-1", status, float(i))
 
         session = daemon.sessions["session-1"]
-        assert len(session["status_history"]) <= daemon.HISTORY_SIZE
-        assert len(session["context_history"]) <= daemon.HISTORY_SIZE
+        assert len(session["status_history"]) <= SessionTracker.HISTORY_SIZE
+        assert len(session["context_history"]) <= SessionTracker.HISTORY_SIZE
 
     def test_zero_context_not_added(self, temp_hub_files):
         """Zero context values should not be added to history."""
@@ -216,12 +213,12 @@ class TestHistoryTracking:
             output_file=temp_hub_files["widget_display"],
         )
 
-        daemon._add_to_history("session-1", "running", 0)
-        daemon._add_to_history("session-1", "thinking", 25.0)
-        daemon._add_to_history("session-1", "running", 0)
+        daemon.session_tracker.update("session-1", "running", 0)
+        daemon.session_tracker.update("session-1", "thinking", 25.0)
+        daemon.session_tracker.update("session-1", "running", 0)
 
         session = daemon.sessions["session-1"]
-        assert session["context_history"] == [25.0]  # Only non-zero value
+        assert session["context_history"] == [25.0]
 
     def test_get_last_context(self, temp_hub_files):
         """Test getting last known context."""
@@ -231,11 +228,11 @@ class TestHistoryTracking:
             output_file=temp_hub_files["widget_display"],
         )
 
-        daemon._add_to_history("session-1", "running", 25.0)
-        daemon._add_to_history("session-1", "thinking", 30.0)
+        daemon.session_tracker.update("session-1", "running", 25.0)
+        daemon.session_tracker.update("session-1", "thinking", 30.0)
 
-        assert daemon._get_last_context("session-1") == 30.0
-        assert daemon._get_last_context("unknown-session") == 0.0
+        assert daemon.session_tracker.get_last_context("session-1") == 30.0
+        assert daemon.session_tracker.get_last_context("unknown-session") == 0.0
 
     def test_separate_sessions(self, temp_hub_files):
         """Different sessions should have separate histories."""
@@ -245,8 +242,8 @@ class TestHistoryTracking:
             output_file=temp_hub_files["widget_display"],
         )
 
-        daemon._add_to_history("session-1", "running", 25.0)
-        daemon._add_to_history("session-2", "thinking", 50.0)
+        daemon.session_tracker.update("session-1", "running", 25.0)
+        daemon.session_tracker.update("session-2", "thinking", 50.0)
 
         assert daemon.sessions["session-1"]["last_context"] == 25.0
         assert daemon.sessions["session-2"]["last_context"] == 50.0
@@ -340,7 +337,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, intensity = daemon._map_weather_to_widget({
+        weather_type, intensity = daemon.refresh._map_weather_to_widget({
             "description": "Light Snow",
             "intensity": 0.4,
         })
@@ -355,7 +352,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({"description": "Heavy Rain"})
+        weather_type, _ = daemon.refresh._map_weather_to_widget({"description": "Heavy Rain"})
         assert weather_type == "rain"
 
     def test_map_shower(self, temp_hub_files):
@@ -366,7 +363,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({"description": "Rain Showers"})
+        weather_type, _ = daemon.refresh._map_weather_to_widget({"description": "Rain Showers"})
         assert weather_type == "rain"
 
     def test_map_drizzle(self, temp_hub_files):
@@ -377,7 +374,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({"description": "Light Drizzle"})
+        weather_type, _ = daemon.refresh._map_weather_to_widget({"description": "Light Drizzle"})
         assert weather_type == "rain"
 
     def test_map_thunder(self, temp_hub_files):
@@ -388,7 +385,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({"description": "Thunderstorm"})
+        weather_type, _ = daemon.refresh._map_weather_to_widget({"description": "Thunderstorm"})
         assert weather_type == "rain"
 
     def test_map_fog(self, temp_hub_files):
@@ -399,7 +396,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({"description": "Dense Fog"})
+        weather_type, _ = daemon.refresh._map_weather_to_widget({"description": "Dense Fog"})
         assert weather_type == "fog"
 
     def test_map_cloudy(self, temp_hub_files):
@@ -410,7 +407,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({"description": "Partly Cloudy"})
+        weather_type, _ = daemon.refresh._map_weather_to_widget({"description": "Partly Cloudy"})
         assert weather_type == "cloudy"
 
     def test_map_overcast(self, temp_hub_files):
@@ -421,7 +418,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({"description": "Overcast"})
+        weather_type, _ = daemon.refresh._map_weather_to_widget({"description": "Overcast"})
         assert weather_type == "cloudy"
 
     def test_map_windy_from_clear(self, temp_hub_files):
@@ -432,7 +429,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({
+        weather_type, _ = daemon.refresh._map_weather_to_widget({
             "description": "Clear",
             "wind_speed": 20,
         })
@@ -446,7 +443,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({
+        weather_type, _ = daemon.refresh._map_weather_to_widget({
             "description": "Cloudy",
             "wind_speed": 15,
         })
@@ -460,7 +457,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        weather_type, _ = daemon._map_weather_to_widget({"description": "Sunny"})
+        weather_type, _ = daemon.refresh._map_weather_to_widget({"description": "Sunny"})
         assert weather_type == "clear"
 
     def test_map_default_intensity(self, temp_hub_files):
@@ -471,7 +468,7 @@ class TestWeatherMapping:
             output_file=temp_hub_files["widget_display"],
         )
 
-        _, intensity = daemon._map_weather_to_widget({"description": "Clear"})
+        _, intensity = daemon.refresh._map_weather_to_widget({"description": "Clear"})
         assert intensity == 0.5
 
 

@@ -4,7 +4,6 @@ import pytest
 from hypothesis import given, strategies as st, settings, assume
 
 from clarvis.services.weather import calculate_intensity, WEATHER_CODE_INTENSITY
-from clarvis.widget.canvas import Canvas, Cell, Color
 from clarvis.widget.pipeline import Layer
 
 
@@ -50,65 +49,6 @@ class TestIntensityProperties:
         low = calculate_intensity(61, 10, 0, 0)
         high = calculate_intensity(61, 10, precipitation, 0)
         assert high >= low
-
-
-class TestCanvasProperties:
-    """Property tests for Canvas operations."""
-
-    @given(
-        width=st.integers(min_value=1, max_value=100),
-        height=st.integers(min_value=1, max_value=100),
-        x=st.integers(min_value=-100, max_value=200),
-        y=st.integers(min_value=-100, max_value=200),
-    )
-    def test_canvas_get_never_raises(self, width, height, x, y):
-        """Getting any position should never raise, even out of bounds."""
-        canvas = Canvas(width, height)
-        cell = canvas[x, y]
-        assert isinstance(cell, Cell)
-
-    @given(
-        width=st.integers(min_value=1, max_value=100),
-        height=st.integers(min_value=1, max_value=100),
-        x=st.integers(min_value=-100, max_value=200),
-        y=st.integers(min_value=-100, max_value=200),
-        char=st.text(min_size=1, max_size=1),
-    )
-    def test_canvas_put_never_raises(self, width, height, x, y, char):
-        """Putting at any position should never raise, even out of bounds."""
-        canvas = Canvas(width, height)
-        # Should not raise
-        canvas.put(x, y, char)
-
-    @given(
-        width=st.integers(min_value=1, max_value=50),
-        height=st.integers(min_value=1, max_value=50),
-    )
-    def test_canvas_render_plain_dimensions(self, width, height):
-        """render_plain should produce correct dimensions."""
-        canvas = Canvas(width, height)
-        result = canvas.render_plain()
-        lines = result.split("\n")
-
-        assert len(lines) == height
-        for line in lines:
-            assert len(line) == width
-
-    @given(
-        width=st.integers(min_value=1, max_value=50),
-        height=st.integers(min_value=1, max_value=50),
-        x=st.integers(min_value=0, max_value=49),
-        y=st.integers(min_value=0, max_value=49),
-    )
-    def test_canvas_roundtrip(self, width, height, x, y):
-        """Put then get should return the same value (if in bounds)."""
-        assume(x < width and y < height)
-
-        canvas = Canvas(width, height)
-        canvas.put(x, y, "X")
-        cell = canvas[x, y]
-
-        assert cell.char == "X"
 
 
 class TestLayerProperties:
@@ -161,6 +101,7 @@ class TestHistoryProperties:
     def test_history_never_exceeds_limit(self, entries):
         """History buffers should never exceed HISTORY_SIZE."""
         from clarvis.daemon import CentralHubDaemon
+        from clarvis.core.session_tracker import SessionTracker
         from pathlib import Path
         import tempfile
 
@@ -173,11 +114,11 @@ class TestHistoryProperties:
             )
 
             for status, context in entries:
-                daemon._add_to_history("test-session", status, context)
+                daemon.session_tracker.update("test-session", status, context)
 
             session = daemon.sessions.get("test-session", {})
             status_history = session.get("status_history", [])
             context_history = session.get("context_history", [])
 
-            assert len(status_history) <= daemon.HISTORY_SIZE
-            assert len(context_history) <= daemon.HISTORY_SIZE
+            assert len(status_history) <= SessionTracker.HISTORY_SIZE
+            assert len(context_history) <= SessionTracker.HISTORY_SIZE

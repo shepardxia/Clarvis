@@ -13,22 +13,23 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from .core import get_hub_section, write_hub_section, get_current_time, read_hub_data, DEFAULT_TIMEZONE
+from .core import read_hub_data
 from .core.state import StateStore, get_state_store
+from .core.session_tracker import SessionTracker
+from .core.display_manager import DisplayManager
+from .core.refresh_manager import RefreshManager
 from .core.ipc import DaemonServer
-from .services import get_location, get_cached_timezone, fetch_weather
 from .services.token_usage import TokenUsageService
 from .services.thinking_feed import get_session_manager
-from .services.whimsy_verb import generate_whimsy_verb
+from .services.whimsy_verb import WhimsyManager
 from .widget.renderer import FrameRenderer
 from .widget.config import get_config, watch_config, WidgetConfig, restart_daemon_and_widget
 from .widget.socket_server import WidgetSocketServer, get_socket_server
-from .core.colors import StatusColors
 
 
 class PidLock:
@@ -172,10 +173,6 @@ class StatusHandler(FileSystemEventHandler):
 class CentralHubDaemon:
     """Background daemon for Clarvis - uses StateStore as single source of truth."""
 
-    # Configuration
-    HISTORY_SIZE = 20
-    SESSION_TIMEOUT = 300  # 5 minutes
-
     def __init__(
         self,
         status_raw_file: Path = None,
@@ -193,22 +190,20 @@ class CentralHubDaemon:
         self.refresh_interval = refresh_interval
         self.display_fps = display_fps
 
-        # Core components - single source of truth
+        # Core state
         self.state = state_store or get_state_store()
-        self.socket_server = socket_server or get_socket_server()
+        self.session_tracker = SessionTracker(self.state)
         self.command_server = DaemonServer()
         self.token_usage_service: Optional[TokenUsageService] = None
 
         # Threading
         self.observer: Observer | None = None
         self.running = False
-        self.background_thread: threading.Thread | None = None
-        self.display_thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
-        # Display rendering
+        # Display manager
         config = get_config()
-        self.renderer = FrameRenderer(
+        renderer = FrameRenderer(
             width=config.grid_width,
             height=config.grid_height,
             avatar_x_offset=config.display.avatar_x_offset,
@@ -216,27 +211,25 @@ class CentralHubDaemon:
             bar_x_offset=config.display.bar_x_offset,
             bar_y_offset=config.display.bar_y_offset,
         )
-        self.displayed_session_id: str | None = None
+        self.socket_server = socket_server or get_socket_server()
+        self.display = DisplayManager(
+            renderer=renderer,
+            socket_server=self.socket_server,
+            output_file=self.output_file,
+            fps=display_fps,
+        )
 
-        # Border styles by status
-        self.border_styles = {
-            "running": {"width": 3, "pulse": True},
-            "thinking": {"width": 3, "pulse": True},
-            "awaiting": {"width": 2, "pulse": True},
-            "resting": {"width": 1, "pulse": False},
-            "idle": {"width": 1, "pulse": False},
-            "offline": {"width": 1, "pulse": False},
-        }
+        # Whimsy verb manager
+        self.whimsy = WhimsyManager(
+            context_provider=lambda: self._get_chat_context(),
+        )
 
-        # Whimsy verb tracking
-        self._last_whimsy_time: float = 0
-        self._whimsy_cooldown: float = 5.0  # seconds
-        self._current_whimsy_verb: str | None = None
-        # Cost estimate: ~614 input tokens (114 system + 500 context) + ~5 output
-        # Haiku 4.5: $1/M input, $5/M output = ~$0.00064/call
-        self._whimsy_cost_per_call: float = 0.00065
-        self._whimsy_stats_file: Path = Path("/tmp/clarvis-whimsy-stats.json")
-        self._whimsy_call_count, self._whimsy_total_cost = self._load_whimsy_stats()
+        # Refresh manager (created after display for dependency)
+        self.refresh = RefreshManager(
+            state=self.state,
+            display_manager=self.display,
+            interval=refresh_interval,
+        )
 
         # Load initial state from hub file
         self._load_initial_state()
@@ -285,17 +278,17 @@ class CentralHubDaemon:
         if hub_data.get("time"):
             self.state.update("time", hub_data["time"], notify=False)
 
-        # Initialize renderer from loaded state
+        # Initialize display from loaded state
         status = self.state.get("status")
         if status:
-            self.renderer.set_status(status.get("status", "idle"))
+            self.display.set_status(status.get("status", "idle"))
 
         weather = self.state.get("weather")
         if weather:
             weather_type = weather.get("widget_type", "clear")
             intensity = weather.get("widget_intensity", 0.0)
             wind_speed = weather.get("wind_speed", 0.0)
-            self.renderer.set_weather(weather_type, intensity, wind_speed)
+            self.display.set_weather(weather_type, intensity, wind_speed)
 
     def _on_state_change(self, section: str, value: dict):
         """Handle state changes - persist to file."""
@@ -310,80 +303,6 @@ class CentralHubDaemon:
         temp_file.write_text(json.dumps(hub_data, indent=2))
         temp_file.rename(self.hub_data_file)
 
-    # --- Session Management ---
-
-    def _get_session(self, session_id: str) -> dict:
-        """Get or create session tracking data."""
-        sessions = self.state.get("sessions")
-        if session_id not in sessions:
-            sessions[session_id] = {
-                "status_history": [],
-                "context_history": [],
-                "last_status": "idle",
-                "last_context": 0.0,
-                "last_seen": time.time(),
-            }
-            self.state.update("sessions", sessions)
-        return sessions[session_id]
-
-    def _add_to_history(self, session_id: str, status: str, context_percent: float):
-        """Add values to per-session history buffers."""
-        sessions = self.state.get("sessions")
-        session = sessions.get(session_id) or {
-            "status_history": [],
-            "context_history": [],
-            "last_status": "idle",
-            "last_context": 0.0,
-        }
-
-        # Update last_seen for session cleanup
-        session["last_seen"] = time.time()
-
-        # Set displayed session if none set
-        if self.displayed_session_id is None:
-            self.displayed_session_id = session_id
-
-        # Only add status if it changed
-        history = session.get("status_history", [])
-        if not history or history[-1] != status:
-            history.append(status)
-            if len(history) > self.HISTORY_SIZE:
-                history.pop(0)
-        session["status_history"] = history
-        session["last_status"] = status
-
-        # Only add context if it's a valid non-zero value
-        if context_percent > 0:
-            ctx_history = session.get("context_history", [])
-            ctx_history.append(context_percent)
-            if len(ctx_history) > self.HISTORY_SIZE:
-                ctx_history.pop(0)
-            session["context_history"] = ctx_history
-            session["last_context"] = context_percent
-
-        sessions[session_id] = session
-        self.state.update("sessions", sessions)
-
-    def _get_last_context(self, session_id: str) -> float:
-        """Get last known context percent for session."""
-        sessions = self.state.get("sessions")
-        session = sessions.get(session_id, {})
-        return session.get("last_context", 0.0)
-
-    def _cleanup_stale_sessions(self):
-        """Remove sessions inactive for > SESSION_TIMEOUT."""
-        now = time.time()
-        sessions = self.state.get("sessions")
-        active = {
-            sid: data for sid, data in sessions.items()
-            if now - data.get("last_seen", 0) < self.SESSION_TIMEOUT
-        }
-        if len(active) != len(sessions):
-            self.state.update("sessions", active)
-            # Reset displayed session if it was cleaned up
-            if self.displayed_session_id not in active:
-                self.displayed_session_id = next(iter(active), None)
-
     # --- Status Processing ---
 
     def process_hook_event(self, raw_data: dict) -> dict:
@@ -393,7 +312,7 @@ class CentralHubDaemon:
         context_window = raw_data.get("context_window") or {}
         context_percent = context_window.get("used_percentage") or 0
 
-        # Get existing status from state (no file read needed!)
+        # Get existing status from state
         existing_status = self.state.get("status")
 
         # Map events to status/color
@@ -413,15 +332,14 @@ class CentralHubDaemon:
         else:
             status, color = "idle", "gray"
 
-        # Update per-session history
-        self._add_to_history(session_id, status, context_percent)
+        # Update session history
+        self.session_tracker.update(session_id, status, context_percent)
 
         # Use last known context if current is 0
-        effective_context = context_percent if context_percent else self._get_last_context(session_id)
+        effective_context = context_percent or self.session_tracker.get_last_context(session_id)
 
         # Get session data for output
-        sessions = self.state.get("sessions")
-        session = sessions.get(session_id, {})
+        session = self.session_tracker.get(session_id)
 
         return {
             "session_id": session_id,
@@ -445,70 +363,23 @@ class CentralHubDaemon:
             # Update state (triggers observers, including file persistence)
             self.state.update("status", processed)
 
-            # Update renderer if this is the displayed session
-            if processed.get("session_id") == self.displayed_session_id:
-                with self._lock:
-                    self.renderer.set_status(processed.get("status", "idle"))
+            # Update display if this is the displayed session
+            if processed.get("session_id") == self.session_tracker.displayed_id:
+                self.display.set_status(processed.get("status", "idle"))
 
             # Trigger whimsy verb on user prompt submit (with cooldown)
             self._maybe_trigger_whimsy(raw_data.get("hook_event_name"))
 
             # Periodically clean up stale sessions
-            self._cleanup_stale_sessions()
+            self.session_tracker.cleanup_stale()
 
         except (json.JSONDecodeError, IOError):
             pass
 
     def _maybe_trigger_whimsy(self, event: str | None):
         """Trigger whimsy verb generation when switching to thinking status."""
-        if not event:
-            return
-
-        # Clear verb when awaiting (Stop or Notification)
-        if event in ("Stop", "Notification"):
-            self._current_whimsy_verb = None
-            return
-
-        # Trigger only on user prompt submit
-        if event != "UserPromptSubmit":
-            return
-
-        now = time.time()
-
-        # Check cooldown (10 seconds)
-        if now - self._last_whimsy_time < 10.0:
-            return
-
-        self._last_whimsy_time = now
-
-        # Generate in background thread to not block
-        thread = threading.Thread(target=self._generate_whimsy, daemon=True)
-        thread.start()
-
-    def _generate_whimsy(self):
-        """Generate whimsy verb from chat history context."""
-        try:
-            context = self._get_chat_context()
-
-            if not context:
-                return
-
-            verb = generate_whimsy_verb(context)
-            self._current_whimsy_verb = verb
-            self._whimsy_call_count += 1
-            self._whimsy_total_cost += self._whimsy_cost_per_call
-            self._save_whimsy_stats()
-
-            # Store in state for access
-            self.state.update("whimsy", {
-                "verb": verb,
-                "call_count": self._whimsy_call_count,
-                "total_cost": self._whimsy_total_cost,
-                "timestamp": datetime.now().isoformat(),
-            })
-
-        except Exception as e:
-            print(f"Whimsy generation error: {e}")
+        if event:
+            self.whimsy.maybe_generate(event)
 
     def _get_chat_context(self, max_messages: int = 10) -> str:
         """Extract recent chat context from transcript file."""
@@ -589,225 +460,25 @@ class CentralHubDaemon:
                 self.observer.join()
                 self.observer = None
 
-    # --- Data Refresh ---
-
-    def refresh_location(self) -> tuple[float, float, str]:
-        """Refresh location data."""
-        lat, lon, city = get_location()
-        self.state.update("location", {
-            "latitude": lat,
-            "longitude": lon,
-            "city": city,
-        })
-        return lat, lon, city
-
-    def refresh_weather(self, latitude: float = None, longitude: float = None, city: str = None) -> dict:
-        """Refresh weather data."""
-        if latitude is None or longitude is None:
-            latitude, longitude, city = get_location()
-
-        weather = fetch_weather(latitude, longitude)
-        weather_dict = {
-            **weather.to_dict(),
-            "latitude": latitude,
-            "longitude": longitude,
-            "city": city or "Unknown",
-        }
-
-        # Add widget-mapped weather type and intensity
-        widget_type, widget_intensity = self._map_weather_to_widget(weather_dict)
-        weather_dict["widget_type"] = widget_type
-        weather_dict["widget_intensity"] = widget_intensity
-
-        # Update state and renderer
-        self.state.update("weather", weather_dict)
-        write_hub_section("weather", weather_dict)  # Legacy file write
-
-        with self._lock:
-            self.renderer.set_weather(widget_type, widget_intensity, weather.wind_speed)
-
-        return weather_dict
-
-    def refresh_time(self, timezone: str = None) -> dict:
-        """Refresh time data."""
-        if timezone is None:
-            timezone = get_cached_timezone() or DEFAULT_TIMEZONE
-
-        time_data = get_current_time(timezone)
-        time_dict = time_data.to_dict()
-
-        self.state.update("time", time_dict)
-        write_hub_section("time", time_dict)  # Legacy file write
-
-        return time_dict
-
-    def refresh_all(self):
-        """Refresh all data sources."""
-        lat, lon, city = self.refresh_location()
-
-        try:
-            self.refresh_weather(lat, lon, city)
-        except Exception:
-            pass
-
-        try:
-            self.refresh_time()
-        except Exception:
-            pass
-
-    def _map_weather_to_widget(self, weather_dict: dict) -> tuple[str, float]:
-        """Map weather data to widget type and intensity."""
-        description = weather_dict.get("description", "").lower()
-        wind_speed = weather_dict.get("wind_speed", 0)
-        intensity = weather_dict.get("intensity", 0.5)
-
-        weather_type = "clear"
-
-        if "snow" in description:
-            weather_type = "snow"
-        elif "rain" in description or "shower" in description or "drizzle" in description:
-            weather_type = "rain"
-        elif "thunder" in description:
-            weather_type = "rain"
-        elif "fog" in description:
-            weather_type = "fog"
-        elif "cloud" in description or "overcast" in description:
-            weather_type = "cloudy"
-
-        if weather_type in ("clear", "cloudy") and wind_speed >= 15:
-            weather_type = "windy"
-
-        return weather_type, intensity
-
-    # --- Display Rendering ---
-
-    def _render_display_frame(self):
-        """Render and output a display frame."""
-        config = get_config()
-
-        with self._lock:
-            # In testing mode, use config overrides
-            if config.testing.enabled:
-                display_status = config.test_status
-                context_percent = config.test_context_percent
-
-                # Apply test weather if different from current
-                self.renderer.set_status(display_status)
-                self.renderer.set_weather(
-                    config.test_weather,
-                    config.test_weather_intensity,
-                    config.test_wind_speed
-                )
-            else:
-                status = self.state.get("status")
-                context_percent = status.get("context_percent", 0) if status else 0
-                display_status = status.get("status", "idle") if status else "idle"
-
-            # Get RGB color from theme
-            color_def = StatusColors.get(display_status)
-            display_color = list(color_def.rgb)  # [r, g, b] as floats 0.0-1.0
-
-            frame = self.renderer.render_colored(context_percent, self._current_whimsy_verb)
-            border = self.border_styles.get(display_status, {"width": 1, "pulse": False})
-
-            output = {
-                "frame": frame,
-                "color": display_color,
-                "status": display_status,
-                "border_width": border["width"],
-                "border_pulse": border["pulse"],
-                "context_percent": context_percent,
-                "whimsy_verb": self._current_whimsy_verb,
-                "timestamp": time.time(),
-            }
-
-        # Push to socket (new way)
-        self.socket_server.push_frame(output)
-
-        # Also write to file (backward compatibility)
-        temp_file = self.output_file.with_suffix(".tmp")
-        temp_file.write_text(json.dumps(output))
-        temp_file.rename(self.output_file)
-
-    def _display_loop(self):
-        """Display rendering loop."""
-        interval = 1.0 / self.display_fps
-
-        while self.running:
-            start = time.time()
-
-            with self._lock:
-                self.renderer.tick()
-
-            self._render_display_frame()
-
-            elapsed = time.time() - start
-            sleep_time = max(0, interval - elapsed)
-            time.sleep(sleep_time)
-
-    def start_display(self):
-        """Start the display rendering thread."""
-        if self.display_thread is not None and self.display_thread.is_alive():
-            return
-
-        self.display_thread = threading.Thread(target=self._display_loop, daemon=True)
-        self.display_thread.start()
-
-    def stop_display(self):
-        """Stop the display rendering thread."""
-        if self.display_thread is not None:
-            self.display_thread.join(timeout=1.0)
-            self.display_thread = None
-
-    # --- Background Loop ---
-
-    def _background_loop(self):
-        """Main background loop - handles periodic refreshes."""
-        last_refresh = 0
-
-        while self.running:
-            current_time = time.time()
-
-            if current_time - last_refresh >= self.refresh_interval:
-                self.refresh_all()
-                last_refresh = current_time
-
-            time.sleep(1)
-
-    def start_background_loop(self):
-        """Start the background refresh loop thread."""
-        if self.background_thread is not None and self.background_thread.is_alive():
-            return
-
-        self.background_thread = threading.Thread(target=self._background_loop, daemon=False)
-        self.background_thread.start()
-
-    def stop_background_loop(self):
-        """Stop the background refresh loop thread."""
-        if self.background_thread is not None:
-            self.background_thread.join(timeout=2.0)
-            self.background_thread = None
-
     # --- Lifecycle ---
 
     def _on_config_change(self, new_config: WidgetConfig):
         """Handle config file changes."""
         # Check if grid size changed (requires restart)
-        if (new_config.grid_width != self.renderer.width or
-            new_config.grid_height != self.renderer.height):
+        if (new_config.grid_width != self.display.renderer.width or
+            new_config.grid_height != self.display.renderer.height):
             print(f"Grid size changed, restarting...")
             restart_daemon_and_widget()
             return
 
         # If testing mode, apply overrides immediately
         if new_config.testing.enabled:
-            with self._lock:
-                self.renderer.set_status(new_config.test_status)
-                self.renderer.set_weather(
-                    new_config.test_weather,
-                    new_config.test_weather_intensity,
-                    new_config.test_wind_speed
-                )
+            self.display.set_status(new_config.test_status)
+            self.display.set_weather(
+                new_config.test_weather,
+                new_config.test_weather_intensity,
+                new_config.test_wind_speed
+            )
 
     def _register_command_handlers(self):
         """Register handlers for IPC commands from MCP server."""
@@ -878,40 +549,11 @@ class CentralHubDaemon:
 
     def _cmd_get_sessions(self) -> list:
         """List all tracked sessions."""
-        sessions = self.state.get("sessions")
-        status = self.state.get("status")
-        displayed = status.get("session_id") if status else None
-
-        result = []
-        for session_id, data in sessions.items():
-            result.append({
-                "session_id": session_id,
-                "is_displayed": session_id == displayed,
-                "last_status": data.get("last_status", "unknown"),
-                "last_context": data.get("last_context", 0),
-                "status_history_length": len(data.get("status_history", [])),
-                "context_history_length": len(data.get("context_history", [])),
-            })
-        return result
+        return self.session_tracker.list_all()
 
     def _cmd_get_session(self, session_id: str) -> dict:
         """Get details for a specific session."""
-        sessions = self.state.get("sessions")
-        status = self.state.get("status")
-        displayed = status.get("session_id") if status else None
-
-        if session_id not in sessions:
-            raise ValueError(f"Session {session_id} not found")
-
-        data = sessions[session_id]
-        return {
-            "session_id": session_id,
-            "is_displayed": session_id == displayed,
-            "last_status": data.get("last_status", "unknown"),
-            "last_context": data.get("last_context", 0),
-            "status_history": data.get("status_history", []),
-            "context_history": data.get("context_history", []),
-        }
+        return self.session_tracker.get_details(session_id)
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get current token usage data.
@@ -925,20 +567,20 @@ class CentralHubDaemon:
 
     def _cmd_refresh_weather(self, latitude: float = None, longitude: float = None) -> dict:
         """Refresh weather and return new data."""
-        return self.refresh_weather(latitude, longitude)
+        return self.refresh.refresh_weather(latitude, longitude)
 
     def _cmd_refresh_time(self, timezone: str = None) -> dict:
         """Refresh time and return new data."""
-        return self.refresh_time(timezone)
+        return self.refresh.refresh_time(timezone)
 
     def _cmd_refresh_location(self) -> dict:
         """Refresh location and return new data."""
-        lat, lon, city = self.refresh_location()
+        lat, lon, city = self.refresh.refresh_location()
         return {"latitude": lat, "longitude": lon, "city": city}
 
     def _cmd_refresh_all(self) -> str:
         """Refresh all data sources."""
-        self.refresh_all()
+        self.refresh.refresh_all()
         return "ok"
 
     def _cmd_get_thinking_context(self, limit: int = 500) -> dict:
@@ -966,48 +608,34 @@ class CentralHubDaemon:
             ctx_data = self._cmd_get_thinking_context()
             context = ctx_data.get("context")
 
-        if not context:
-            return {"verb": None, "error": "No context available"}
-
-        try:
-            verb = generate_whimsy_verb(context)
-            self._whimsy_call_count += 1
-            self._whimsy_total_cost += self._whimsy_cost_per_call
-            self._save_whimsy_stats()
-            return {"verb": verb, "context_length": len(context)}
-        except Exception as e:
-            return {"verb": None, "error": str(e)}
+        return self.whimsy.generate_sync(context)
 
     def _cmd_get_whimsy_stats(self) -> dict:
         """Get whimsy verb usage statistics."""
-        return {
-            "current_verb": self._current_whimsy_verb,
-            "call_count": self._whimsy_call_count,
-            "total_cost": round(self._whimsy_total_cost, 6),
-            "cost_per_call": self._whimsy_cost_per_call,
-            "cooldown_seconds": self._whimsy_cooldown,
-        }
+        return self.whimsy.stats
 
-    def _load_whimsy_stats(self) -> tuple[int, float]:
-        """Load whimsy stats from file."""
-        try:
-            if self._whimsy_stats_file.exists():
-                data = json.loads(self._whimsy_stats_file.read_text())
-                return data.get("call_count", 0), data.get("total_cost", 0.0)
-        except Exception:
-            pass
-        return 0, 0.0
+    def _get_display_state(self) -> tuple[str, float, str | None]:
+        """Get current display state for rendering.
 
-    def _save_whimsy_stats(self):
-        """Save whimsy stats to file."""
-        try:
-            data = {
-                "call_count": self._whimsy_call_count,
-                "total_cost": self._whimsy_total_cost,
-            }
-            self._whimsy_stats_file.write_text(json.dumps(data))
-        except Exception:
-            pass
+        Returns:
+            Tuple of (status, context_percent, whimsy_verb)
+        """
+        config = get_config()
+
+        if config.testing.enabled:
+            # Testing mode overrides
+            self.display.set_status(config.test_status)
+            self.display.set_weather(
+                config.test_weather,
+                config.test_weather_intensity,
+                config.test_wind_speed
+            )
+            return config.test_status, config.test_context_percent, self.whimsy.current_verb
+
+        status = self.state.get("status")
+        context_percent = status.get("context_percent", 0) if status else 0
+        display_status = status.get("status", "idle") if status else "idle"
+        return display_status, context_percent, self.whimsy.current_verb
 
     def start(self):
         """Start the daemon."""
@@ -1037,14 +665,14 @@ class CentralHubDaemon:
         # Start status watcher
         self.start_status_watcher()
 
-        # Start display rendering
-        self.start_display()
+        # Start display rendering (pass state getter callback)
+        self.display.start(self._get_display_state)
 
         # Start background refresh loop
-        self.start_background_loop()
+        self.refresh.start()
 
         # Initial refresh
-        self.refresh_all()
+        self.refresh.refresh_all()
 
     def stop(self):
         """Stop the daemon."""
@@ -1057,9 +685,9 @@ class CentralHubDaemon:
         if hasattr(self, 'config_watcher') and self.config_watcher:
             self.config_watcher.stop()
 
-        self.stop_background_loop()
+        self.refresh.stop()
         self.stop_status_watcher()
-        self.stop_display()
+        self.display.stop()
         self.socket_server.stop()
         self.command_server.stop()
 
@@ -1072,10 +700,11 @@ class CentralHubDaemon:
         self.start()
         try:
             while self.running:
-                if self.background_thread and not self.background_thread.is_alive():
-                    self.start_background_loop()
-                if self.display_thread and not self.display_thread.is_alive():
-                    self.start_display()
+                # Restart managers if their threads died unexpectedly
+                if self.refresh._thread and not self.refresh._thread.is_alive():
+                    self.refresh.start()
+                if self.display._thread and not self.display._thread.is_alive():
+                    self.display.start(self._get_display_state)
 
                 time.sleep(5)
         except KeyboardInterrupt:
@@ -1099,22 +728,22 @@ def get_daemon() -> CentralHubDaemon:
 # Backward compatibility functions
 def refresh_location() -> tuple[float, float, str]:
     """Refresh location data and write to hub."""
-    return get_daemon().refresh_location()
+    return get_daemon().refresh.refresh_location()
 
 
 def refresh_weather(latitude: float = None, longitude: float = None, city: str = None) -> dict:
     """Refresh weather data and write to hub."""
-    return get_daemon().refresh_weather(latitude, longitude, city)
+    return get_daemon().refresh.refresh_weather(latitude, longitude, city)
 
 
 def refresh_time(timezone: str = None) -> dict:
     """Refresh time data and write to hub."""
-    return get_daemon().refresh_time(timezone)
+    return get_daemon().refresh.refresh_time(timezone)
 
 
 def refresh_all():
     """Refresh all data sources."""
-    get_daemon().refresh_all()
+    get_daemon().refresh.refresh_all()
 
 
 def main():
@@ -1124,7 +753,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
         # One-shot refresh doesn't need lock
         daemon = CentralHubDaemon()
-        daemon.refresh_all()
+        daemon.refresh.refresh_all()
     else:
         # Acquire singleton lock before starting daemon
         _daemon_lock = PidLock()
