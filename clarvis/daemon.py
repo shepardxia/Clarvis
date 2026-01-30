@@ -27,6 +27,7 @@ from .core.ipc import DaemonServer
 from .services.token_usage import TokenUsageService
 from .services.thinking_feed import get_session_manager
 from .services.whimsy_verb import WhimsyManager
+from .services.wake_word import WakeWordService, WakeWordConfig
 from .widget.renderer import FrameRenderer
 from .widget.config import get_config, watch_config, WidgetConfig, restart_daemon_and_widget
 from .widget.socket_server import WidgetSocketServer, get_socket_server
@@ -200,6 +201,7 @@ class CentralHubDaemon:
         self.session_tracker = SessionTracker(self.state)
         self.command_server = DaemonServer()
         self.token_usage_service: Optional[TokenUsageService] = None
+        self.wake_word_service: Optional[WakeWordService] = None
 
         # Threading
         self.observer: Observer | None = None
@@ -309,42 +311,70 @@ class CentralHubDaemon:
 
     # --- Status Processing ---
 
+    # Tool categories for semantic status mapping
+    READING_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS", "NotebookRead"}
+    WRITING_TOOLS = {"Write", "Edit", "NotebookEdit"}
+    EXECUTING_TOOLS = {"Bash", "TodoWrite", "TodoRead"}
+    THINKING_TOOLS = {"Task", "EnterPlanMode", "ExitPlanMode"}
+    AWAITING_TOOLS = {"AskUserQuestion"}
+
+    # Keywords for MCP tool classification
+    READING_KEYWORDS = {"read", "get", "list", "find", "search", "fetch", "query", "inspect", "browse", "view"}
+    WRITING_KEYWORDS = {"write", "create", "edit", "replace", "insert", "delete", "update", "add", "remove", "set"}
+    EXECUTING_KEYWORDS = {"execute", "run", "shell", "browser", "click", "navigate", "type", "press", "play", "pause"}
+
+    def _classify_tool(self, tool_name: str) -> tuple[str, str]:
+        """Classify a tool into status/color based on its name and semantics.
+
+        Returns (status, color) tuple.
+        """
+        # Explicit matches first (highest priority)
+        if tool_name in self.READING_TOOLS:
+            return "reading", "cyan"
+        if tool_name in self.WRITING_TOOLS:
+            return "writing", "magenta"
+        if tool_name in self.EXECUTING_TOOLS:
+            return "executing", "orange"
+        if tool_name in self.THINKING_TOOLS:
+            return "thinking", "yellow"
+        if tool_name in self.AWAITING_TOOLS:
+            return "awaiting", "blue"
+
+        # MCP tool heuristics (pattern matching)
+        if tool_name.startswith("mcp__"):
+            lower = tool_name.lower()
+            # Check keywords in order of specificity
+            if any(kw in lower for kw in self.WRITING_KEYWORDS):
+                return "writing", "magenta"
+            if any(kw in lower for kw in self.EXECUTING_KEYWORDS):
+                return "executing", "orange"
+            if any(kw in lower for kw in self.READING_KEYWORDS):
+                return "reading", "cyan"
+
+        # Default for unknown tools
+        return "running", "green"
+
     def process_hook_event(self, raw_data: dict) -> dict:
         """Process raw hook event into status/color based on tool_name."""
         session_id = raw_data.get("session_id", "unknown")
         event = raw_data.get("hook_event_name", "")
         tool_name = raw_data.get("tool_name", "")
+        tool_error = raw_data.get("tool_error")  # Check for errors
         context_window = raw_data.get("context_window") or {}
         context_percent = context_window.get("used_percentage") or 0
 
         # Get existing status from state
         existing_status = self.state.get("status")
 
-        # Tool categories for semantic status mapping
-        READING_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch"}
-        WRITING_TOOLS = {"Write", "Edit"}
-        EXECUTING_TOOLS = {"Bash"}
-        THINKING_TOOLS = {"Task"}
-        AWAITING_TOOLS = {"AskUserQuestion"}
-
         # Map events to status/color with tool-based refinement
         if event == "PreToolUse":
-            # Use tool_name to determine specific status
-            if tool_name in READING_TOOLS or tool_name.startswith("mcp__") and "read" in tool_name.lower():
-                status, color = "reading", "cyan"
-            elif tool_name in WRITING_TOOLS:
-                status, color = "writing", "magenta"
-            elif tool_name in EXECUTING_TOOLS:
-                status, color = "executing", "orange"
-            elif tool_name in THINKING_TOOLS:
-                status, color = "thinking", "yellow"
-            elif tool_name in AWAITING_TOOLS:
-                status, color = "awaiting", "blue"
-            else:
-                # Default for unknown tools
-                status, color = "running", "green"
+            status, color = self._classify_tool(tool_name)
         elif event == "PostToolUse":
-            status, color = "thinking", "yellow"
+            # Check if tool encountered an error
+            if tool_error:
+                status, color = "reviewing", "magenta"
+            else:
+                status, color = "thinking", "yellow"
         elif event == "UserPromptSubmit":
             status, color = "thinking", "yellow"
         elif event == "Stop":
@@ -362,11 +392,15 @@ class CentralHubDaemon:
         else:
             status, color = "idle", "gray"
 
-        # Update session history with tool info
-        self.session_tracker.update(session_id, status, context_percent, tool_name)
+        # Update session history with tool info and outcome
+        tool_succeeded = not bool(tool_error) if event == "PostToolUse" else None
+        self.session_tracker.update(session_id, status, context_percent, tool_name, tool_succeeded)
 
         # Use last known context if current is 0
         effective_context = context_percent or self.session_tracker.get_last_context(session_id)
+
+        # High context warning at 70%+
+        high_context = effective_context >= 70
 
         # Get session data for output
         session = self.session_tracker.get(session_id)
@@ -376,9 +410,11 @@ class CentralHubDaemon:
             "status": status,
             "color": color,
             "context_percent": effective_context,
+            "high_context": high_context,
             "status_history": session.get("status_history", []).copy(),
             "context_history": session.get("context_history", []).copy(),
             "tool_history": session.get("tool_history", []).copy(),
+            "tool_outcomes": session.get("tool_outcomes", []).copy(),
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -410,34 +446,44 @@ class CentralHubDaemon:
 
     def _check_special_animation(self, session_id: str, raw_data: dict) -> tuple[str, str] | None:
         """Check if Stop event should trigger a special animation.
-        
+
         Returns (status, color) tuple if special animation should play, None otherwise.
-        
+
         Triggers:
-        - celebration: Stop after 5+ tool uses in session (productive work)
-        - eureka: Stop after Write/Edit in recent tool history (created something)
+        - eureka: Created something (Write/Edit succeeded), especially after failures
+        - celebration: Productive session (5+ tools) without creation
         """
         session = self.session_tracker.get(session_id)
         tool_history = session.get("tool_history", [])
-        
+        tool_outcomes = session.get("tool_outcomes", [])
+
         # Need some activity to trigger special animations
         if len(tool_history) < 3:
             return None
-        
-        # Check for productive session (5+ tools = celebration)
-        if len(tool_history) >= 5:
-            # Check if recent tools include Write/Edit (created something = eureka)
-            recent_tools = tool_history[-5:]
-            creative_tools = {"Write", "Edit"}
-            if any(t in creative_tools for t in recent_tools):
-                return ("eureka", "gold")
-            else:
-                return ("celebration", "gold")
-        
-        # Check for any Write/Edit in shorter sessions
-        if any(t in {"Write", "Edit"} for t in tool_history[-3:]):
+
+        creative_tools = {"Write", "Edit", "NotebookEdit"}
+        recent_tools = tool_history[-5:] if len(tool_history) >= 5 else tool_history
+
+        # Check for eureka: successful Write/Edit, especially after failures
+        recent_outcomes = tool_outcomes[-5:] if len(tool_outcomes) >= 5 else tool_outcomes
+        had_failures = any(not o.get("succeeded", True) for o in recent_outcomes)
+        had_creative_success = any(
+            o.get("tool") in creative_tools and o.get("succeeded", False)
+            for o in recent_outcomes
+        )
+
+        # Eureka: created something successfully (bonus if after failures = problem solved)
+        if had_creative_success:
             return ("eureka", "gold")
-        
+
+        # Fallback: check tool history if outcomes not tracked yet
+        if any(t in creative_tools for t in recent_tools):
+            return ("eureka", "gold")
+
+        # Celebration: productive session (5+ tools) without creation
+        if len(tool_history) >= 5:
+            return ("celebration", "gold")
+
         return None
 
     def _maybe_trigger_whimsy(self, event: str | None):
@@ -445,52 +491,122 @@ class CentralHubDaemon:
         if event:
             self.whimsy.maybe_generate(event)
 
-    def _get_rich_context(self, max_messages: int = 5, max_chars: int = 1200) -> str:
-        """Build compact context for whimsy verb generation (~400 tokens).
+    def _check_status_staleness(self, timeout_seconds: int = 30) -> bool:
+        """Check if status is stale and reset to idle if so.
 
-        Combines: weather, time, music, activity, conversation.
+        Returns True if status was reset, False otherwise.
+        """
+        status = self.state.get("status")
+        if not status:
+            return False
+
+        timestamp_str = status.get("timestamp")
+        current_status = status.get("status", "idle")
+
+        # Don't reset if already idle or awaiting (these are resting states)
+        if current_status in ("idle", "awaiting", "resting"):
+            return False
+
+        if timestamp_str:
+            try:
+                last_update = datetime.fromisoformat(timestamp_str)
+                age = datetime.now() - last_update
+                if age.total_seconds() > timeout_seconds:
+                    # Status is stale, reset to idle
+                    stale_status = {
+                        **status,
+                        "status": "idle",
+                        "color": "gray",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    self.state.update("status", stale_status)
+                    self.display.set_status("idle")
+                    return True
+            except (ValueError, TypeError):
+                pass
+
+        return False
+
+    def _get_rich_context(self, max_messages: int = 5, max_chars: int = 1500) -> str:
+        """Build task-focused context for whimsy verb generation.
+
+        Prioritizes what Claude is doing over ambient info.
         """
         parts = []
 
-        # Weather + Time (compact)
+        # --- PRIMARY: What Claude is doing ---
+        status = self.state.get("status")
+        if status:
+            # Current status
+            current_status = status.get("status", "idle")
+            parts.append(f"status: {current_status}")
+
+            # Current/recent tools (what action is happening)
+            tool_history = status.get("tool_history", [])
+            if tool_history:
+                recent = tool_history[-3:]
+                # Map to descriptive actions
+                tool_actions = {
+                    "Read": "reading code",
+                    "Grep": "searching codebase",
+                    "Glob": "finding files",
+                    "Write": "writing new code",
+                    "Edit": "editing code",
+                    "Bash": "running commands",
+                    "Task": "delegating to subagent",
+                    "WebFetch": "fetching from web",
+                    "WebSearch": "searching web",
+                }
+                actions = [tool_actions.get(t, t.lower()) for t in recent]
+                parts.append(f"doing: {', '.join(actions)}")
+
+            # Context pressure (cognitive load indicator)
+            ctx_pct = status.get("context_percent", 0)
+            if ctx_pct > 70:
+                parts.append(f"context: {ctx_pct:.0f}% full (deep in complex task)")
+            elif ctx_pct > 40:
+                parts.append(f"context: {ctx_pct:.0f}% (working steadily)")
+
+        # --- SECONDARY: Conversation (the actual task) ---
+        chat = self._get_chat_context(max_messages, max_msg_len=200)
+        if chat:
+            parts.append(f"conversation:\n{chat}")
+
+        # --- TERTIARY: Ambient context ---
+        ambient = []
+
+        # Weather
         weather = self.state.get("weather")
         if weather and weather.get("temperature"):
-            temp = weather.get("temperature", "")
             desc = weather.get("description", "").lower()
-            parts.append(f"{temp}°F {desc}")
+            temp = weather.get("temperature", "")
+            ambient.append(f"{temp}°F {desc}")
 
+        # Time
         time_data = self.state.get("time")
         if time_data and time_data.get("timestamp"):
             try:
                 dt = datetime.fromisoformat(time_data["timestamp"])
                 hour = dt.hour
                 period = "morning" if 5 <= hour < 12 else "afternoon" if 12 <= hour < 17 else "evening" if 17 <= hour < 21 else "night"
-                parts.append(f"{dt.strftime('%A')} {period}")
+                ambient.append(f"{dt.strftime('%A')} {period}")
             except (ValueError, KeyError):
                 pass
 
-        # Music (compact)
+        # Music
         try:
             from clautify import Clautify
             now = Clautify().now_playing()
             if now and now.get("state") == "PLAYING":
-                title = now.get("title", "")[:30]
-                artist = now.get("artist", "")[:20]
-                if title and artist:
-                    parts.append(f"playing: {title} by {artist}")
+                title = now.get("title", "")[:25]
+                artist = now.get("artist", "")[:15]
+                if title:
+                    ambient.append(f"music: {title}" + (f" by {artist}" if artist else ""))
         except Exception:
             pass
 
-        # Activity (compact)
-        status = self.state.get("status")
-        if status and status.get("tool_history"):
-            tools = list(dict.fromkeys(status["tool_history"][-3:]))
-            parts.append(f"activity: {', '.join(t.lower() for t in tools)}")
-
-        # Conversation (bulk of context)
-        chat = self._get_chat_context(max_messages, max_msg_len=150)
-        if chat:
-            parts.append(f"chat:\n{chat}")
+        if ambient:
+            parts.append(f"environment: {', '.join(ambient)}")
 
         result = "\n".join(parts)
         return result[:max_chars] if len(result) > max_chars else result
@@ -574,6 +690,18 @@ class CentralHubDaemon:
             print(f"Grid size changed, restarting...")
             restart_daemon_and_widget()
             return
+
+        # Update position offsets if changed
+        renderer = self.display.renderer
+        if (renderer.avatar_x_offset != new_config.display.avatar_x_offset or
+            renderer.avatar_y_offset != new_config.display.avatar_y_offset or
+            renderer.bar_x_offset != new_config.display.bar_x_offset or
+            renderer.bar_y_offset != new_config.display.bar_y_offset):
+            renderer.avatar_x_offset = new_config.display.avatar_x_offset
+            renderer.avatar_y_offset = new_config.display.avatar_y_offset
+            renderer.bar_x_offset = new_config.display.bar_x_offset
+            renderer.bar_y_offset = new_config.display.bar_y_offset
+            renderer._recalculate_layout()
 
         # If testing mode, apply overrides immediately
         if new_config.testing.enabled:
@@ -766,6 +894,24 @@ class CentralHubDaemon:
             )
             self.token_usage_service.start()
 
+        # Initialize wake word service
+        if config.wake_word.enabled:
+            wake_config = WakeWordConfig(
+                enabled=config.wake_word.enabled,
+                threshold=config.wake_word.threshold,
+                vad_threshold=config.wake_word.vad_threshold,
+                cooldown=config.wake_word.cooldown,
+                input_device=config.wake_word.input_device,
+                use_int8=config.wake_word.use_int8,
+            )
+            self.wake_word_service = WakeWordService(
+                state_store=self.state,
+                config=wake_config,
+                on_detected=self._on_wake_word_detected,
+            )
+            print(f"[Daemon] Starting wake word service with threshold={wake_config.threshold}", flush=True)
+            self.wake_word_service.start()
+
         # Start status watcher
         self.start_status_watcher()
 
@@ -777,6 +923,24 @@ class CentralHubDaemon:
 
         # Initial refresh
         self.refresh.refresh_all()
+
+    def _on_wake_word_detected(self) -> None:
+        """Handle wake word detection - trigger activated animation."""
+        print("[Daemon] Wake word callback triggered!", flush=True)
+        # Update display to activated status
+        self.display.set_status("activated")
+        print(f"[Daemon] Set display status to 'activated'", flush=True)
+
+        # Schedule reversion to previous status after animation duration
+        def revert_status():
+            time.sleep(2.0)  # Animation duration
+            status = self.state.get("status")
+            previous = status.get("status", "idle") if status else "idle"
+            if previous == "activated":
+                previous = "awaiting"  # Fall back to awaiting after activation
+            self.display.set_status(previous)
+
+        threading.Thread(target=revert_status, daemon=True).start()
 
     def stop(self):
         """Stop the daemon."""
@@ -799,6 +963,10 @@ class CentralHubDaemon:
         if self.token_usage_service:
             self.token_usage_service.stop()
 
+        # Stop wake word service
+        if self.wake_word_service:
+            self.wake_word_service.stop()
+
     def run(self):
         """Run the daemon until interrupted."""
         self.start()
@@ -809,6 +977,9 @@ class CentralHubDaemon:
                     self.refresh.start()
                 if self.display._thread and not self.display._thread.is_alive():
                     self.display.start(self._get_display_state)
+
+                # Check for stale status and reset to idle if needed
+                self._check_status_staleness()
 
                 time.sleep(5)
         except KeyboardInterrupt:

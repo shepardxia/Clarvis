@@ -44,7 +44,7 @@ class ColorDef:
 
 # Each theme maps status names to ColorDef instances
 # Statuses: idle, resting, thinking, running, executing, awaiting, reading, writing, reviewing, offline
-# Special: eureka, celebration (triggered on task completion)
+# Special: eureka, celebration (triggered on task completion), activated (wake word detected)
 
 THEMES: dict[str, dict[str, ColorDef]] = {
     # Modern - current bright colors
@@ -61,6 +61,7 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "offline": ColorDef(8, (0.53, 0.53, 0.53)),
         "eureka": ColorDef(220, (1.0, 0.85, 0.0)),        # bright gold - breakthrough!
         "celebration": ColorDef(214, (1.0, 0.7, 0.0)),    # warm gold - task complete!
+        "activated": ColorDef(220, (1.0, 0.85, 0.2)),     # golden amber - activated/wake
     },
 
     # CRT Amber - classic amber phosphor terminal
@@ -77,6 +78,7 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "offline": ColorDef(94, (0.4, 0.25, 0.0)),    # very dim amber
         "eureka": ColorDef(226, (1.0, 1.0, 0.3)),     # bright white-amber
         "celebration": ColorDef(226, (1.0, 1.0, 0.3)),
+        "activated": ColorDef(226, (1.0, 1.0, 0.3)),  # bright amber
     },
 
     # CRT Green - classic green phosphor terminal
@@ -93,6 +95,7 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "offline": ColorDef(22, (0.0, 0.3, 0.0)),     # very dim green
         "eureka": ColorDef(156, (0.7, 1.0, 0.5)),     # bright lime
         "celebration": ColorDef(156, (0.7, 1.0, 0.5)),
+        "activated": ColorDef(156, (0.7, 1.0, 0.5)),  # bright lime
     },
 
     # Synthwave - 80s neon aesthetic
@@ -109,6 +112,7 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "offline": ColorDef(54, (0.3, 0.15, 0.4)),    # dim purple
         "eureka": ColorDef(226, (1.0, 1.0, 0.4)),     # neon yellow
         "celebration": ColorDef(226, (1.0, 1.0, 0.4)),
+        "activated": ColorDef(226, (1.0, 1.0, 0.4)),   # neon yellow
     },
 
     # C64 - Commodore 64 palette
@@ -125,6 +129,7 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "offline": ColorDef(240, (0.4, 0.4, 0.4)),    # dark gray
         "eureka": ColorDef(227, (1.0, 1.0, 0.5)),     # yellow
         "celebration": ColorDef(227, (1.0, 1.0, 0.5)),
+        "activated": ColorDef(80, (0.4, 0.7, 0.7)),   # cyan
     },
 
     # Matrix - 90s hacker aesthetic
@@ -141,6 +146,7 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "offline": ColorDef(22, (0.0, 0.25, 0.0)),    # very dark green
         "eureka": ColorDef(231, (1.0, 1.0, 1.0)),     # white flash
         "celebration": ColorDef(231, (1.0, 1.0, 1.0)),
+        "activated": ColorDef(231, (1.0, 1.0, 1.0)),  # white flash
     },
 }
 

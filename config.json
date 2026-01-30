@@ -3,26 +3,38 @@
     "base": "c64"
   },
   "display": {
-    "grid_width": 30,
-    "grid_height": 12,
+    "grid_width": 45,
+    "grid_height": 24,
     "window_width": 350,
     "window_height": 280,
     "corner_radius": 30,
     "bg_alpha": 0.8,
-    "font_size": 17,
+    "font_size": 13,
     "font_name": "Courier",
     "border_width": 2,
     "pulse_speed": 0.05,
-    "fps": 3
+    "fps": 3,
+    "avatar_x_offset": 0,
+    "avatar_y_offset": 0,
+    "bar_x_offset": 0,
+    "bar_y_offset": 0
   },
   "testing": {
     "enabled": false,
     "status": "thinking",
-    "weather": "clear",
+    "weather": "rain",
     "context_percent": 75.0
   },
   "token_usage": {
     "enabled": true,
     "poll_interval": 120
+  },
+  "wake_word": {
+    "enabled": true,
+    "threshold": 0.3,
+    "vad_threshold": 0.2,
+    "cooldown": 2.0,
+    "input_device": null,
+    "use_int8": false
   }
 }

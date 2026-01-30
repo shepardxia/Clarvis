@@ -68,8 +68,8 @@ class TestCentralHubDaemon:
 class TestProcessHookEvent:
     """Tests for hook event processing."""
 
-    def test_pre_tool_use_sets_running(self, temp_hub_files, sample_hook_event):
-        """PreToolUse should set status to running."""
+    def test_pre_tool_use_bash_sets_executing(self, temp_hub_files, sample_hook_event):
+        """PreToolUse with Bash should set status to executing."""
         daemon = CentralHubDaemon(
             status_raw_file=temp_hub_files["status_raw"],
             hub_data_file=temp_hub_files["hub_data"],
@@ -78,8 +78,9 @@ class TestProcessHookEvent:
 
         result = daemon.process_hook_event(sample_hook_event)
 
-        assert result["status"] == "running"
-        assert result["color"] == "green"
+        # Bash is classified as executing (shell commands)
+        assert result["status"] == "executing"
+        assert result["color"] == "orange"
 
     def test_post_tool_use_sets_thinking(self, temp_hub_files):
         """PostToolUse should set status to thinking."""
@@ -278,7 +279,7 @@ class TestEventSequence:
         # Check history was tracked
         session = daemon.sessions["test-session-001"]
         assert "thinking" in session["status_history"]
-        assert "running" in session["status_history"]
+        assert "executing" in session["status_history"]  # Bash is now "executing"
         assert "awaiting" in session["status_history"]
 
 

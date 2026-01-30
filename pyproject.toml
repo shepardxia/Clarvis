@@ -15,10 +15,13 @@ dependencies = [
     "dspy",
     "clautify",
     "numba>=0.63.1",
+    "litellm>=1.81.1",
+    "heybuddy",
 ]
 
 [tool.uv.sources]
 clautify = { path = "../clautify", editable = true }
+heybuddy = { path = "../hey-buddy", editable = true }
 
 [project.scripts]
 clarvis = "clarvis.server:main"

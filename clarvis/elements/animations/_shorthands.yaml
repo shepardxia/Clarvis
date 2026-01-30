@@ -29,6 +29,20 @@ eyes:
   bright: "✦"
   hollow_star: "☆"
 
+  # New from ASCII art
+  heart: "♥"
+  dead: "×"
+  dizzy: "@"
+  cat: "・"
+  wink: "◕"
+
+  # Kawaii / Japanese style
+  kawaii: "◕"
+  uwu: "◠"
+  happy_closed: "◡"
+  blush: "●"
+  cat: "•"
+
 mouth:
   # Basic
   smile: "◡"
@@ -42,6 +56,20 @@ mouth:
   soft: "‿"
   hmm: "∪"
   frown: "△"
+
+  # New from ASCII art
+  big_grin: "D"
+  surprised: "O"
+  tongue: "P"
+  wavy: "~"
+  cat: "ω"
+  sad: "n"
+
+  # Kawaii / Japanese style
+  kawaii: "◡"
+  uwu: "ω"
+  triangle: "▽"
+  blush: "‿"
 
 border:
   # Lines
@@ -125,3 +153,37 @@ presets:
 
   # Offline
   offline: { eyes: "─", mouth: "─", border: "─" }
+
+  # New from ASCII art emoticons (^_^) (o.o) etc.
+  excited: { eyes: "★", mouth: "D", border: "✦", corners: "heavy" }
+  dead: { eyes: "×", mouth: "─", border: "─" }
+  dizzy: { eyes: "@", mouth: "~", border: "┉" }
+  silly: { eyes: "◕", mouth: "P", border: "─" }
+  worried: { eyes: "◔", mouth: "~", border: "┉" }
+  shocked: { eyes: "◎", mouth: "O", border: "═", corners: "heavy" }
+  content: { eyes: "─", mouth: "◡", border: "─" }
+  wink: { eyes: "◕", mouth: "◡", border: "─" }
+
+  # Kawaii / Japanese kaomoji style (◕◡◕) (◠‿◠) etc.
+  love: { eyes: "◕", mouth: "◡", border: "─" }          # (◕◡◕) soft kawaii love
+  uwu: { eyes: "◠", mouth: "ω", border: "─" }           # (◠ω◠) classic uwu
+  cat_face: { eyes: "•", mouth: "ω", border: "─" }      # (•ω•) neko
+  kawaii_happy: { eyes: "◕", mouth: "◡", border: "─" }  # (◕◡◕) happy
+  kawaii_blush: { eyes: "●", mouth: "‿", border: "─" }  # (●‿●) blushing
+  kawaii_excited: { eyes: "◕", mouth: "◡", border: "─" } # (◕◡◕) excited
+  daze: { eyes: "◡", mouth: "ω", border: "─" }          # (◡ω◡) sleepy cute
+  nya: { eyes: "◕", mouth: "ω", border: "─" }           # (◕ω◕) cat kawaii
+
+  # Alert/Activated states
+  activated: { eyes: "✧", mouth: "○", border: "✦", corners: "heavy" }  # Wide-eyed alert, sparkly
+  alert: { eyes: "◎", mouth: "○", border: "═", corners: "heavy" }      # Wide-eyed, ready
+
+# Animation-level shorthands - for triggering timed state changes
+# Usage: trigger "activated" animation which auto-returns to previous state
+# These define temporary visual states with duration and color overrides
+animations:
+  activated:
+    duration: 1.5                    # seconds before auto-transition back
+    color: [1.0, 0.85, 0.2]          # golden amber RGB
+    face: activated                   # preset to use for this animation
+    # Auto-transitions back to previous state after duration

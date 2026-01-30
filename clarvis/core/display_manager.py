@@ -22,6 +22,7 @@ class DisplayManager:
         "running": {"width": 3, "pulse": True},
         "thinking": {"width": 3, "pulse": True},
         "awaiting": {"width": 2, "pulse": True},
+        "activated": {"width": 4, "pulse": True},  # Wake word detected - prominent pulse
         "resting": {"width": 1, "pulse": False},
         "idle": {"width": 1, "pulse": False},
         "offline": {"width": 1, "pulse": False},

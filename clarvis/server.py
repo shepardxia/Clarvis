@@ -184,6 +184,53 @@ async def get_whimsy_verb(context: str = None) -> str:
         return f"Error: {e}"
 
 
+@mcp.tool()
+async def get_music_context() -> str:
+    """Get music context including user taste profile, current time, weather, and location.
+    
+    IMPORTANT: Always call this before making music selection decisions.
+    Returns the user's music preferences and current context to inform choices.
+    """
+    import os
+    from datetime import datetime
+    
+    sections = []
+    
+    # Time context
+    try:
+        client = _get_client()
+        time_dict = client.call("refresh_time")
+        dt = datetime.fromisoformat(time_dict['timestamp'])
+        sections.append(f"## Current Time\n{dt.strftime('%A, %B %d, %Y %H:%M')} ({time_dict['timezone']})")
+    except Exception:
+        sections.append("## Current Time\nUnavailable")
+    
+    # Weather + location context
+    try:
+        client = _get_client()
+        weather = client.call("get_weather") or client.call("refresh_weather")
+        if weather and weather.get("temperature"):
+            sections.append(
+                f"## Weather & Location\n"
+                f"{weather.get('city', 'Unknown')}: "
+                f"{weather.get('temperature', '?')}°F, "
+                f"{weather.get('description', 'unknown')}, "
+                f"Wind: {weather.get('wind_speed', 0)} mph"
+            )
+    except Exception:
+        pass
+    
+    # Music taste profile
+    profile_path = os.path.expanduser("~/.claude/memories/music_profile_compact.md")
+    try:
+        with open(profile_path) as f:
+            sections.append(f.read().strip())
+    except FileNotFoundError:
+        sections.append("## Music Profile\nNo profile found at ~/.claude/memories/music_profile_compact.md")
+    
+    return "\n\n".join(sections)
+
+
 # --- Vinyl Tools (Clautify) ---
 
 import threading

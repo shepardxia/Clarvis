@@ -27,25 +27,36 @@ class SessionTracker:
                 "status_history": [],
                 "context_history": [],
                 "tool_history": [],
+                "tool_outcomes": [],  # Track (tool_name, succeeded) pairs
                 "last_status": "idle",
                 "last_context": 0.0,
                 "last_tool": "",
                 "last_seen": time.time(),
             }
             self.state.update("sessions", sessions)
-        # Ensure tool_history exists for legacy sessions
+        # Ensure tool_history and tool_outcomes exist for legacy sessions
         if "tool_history" not in sessions[session_id]:
             sessions[session_id]["tool_history"] = []
             sessions[session_id]["last_tool"] = ""
+        if "tool_outcomes" not in sessions[session_id]:
+            sessions[session_id]["tool_outcomes"] = []
         return sessions[session_id]
 
-    def update(self, session_id: str, status: str, context: float, tool_name: str = "") -> None:
-        """Update session with new status, context, and tool info."""
+    def update(
+        self,
+        session_id: str,
+        status: str,
+        context: float,
+        tool_name: str = "",
+        tool_succeeded: bool | None = None,
+    ) -> None:
+        """Update session with new status, context, tool info, and outcome."""
         sessions = self.state.get("sessions")
         session = sessions.get(session_id) or {
             "status_history": [],
             "context_history": [],
             "tool_history": [],
+            "tool_outcomes": [],
             "last_status": "idle",
             "last_context": 0.0,
             "last_tool": "",
@@ -83,6 +94,14 @@ class SessionTracker:
                 tool_history.pop(0)
             session["tool_history"] = tool_history
             session["last_tool"] = tool_name
+
+        # Track tool outcome (success/failure) when known
+        if tool_succeeded is not None and tool_name:
+            outcomes = session.get("tool_outcomes", [])
+            outcomes.append({"tool": tool_name, "succeeded": tool_succeeded})
+            if len(outcomes) > self.HISTORY_SIZE:
+                outcomes.pop(0)
+            session["tool_outcomes"] = outcomes
 
         sessions[session_id] = session
         self.state.update("sessions", sessions)

@@ -6,7 +6,6 @@ import threading
 import time
 from typing import TYPE_CHECKING, Optional
 
-from ..services import get_location, get_cached_timezone, fetch_weather
 from . import get_current_time, write_hub_section, DEFAULT_TIMEZONE
 
 if TYPE_CHECKING:
@@ -32,6 +31,7 @@ class RefreshManager:
 
     def refresh_location(self) -> tuple[float, float, str]:
         """Refresh location data."""
+        from ..services import get_location
         lat, lon, city = get_location()
         self.state.update("location", {
             "latitude": lat,
@@ -48,8 +48,10 @@ class RefreshManager:
     ) -> dict:
         """Refresh weather data."""
         if latitude is None or longitude is None:
+            from ..services import get_location
             latitude, longitude, city = get_location()
 
+        from ..services import fetch_weather
         weather = fetch_weather(latitude, longitude)
         weather_dict = {
             **weather.to_dict(),
@@ -73,6 +75,7 @@ class RefreshManager:
     def refresh_time(self, timezone: str = None) -> dict:
         """Refresh time data."""
         if timezone is None:
+            from ..services import get_cached_timezone
             timezone = get_cached_timezone() or DEFAULT_TIMEZONE
 
         time_data = get_current_time(timezone)

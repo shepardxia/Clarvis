@@ -110,12 +110,52 @@ class TokenUsageConfig:
 
 
 @dataclass
+class WakeWordConfig:
+    """Configuration for wake word detection."""
+    enabled: bool = False
+    threshold: float = 0.3  # Wake word detection threshold
+    vad_threshold: float = 0.2  # Voice activity detection threshold
+    cooldown: float = 2.0  # Seconds between detections
+    input_device: Optional[int] = None  # Audio input device index
+    use_int8: bool = False  # Use INT8 quantized models
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        d = {
+            "enabled": self.enabled,
+            "threshold": self.threshold,
+            "vad_threshold": self.vad_threshold,
+            "cooldown": self.cooldown,
+            "use_int8": self.use_int8,
+        }
+        if self.input_device is not None:
+            d["input_device"] = self.input_device
+        return d
+
+    @staticmethod
+    def from_dict(d: dict) -> "WakeWordConfig":
+        """Deserialize from dictionary."""
+        if not isinstance(d, dict):
+            return WakeWordConfig()
+
+        return WakeWordConfig(
+            enabled=d.get("enabled", False),
+            threshold=d.get("threshold", 0.3),
+            vad_threshold=d.get("vad_threshold", 0.2),
+            cooldown=d.get("cooldown", 2.0),
+            input_device=d.get("input_device"),
+            use_int8=d.get("use_int8", False),
+        )
+
+
+@dataclass
 class WidgetConfig:
     """Main configuration combining all sections."""
     theme: ThemeConfig
     display: DisplayConfig
     testing: TestingConfig
     token_usage: TokenUsageConfig = field(default_factory=TokenUsageConfig)
+    wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
 
     def to_dict(self) -> dict:
         return {
@@ -123,6 +163,7 @@ class WidgetConfig:
             "display": asdict(self.display),
             "testing": asdict(self.testing),
             "token_usage": self.token_usage.to_dict(),
+            "wake_word": self.wake_word.to_dict(),
         }
 
     @classmethod
@@ -162,7 +203,11 @@ class WidgetConfig:
         token_usage_dict = d.get("token_usage", {})
         token_usage = TokenUsageConfig.from_dict(token_usage_dict)
 
-        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage)
+        # Handle wake_word
+        wake_word_dict = d.get("wake_word", {})
+        wake_word = WakeWordConfig.from_dict(wake_word_dict)
+
+        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage, wake_word=wake_word)
 
     def save(self, path: Path = CONFIG_PATH):
         temp = path.with_suffix(".tmp")

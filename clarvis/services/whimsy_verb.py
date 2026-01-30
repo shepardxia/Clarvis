@@ -20,45 +20,54 @@ if _env.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-# Mood hints for variety - one is randomly selected each call
-MOOD_HINTS = [
-    "whimsical Victorian",
-    "cozy cottage-core",
-    "adventurous explorer",
-    "serene zen",
-    "playful cartoon",
-    "mysterious noir",
-    "warm nostalgic",
-    "curious scientist",
-    "dreamy ethereal",
-    "cheerful woodland creature",
-]
+SYSTEM_PROMPT = """Generate ONE whimsical gerund (-ing word) that captures what the assistant is doing. Match the task, mood, and environment. Prefer obscure/delightful words. NEVER use: Terminating, Killing, Deleting, Dying, Crashing.{avoid}
+Output ONLY the word."""
 
-SYSTEM_PROMPT = """Generate ONE {mood} gerund for a coding assistant status. Match the context mood. Prefer obscure/delightful words. NEVER: Terminating, Killing, Deleting. Output ONLY the word."""
+# Track recent verbs to avoid repetition
+_verb_history: list[str] = []
+_history_lock = threading.Lock()
+HISTORY_SIZE = 10
+
+
+def _add_to_history(verb: str) -> None:
+    """Add verb to history, maintaining max size."""
+    with _history_lock:
+        _verb_history.append(verb)
+        if len(_verb_history) > HISTORY_SIZE:
+            _verb_history.pop(0)
+
+
+def _get_avoid_list() -> str:
+    """Get recent verbs to avoid."""
+    with _history_lock:
+        if _verb_history:
+            return f"\nAvoid: {', '.join(_verb_history[-5:])}"
+        return ""
 
 
 def generate_whimsy_verb(context: str) -> str:
-    """Generate a whimsical gerund verb for the given context.
+    """Generate a whimsical gerund verb matching what Claude is doing.
 
-    Uses ~180 tokens total, costs ~$0.0002 per call on Haiku 3.5.
+    Uses ~150-200 tokens, costs ~$0.00015 per call on Haiku 3.5.
     """
-    mood = random.choice(MOOD_HINTS)
-    prompt = SYSTEM_PROMPT.format(mood=mood)
+    avoid = _get_avoid_list()
+    prompt = SYSTEM_PROMPT.format(avoid=avoid)
 
     response = completion(
         model="anthropic/claude-3-5-haiku-20241022",
         messages=[
             {"role": "system", "content": prompt},
-            {"role": "user", "content": context[:1200]},
+            {"role": "user", "content": context[:1500]},  # More room for rich context
         ],
         max_tokens=10,
         temperature=0.9,
     )
 
     verb = response.choices[0].message.content.strip()
-    # Clean: first word, no punctuation, capitalized
-    verb = verb.split()[0].rstrip(".,!?:;")
-    return verb.title()
+    verb = verb.split()[0].rstrip(".,!?:;").title()
+
+    _add_to_history(verb)
+    return verb
 
 
 class WhimsyManager:
