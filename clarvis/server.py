@@ -187,15 +187,15 @@ async def get_whimsy_verb(context: str = None) -> str:
 @mcp.tool()
 async def get_music_context() -> str:
     """Get music context including user taste profile, current time, weather, and location.
-    
+
     IMPORTANT: Always call this before making music selection decisions.
     Returns the user's music preferences and current context to inform choices.
     """
     import os
     from datetime import datetime
-    
+
     sections = []
-    
+
     # Time context
     try:
         client = _get_client()
@@ -204,7 +204,7 @@ async def get_music_context() -> str:
         sections.append(f"## Current Time\n{dt.strftime('%A, %B %d, %Y %H:%M')} ({time_dict['timezone']})")
     except Exception:
         sections.append("## Current Time\nUnavailable")
-    
+
     # Weather + location context
     try:
         client = _get_client()
@@ -219,7 +219,7 @@ async def get_music_context() -> str:
             )
     except Exception:
         pass
-    
+
     # Music taste profile
     profile_path = os.path.expanduser("~/.claude/memories/music_profile_compact.md")
     try:
@@ -227,43 +227,36 @@ async def get_music_context() -> str:
             sections.append(f.read().strip())
     except FileNotFoundError:
         sections.append("## Music Profile\nNo profile found at ~/.claude/memories/music_profile_compact.md")
-    
+
     return "\n\n".join(sections)
 
 
-# --- Vinyl Tools (Clautify) ---
+# --- Music Tools (Clautify) ---
 
 import threading
 
-# Cached Clautify instances by speaker name (thread-safe)
-_vinyl_instances: dict[str, "Clautify"] = {}
-_vinyl_lock = threading.Lock()
+# Cached Clautify instance (thread-safe)
+_player_instance: "Clautify | None" = None
+_player_lock = threading.Lock()
 
 
-def _get_vinyl(speaker: str = None):
+def _get_player():
     """Get cached Clautify instance for speed."""
     from clautify import Clautify
 
-    cache_key = speaker or "_default"
-    with _vinyl_lock:
-        if cache_key not in _vinyl_instances:
-            _vinyl_instances[cache_key] = Clautify(speaker=speaker)
-        return _vinyl_instances[cache_key]
-
-
-def _clear_vinyl_cache():
-    """Clear cached instances (e.g., if speakers change)."""
-    global _vinyl_instances
-    with _vinyl_lock:
-        _vinyl_instances = {}
+    global _player_instance
+    with _player_lock:
+        if _player_instance is None:
+            _player_instance = Clautify()
+        return _player_instance
 
 
 @mcp.tool()
 async def search(query: str, category: str = "tracks", limit: int = 10) -> list[dict]:
     """Search Spotify. Results stored for queueing by index."""
     try:
-        vinyl = _get_vinyl()
-        return vinyl.search(query, category, limit)
+        player = _get_player()
+        return player.search(query, category, limit)
     except Exception as e:
         return [{"error": str(e)}]
 
@@ -275,12 +268,11 @@ async def search_and_play(
     index: int = 0,
     start_at: str = None,
     clear: bool = True,
-    speaker: str = None
 ) -> dict:
     """Search and immediately play - combines search + queue in one call."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.search_and_play(query, category, index, start_at, clear)
+        player = _get_player()
+        return player.search_and_play(query, category, index, start_at, clear)
     except Exception as e:
         return {"error": str(e)}
 
@@ -288,15 +280,14 @@ async def search_and_play(
 @mcp.tool()
 async def queue(
     indices: list[int],
-    speaker: str = None,
     position: int = None,
     play: bool = False,
     clear: bool = False
 ) -> dict:
     """Add tracks to Sonos queue by index from last search results."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.queue(indices, position=position, play=play, clear=clear)
+        player = _get_player()
+        return player.queue(indices, position=position, play=play, clear=clear)
     except Exception as e:
         return {"error": str(e)}
 
@@ -306,88 +297,81 @@ async def play_album(
     index: int,
     start_at: str = None,
     clear: bool = True,
-    speaker: str = None
 ) -> dict:
     """Queue album from search results and start playing."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.play_album(index, start_at=start_at, clear=clear)
+        player = _get_player()
+        return player.play_album(index, start_at=start_at, clear=clear)
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def now_playing(speaker: str = None) -> dict:
+async def now_playing() -> dict:
     """Get current track info (title, artist, album, position, state)."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.now_playing()
+        player = _get_player()
+        return player.now_playing()
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def play(speaker: str = None) -> dict:
+async def play() -> dict:
     """Start or resume playback."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.play()
+        player = _get_player()
+        return player.play()
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def pause(speaker: str = None) -> dict:
+async def pause() -> dict:
     """Pause playback."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.pause()
+        player = _get_player()
+        return player.pause()
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def skip(speaker: str = None, count: int = 1) -> dict:
+async def skip(count: int = 1) -> dict:
     """Skip to next track(s)."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.skip(count)
+        player = _get_player()
+        return player.skip(count)
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def previous(speaker: str = None) -> dict:
+async def previous() -> dict:
     """Go to previous track."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.previous()
+        player = _get_player()
+        return player.previous()
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def volume(speaker: str = None, level: int = None) -> dict:
+async def volume(level: int = None) -> dict:
     """Get or set volume (0-100). Omit level to get current."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.volume(level)
+        player = _get_player()
+        return player.volume(level)
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def mute(speaker: str = None, mute: bool = None) -> dict:
+async def mute(mute: bool = None) -> dict:
     """Get, set, or toggle mute state."""
     try:
-        # Direct coordinator access for toggle support (Clautify wrapper doesn't expose this)
-        from clautify.speakers import get_coordinator
-        coord = get_coordinator(speaker)
-        if mute is None:
-            coord.mute = not coord.mute
-        else:
-            coord.mute = mute
-        return {"muted": coord.mute, "speaker": coord.player_name}
+        player = _get_player()
+        return player.mute(mute)
     except Exception as e:
         return {"error": str(e)}
 
@@ -396,8 +380,8 @@ async def mute(speaker: str = None, mute: bool = None) -> dict:
 async def refresh_speakers() -> dict:
     """Re-discover Sonos speakers on the network."""
     try:
-        from clautify.speakers import discover_speakers
-        _clear_vinyl_cache()
+        from clautify.speakers import discover_speakers, clear_speaker_cache
+        clear_speaker_cache()
         speakers = discover_speakers(force_refresh=True)
         return {"speakers": speakers, "refreshed": True}
     except Exception as e:
@@ -405,41 +389,41 @@ async def refresh_speakers() -> dict:
 
 
 @mcp.tool()
-async def get_queue(speaker: str = None, limit: int = 20) -> list[dict]:
+async def get_queue(limit: int = 20) -> list[dict]:
     """Get current Sonos queue contents."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.get_queue(limit)
+        player = _get_player()
+        return player.get_queue(limit)
     except Exception as e:
         return [{"error": str(e)}]
 
 
 @mcp.tool()
-async def clear_queue(speaker: str = None) -> dict:
+async def clear_queue() -> dict:
     """Clear the Sonos queue."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.clear_queue()
+        player = _get_player()
+        return player.clear_queue()
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def shuffle(speaker: str = None, enabled: bool = None) -> dict:
+async def shuffle(enabled: bool = None) -> dict:
     """Get or set shuffle mode."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.shuffle(enabled)
+        player = _get_player()
+        return player.shuffle(enabled)
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def repeat(speaker: str = None, mode: str = None) -> dict:
+async def repeat(mode: str = None) -> dict:
     """Get or set repeat mode ('off', 'all', 'one')."""
     try:
-        vinyl = _get_vinyl(speaker)
-        return vinyl.repeat(mode)
+        player = _get_player()
+        return player.repeat(mode)
     except Exception as e:
         return {"error": str(e)}
 
@@ -448,8 +432,8 @@ async def repeat(speaker: str = None, mode: str = None) -> dict:
 async def spotify_playlists(limit: int = 50) -> list[dict]:
     """Get user's Spotify playlists."""
     try:
-        vinyl = _get_vinyl()
-        return vinyl.spotify_playlists(limit)
+        player = _get_player()
+        return player.spotify_playlists(limit)
     except Exception as e:
         return [{"error": str(e)}]
 
@@ -458,8 +442,8 @@ async def spotify_playlists(limit: int = 50) -> list[dict]:
 async def spotify_playlist_tracks(playlist_id: str, limit: int = 100) -> list[dict]:
     """Get tracks from a Spotify playlist."""
     try:
-        vinyl = _get_vinyl()
-        return vinyl.spotify_playlist_tracks(playlist_id, limit)
+        player = _get_player()
+        return player.spotify_playlist_tracks(playlist_id, limit)
     except Exception as e:
         return [{"error": str(e)}]
 
@@ -468,8 +452,8 @@ async def spotify_playlist_tracks(playlist_id: str, limit: int = 100) -> list[di
 async def sonos_playlists() -> list[dict]:
     """Get saved Sonos playlists."""
     try:
-        vinyl = _get_vinyl()
-        return vinyl.sonos_playlists()
+        player = _get_player()
+        return player.sonos_playlists()
     except Exception as e:
         return [{"error": str(e)}]
 
@@ -478,53 +462,53 @@ async def sonos_playlists() -> list[dict]:
 async def check_auth() -> dict:
     """Check Spotify authentication status."""
     try:
-        vinyl = _get_vinyl()
-        return vinyl.check_auth()
+        player = _get_player()
+        return player.check_auth()
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-async def batch(operations: list[dict], speaker: str = None) -> list[dict]:
+async def batch(operations: list[dict]) -> list[dict]:
     """Execute multiple operations in one call (search, queue, play, volume, etc.)."""
     try:
-        vinyl = _get_vinyl(speaker)
+        player = _get_player()
         results = []
 
         for op_dict in operations:
             op = op_dict.get("op", "")
             try:
                 if op == "search":
-                    r = vinyl.search(op_dict.get("query", ""), op_dict.get("category", "tracks"), op_dict.get("limit", 10))
+                    r = player.search(op_dict.get("query", ""), op_dict.get("category", "tracks"), op_dict.get("limit", 10))
                 elif op == "search_and_play":
-                    r = vinyl.search_and_play(op_dict.get("query", ""), op_dict.get("category", "tracks"),
+                    r = player.search_and_play(op_dict.get("query", ""), op_dict.get("category", "tracks"),
                                                op_dict.get("index", 0), op_dict.get("start_at"), op_dict.get("clear", True))
                 elif op == "queue":
-                    r = vinyl.queue(op_dict.get("indices", []), op_dict.get("position"), op_dict.get("play", False), op_dict.get("clear", False))
+                    r = player.queue(op_dict.get("indices", []), op_dict.get("position"), op_dict.get("play", False), op_dict.get("clear", False))
                 elif op == "play_album":
-                    r = vinyl.play_album(op_dict.get("index", 0), op_dict.get("start_at"), op_dict.get("clear", True))
+                    r = player.play_album(op_dict.get("index", 0), op_dict.get("start_at"), op_dict.get("clear", True))
                 elif op == "play":
-                    r = vinyl.play()
+                    r = player.play()
                 elif op == "pause":
-                    r = vinyl.pause()
+                    r = player.pause()
                 elif op == "stop":
-                    r = vinyl.stop()
+                    r = player.stop()
                 elif op == "skip":
-                    r = vinyl.skip(op_dict.get("count", 1))
+                    r = player.skip(op_dict.get("count", 1))
                 elif op == "previous":
-                    r = vinyl.previous()
+                    r = player.previous()
                 elif op == "volume":
-                    r = vinyl.volume(op_dict.get("level"))
+                    r = player.volume(op_dict.get("level"))
                 elif op == "shuffle":
-                    r = vinyl.shuffle(op_dict.get("enabled"))
+                    r = player.shuffle(op_dict.get("enabled"))
                 elif op == "repeat":
-                    r = vinyl.repeat(op_dict.get("mode"))
+                    r = player.repeat(op_dict.get("mode"))
                 elif op == "now_playing":
-                    r = vinyl.now_playing()
+                    r = player.now_playing()
                 elif op == "clear_queue":
-                    r = vinyl.clear_queue()
+                    r = player.clear_queue()
                 elif op == "jump_to":
-                    r = vinyl.jump_to(op_dict.get("index", 0))
+                    r = player.jump_to(op_dict.get("index", 0))
                 else:
                     r = {"error": f"Unknown operation: {op}"}
                 results.append({"op": op, "result": r})
