@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time as _time
 
 import requests
-
-from ..core.cache import get_hub_section, write_hub_section
 
 # CoreLocationCLI (OPTIONAL: installed via: brew install corelocationcli)
 CORELOCATION_CMD = "CoreLocationCLI"
 _corelocation_available: bool | None = None  # Lazy-checked on first use
 
+# In-memory location cache
+_cache: dict | None = None
+_cache_time: float = 0.0
+
 # Default location (San Francisco)
-DEFAULT_LOCATION = (37.7749, -122.4194, "San Francisco")
+DEFAULT_LOCATION = {"latitude": 37.7749, "longitude": -122.4194, "city": "San Francisco", "timezone": "", "source": "default"}
 
 
 def _is_corelocation_available() -> bool:
@@ -86,9 +89,8 @@ def _get_location_ip() -> dict | None:
     return None
 
 
-def get_location(cache_max_age: int = 60) -> tuple[float, float, str]:
-    """
-    Get current location with automatic fallback.
+def get_location_full(cache_max_age: int = 60) -> dict:
+    """Get full location dict with automatic fallback.
 
     Tries in order:
     1. Cache from CoreLocation (if fresh) - trusted GPS source
@@ -97,41 +99,49 @@ def get_location(cache_max_age: int = 60) -> tuple[float, float, str]:
     4. IP geolocation API
     5. Default (San Francisco)
 
-    Args:
-        cache_max_age: Maximum cache age in seconds
-
     Returns:
-        Tuple of (latitude, longitude, city)
+        Dict with latitude, longitude, city, timezone, source, etc.
     """
-    cached = get_hub_section("location", max_age=cache_max_age)
+    global _cache, _cache_time
+
+    cached = _cache if _cache and (_time.time() - _cache_time) < cache_max_age else None
 
     # If cache is from CoreLocation (GPS), trust it
     if cached and cached.get("source") == "corelocation":
-        return cached["latitude"], cached["longitude"], cached["city"]
+        return cached
 
     # Always try CoreLocation if available - GPS beats IP geolocation
     location_data = _get_location_corelocation()
     if location_data:
-        write_hub_section("location", location_data)
-        return location_data["latitude"], location_data["longitude"], location_data["city"]
+        _cache = location_data
+        _cache_time = _time.time()
+        return location_data
 
     # No GPS available - use IP cache if fresh
     if cached:
-        return cached["latitude"], cached["longitude"], cached["city"]
+        return cached
 
     # Fall back to IP geolocation
     location_data = _get_location_ip()
     if location_data:
-        write_hub_section("location", location_data)
-        return location_data["latitude"], location_data["longitude"], location_data["city"]
+        _cache = location_data
+        _cache_time = _time.time()
+        return location_data
 
-    # Final fallback
     return DEFAULT_LOCATION
+
+
+def get_location(cache_max_age: int = 60) -> tuple[float, float, str]:
+    """Get current location as (latitude, longitude, city) tuple.
+
+    Convenience wrapper around get_location_full().
+    """
+    loc = get_location_full(cache_max_age)
+    return loc["latitude"], loc["longitude"], loc["city"]
 
 
 def get_cached_timezone() -> str | None:
     """Get timezone from cached location data, if available."""
-    cached = get_hub_section("location", max_age=3600)  # 1 hour for timezone
-    if cached:
-        return cached.get("timezone")
+    if _cache and (_time.time() - _cache_time) < 3600:
+        return _cache.get("timezone")
     return None

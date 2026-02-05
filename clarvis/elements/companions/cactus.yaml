@@ -1,0 +1,9 @@
+kind: companion
+name: cactus
+art: |
+  |
+  |_|_
+  | | |
+  |___|
+width: 5
+height: 4

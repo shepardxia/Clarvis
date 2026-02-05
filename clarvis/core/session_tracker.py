@@ -27,19 +27,13 @@ class SessionTracker:
                 "status_history": [],
                 "context_history": [],
                 "tool_history": [],
-                "tool_outcomes": [],  # Track (tool_name, succeeded) pairs
+                "tool_outcomes": [],
                 "last_status": "idle",
                 "last_context": 0.0,
                 "last_tool": "",
                 "last_seen": time.time(),
             }
             self.state.update("sessions", sessions)
-        # Ensure tool_history and tool_outcomes exist for legacy sessions
-        if "tool_history" not in sessions[session_id]:
-            sessions[session_id]["tool_history"] = []
-            sessions[session_id]["last_tool"] = ""
-        if "tool_outcomes" not in sessions[session_id]:
-            sessions[session_id]["tool_outcomes"] = []
         return sessions[session_id]
 
     def update(

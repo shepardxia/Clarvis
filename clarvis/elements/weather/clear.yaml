@@ -1,0 +1,11 @@
+kind: weather_type
+name: clear
+particles:
+  - sun_ray
+  - sparkle_small
+spawn:
+  position: random
+  vx_base: 0.0
+  vx_variance: 0.01
+  vy_range: [0.02, 0.05]
+  lifetime_range: [60, 120]

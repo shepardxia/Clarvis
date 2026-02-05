@@ -1,0 +1,26 @@
+kind: animation
+name: activated
+# Alert/activated moment - eyes wide, sparkly, excited
+# Short duration (~1.5s) before returning to previous state
+
+sequences:
+  alert_eyes:
+    - { eyes: "wide", mouth: "open", border: "thick", corners: "heavy" }
+    - { eyes: "sparkle", mouth: "open", border: "star", corners: "heavy" }
+    - activated
+    - activated
+
+  sparkle_burst:
+    - activated
+    - { eyes: "bright", mouth: "grin", border: "star", corners: "heavy" }
+    - { eyes: "sparkle", mouth: "grin", border: "sparkle", corners: "heavy" }
+    - activated
+
+  settle:
+    - { eyes: "wide", mouth: "smile", border: "medium", corners: "heavy" }
+    - { eyes: "open", mouth: "smile", border: "thin" }
+
+frames:
+  - $alert_eyes
+  - $sparkle_burst
+  - $settle

@@ -1,0 +1,152 @@
+"""Wake word detection service — thin wrapper around heybuddy.WakeWordDetector.
+
+Adds Clarvis-specific behaviour: state_store update on detection.
+"""
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from heybuddy import WakeWordDetector, DetectorConfig
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_MODEL_DIR = Path.home() / ".clarvis/models"
+
+
+@dataclass
+class WakeWordConfig:
+    """Clarvis-side configuration (serialised in config.json)."""
+
+    enabled: bool = False
+    model_path: Path = field(
+        default_factory=lambda: DEFAULT_MODEL_DIR / "clarvis_final.onnx"
+    )
+    threshold: float = 0.75
+    vad_threshold: float = 0.75
+    cooldown: float = 2.0
+    input_device: Optional[str] = None
+    use_int8: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "model_path": str(self.model_path),
+            "threshold": self.threshold,
+            "vad_threshold": self.vad_threshold,
+            "cooldown": self.cooldown,
+            "input_device": self.input_device,
+            "use_int8": self.use_int8,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "WakeWordConfig":
+        if not isinstance(d, dict):
+            return cls()
+        model_path = d.get("model_path")
+        if model_path:
+            model_path = Path(model_path).expanduser()
+        else:
+            model_path = DEFAULT_MODEL_DIR / "clarvis_final.onnx"
+        return cls(
+            enabled=d.get("enabled", False),
+            model_path=model_path,
+            threshold=d.get("threshold", 0.75),
+            vad_threshold=d.get("vad_threshold", 0.75),
+            cooldown=d.get("cooldown", 2.0),
+            input_device=d.get("input_device"),
+            use_int8=d.get("use_int8", False),
+        )
+
+
+class WakeWordService:
+    """Clarvis wake word service delegating to heybuddy.WakeWordDetector."""
+
+    def __init__(
+        self,
+        state_store: Any = None,
+        config: Optional[WakeWordConfig] = None,
+        on_detected: Optional[Callable[[], None]] = None,
+    ):
+        self.state_store = state_store
+        self.config = config or WakeWordConfig()
+        self._on_detected_callback = on_detected
+        self._detector: Optional[WakeWordDetector] = None
+
+    def _build_detector_config(self) -> DetectorConfig:
+        """Map Clarvis config to heybuddy DetectorConfig."""
+        cfg = self.config
+        vad_path = cfg.model_path.parent / "silero-vad.onnx"
+        return DetectorConfig(
+            model_path=str(cfg.model_path),
+            threshold=cfg.threshold,
+            vad_threshold=cfg.vad_threshold,
+            cooldown=cfg.cooldown,
+            input_device=cfg.input_device,
+            vad_model_path=str(vad_path) if vad_path.exists() else None,
+        )
+
+    def _handle_detection(self):
+        """Call user callback on wake word detection.
+
+        Note: state_store is NOT updated here — the VoiceCommandOrchestrator
+        handles status via _transition(ACTIVATED).  Writing "activated" here
+        would poison lock_status()'s saved pre-voice state.
+        """
+        if self._on_detected_callback:
+            try:
+                self._on_detected_callback()
+            except Exception as e:
+                logger.error(f"Detection callback failed: {e}")
+
+    def start(self) -> bool:
+        if not self.config.enabled:
+            logger.info("Wake word service disabled in config")
+            return False
+
+        detector_config = self._build_detector_config()
+        self._detector = WakeWordDetector(
+            config=detector_config,
+            on_detected=self._handle_detection,
+        )
+        return self._detector.start()
+
+    def stop(self) -> None:
+        if self._detector:
+            self._detector.stop()
+            self._detector = None
+
+    @property
+    def is_running(self) -> bool:
+        return self._detector is not None and self._detector.is_running
+
+    def pause(self) -> None:
+        """Pause detection without destroying the service.
+
+        Stops the detector so the mic is released and no false triggers
+        occur during ASR.  Call resume() to restart.
+        """
+        if self._detector:
+            self._detector.stop()
+            logger.info("Wake word detection paused")
+
+    def resume(self) -> None:
+        """Resume detection after a pause().
+
+        Rebuilds the detector from the current config so the audio
+        pipeline is fully restarted.
+        """
+        if self._detector is None:
+            return
+        # Detector was stopped but not None'd — restart it
+        if not self._detector.is_running:
+            self._detector.start()
+            logger.info("Wake word detection resumed")
+
+    def update_config(self, config: WakeWordConfig) -> None:
+        self.config = config
+
+    def reset_cooldown(self) -> None:
+        if self._detector:
+            self._detector.reset_cooldown()

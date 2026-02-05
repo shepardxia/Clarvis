@@ -1,12 +1,13 @@
-"""Manages periodic data refresh (weather, location, time)."""
+"""Manages data refresh (weather, location, time).
+
+Business logic only — scheduling is handled by the Scheduler.
+"""
 
 from __future__ import annotations
 
-import threading
-import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from . import get_current_time, write_hub_section, DEFAULT_TIMEZONE
+from . import get_current_time, DEFAULT_TIMEZONE
 
 if TYPE_CHECKING:
     from .state import StateStore
@@ -14,31 +15,27 @@ if TYPE_CHECKING:
 
 
 class RefreshManager:
-    """Manages periodic refresh of weather, location, and time data."""
+    """Refreshes weather, location, and time data.
+
+    This is a passive service — it exposes refresh methods but does not
+    run its own thread.  The daemon's Scheduler calls ``refresh_all()``
+    periodically.
+    """
 
     def __init__(
         self,
         state: StateStore,
         display_manager: DisplayManager,
-        interval: int = 30,
     ):
         self.state = state
         self.display = display_manager
-        self.interval = interval
-
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
 
     def refresh_location(self) -> tuple[float, float, str]:
         """Refresh location data."""
-        from ..services import get_location
-        lat, lon, city = get_location()
-        self.state.update("location", {
-            "latitude": lat,
-            "longitude": lon,
-            "city": city,
-        })
-        return lat, lon, city
+        from ..services.location import get_location_full
+        location_data = get_location_full()
+        self.state.update("location", location_data)
+        return location_data["latitude"], location_data["longitude"], location_data["city"]
 
     def refresh_weather(
         self,
@@ -67,7 +64,6 @@ class RefreshManager:
 
         # Update state and display
         self.state.update("weather", weather_dict)
-        write_hub_section("weather", weather_dict)  # Legacy file write
         self.display.set_weather(widget_type, widget_intensity, weather.wind_speed)
 
         return weather_dict
@@ -75,14 +71,14 @@ class RefreshManager:
     def refresh_time(self, timezone: str = None) -> dict:
         """Refresh time data."""
         if timezone is None:
-            from ..services import get_cached_timezone
-            timezone = get_cached_timezone() or DEFAULT_TIMEZONE
+            location = self.state.get("location")
+            timezone = location.get("timezone") if location else None
+            timezone = timezone or DEFAULT_TIMEZONE
 
         time_data = get_current_time(timezone)
         time_dict = time_data.to_dict()
 
         self.state.update("time", time_dict)
-        write_hub_section("time", time_dict)  # Legacy file write
 
         return time_dict
 
@@ -123,32 +119,3 @@ class RefreshManager:
             weather_type = "windy"
 
         return weather_type, intensity
-
-    def _loop(self) -> None:
-        """Background refresh loop."""
-        last_refresh = 0
-
-        while self._running:
-            current_time = time.time()
-
-            if current_time - last_refresh >= self.interval:
-                self.refresh_all()
-                last_refresh = current_time
-
-            time.sleep(1)
-
-    def start(self) -> None:
-        """Start the background refresh loop."""
-        if self._thread is not None and self._thread.is_alive():
-            return
-
-        self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=False)
-        self._thread.start()
-
-    def stop(self) -> None:
-        """Stop the background refresh loop."""
-        self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None

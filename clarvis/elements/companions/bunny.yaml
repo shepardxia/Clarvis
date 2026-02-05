@@ -1,0 +1,8 @@
+kind: companion
+name: bunny
+art: |
+  (\/)
+  (..)
+  (")(")
+width: 6
+height: 3

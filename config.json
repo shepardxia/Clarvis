@@ -5,16 +5,16 @@
   "display": {
     "grid_width": 45,
     "grid_height": 24,
-    "window_width": 350,
-    "window_height": 280,
+    "window_width": 450,
+    "window_height": 350,
     "corner_radius": 30,
     "bg_alpha": 0.8,
-    "font_size": 13,
+    "font_size": 14,
     "font_name": "Courier",
     "border_width": 2,
     "pulse_speed": 0.05,
     "fps": 3,
-    "avatar_x_offset": 0,
+    "avatar_x_offset": 15,
     "avatar_y_offset": 0,
     "bar_x_offset": 0,
     "bar_y_offset": 0
@@ -36,5 +36,17 @@
     "cooldown": 2.0,
     "input_device": null,
     "use_int8": false
+  },
+  "voice": {
+    "enabled": true,
+    "asr_timeout": 4.0,
+    "asr_language": "en-US",
+    "silence_timeout": 4.0,
+    "tts_voice": "Fred",
+    "tts_enabled": true,
+    "tts_speed": 150,
+    "text_linger": 3.0,
+    "model": "haiku",
+    "max_thinking_tokens": 2000
   }
 }

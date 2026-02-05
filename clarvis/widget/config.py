@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
-import threading
-import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional
 
 from ..core.colors import (
     load_theme,
@@ -37,9 +33,6 @@ class ThemeConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ThemeConfig":
-        if isinstance(d, str):
-            # Legacy: "theme": "c64" -> ThemeConfig(base="c64")
-            return cls(base=d)
         return cls(
             base=d.get("base", DEFAULT_THEME),
             overrides=d.get("overrides", {}),
@@ -149,6 +142,55 @@ class WakeWordConfig:
 
 
 @dataclass
+class VoiceConfig:
+    """Configuration for voice command pipeline."""
+    enabled: bool = True
+    asr_timeout: float = 10.0
+    asr_language: str = "en-US"
+    silence_timeout: float = 3.0
+    tts_voice: str = "Samantha"
+    tts_enabled: bool = True
+    tts_speed: float = 150
+    text_linger: float = 3.0
+    model: Optional[str] = None  # Claude model alias (e.g. "sonnet", "haiku", "opus")
+    max_thinking_tokens: Optional[int] = None  # None = SDK default
+
+    def to_dict(self) -> dict:
+        d = {
+            "enabled": self.enabled,
+            "asr_timeout": self.asr_timeout,
+            "asr_language": self.asr_language,
+            "silence_timeout": self.silence_timeout,
+            "tts_voice": self.tts_voice,
+            "tts_enabled": self.tts_enabled,
+            "tts_speed": self.tts_speed,
+            "text_linger": self.text_linger,
+        }
+        if self.model is not None:
+            d["model"] = self.model
+        if self.max_thinking_tokens is not None:
+            d["max_thinking_tokens"] = self.max_thinking_tokens
+        return d
+
+    @staticmethod
+    def from_dict(d: dict) -> "VoiceConfig":
+        if not isinstance(d, dict):
+            return VoiceConfig()
+        return VoiceConfig(
+            enabled=d.get("enabled", True),
+            asr_timeout=d.get("asr_timeout", 10.0),
+            asr_language=d.get("asr_language", "en-US"),
+            silence_timeout=d.get("silence_timeout", 3.0),
+            tts_voice=d.get("tts_voice", "Samantha"),
+            tts_enabled=d.get("tts_enabled", True),
+            tts_speed=d.get("tts_speed", 150),
+            text_linger=d.get("text_linger", 3.0),
+            model=d.get("model"),
+            max_thinking_tokens=d.get("max_thinking_tokens"),
+        )
+
+
+@dataclass
 class WidgetConfig:
     """Main configuration combining all sections."""
     theme: ThemeConfig
@@ -156,6 +198,7 @@ class WidgetConfig:
     testing: TestingConfig
     token_usage: TokenUsageConfig = field(default_factory=TokenUsageConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
 
     def to_dict(self) -> dict:
         return {
@@ -164,12 +207,13 @@ class WidgetConfig:
             "testing": asdict(self.testing),
             "token_usage": self.token_usage.to_dict(),
             "wake_word": self.wake_word.to_dict(),
+            "voice": self.voice.to_dict(),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "WidgetConfig":
-        # Handle theme (supports legacy "theme": "name" format)
-        theme_data = d.get("theme", DEFAULT_THEME)
+        # Handle theme
+        theme_data = d.get("theme", {})
         theme = ThemeConfig.from_dict(theme_data)
 
         # Validate and load theme
@@ -177,25 +221,13 @@ class WidgetConfig:
             theme.base = DEFAULT_THEME
         load_theme(theme.base, theme.overrides)
 
-        # Handle display (supports legacy "static" key)
-        display_dict = d.get("display", d.get("static", {}))
+        # Handle display
+        display_dict = d.get("display", {})
         display_known = {f.name for f in DisplayConfig.__dataclass_fields__.values()}
         display = DisplayConfig(**{k: v for k, v in display_dict.items() if k in display_known})
 
-        # Handle testing (supports legacy "state" key with test_ prefix)
+        # Handle testing
         testing_dict = d.get("testing", {})
-        if not testing_dict and "state" in d:
-            # Convert legacy state format
-            state = d["state"]
-            testing_dict = {
-                "enabled": state.get("testing", False),
-                "status": state.get("test_status", "idle"),
-                "weather": state.get("test_weather", "clear"),
-                "weather_intensity": state.get("test_weather_intensity", 0.5),
-                "wind_speed": state.get("test_wind_speed", 5.0),
-                "context_percent": state.get("test_context_percent", 50.0),
-                "paused": state.get("paused", False),
-            }
         testing_known = {f.name for f in TestingConfig.__dataclass_fields__.values()}
         testing = TestingConfig(**{k: v for k, v in testing_dict.items() if k in testing_known})
 
@@ -207,7 +239,11 @@ class WidgetConfig:
         wake_word_dict = d.get("wake_word", {})
         wake_word = WakeWordConfig.from_dict(wake_word_dict)
 
-        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage, wake_word=wake_word)
+        # Handle voice
+        voice_dict = d.get("voice", {})
+        voice = VoiceConfig.from_dict(voice_dict)
+
+        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage, wake_word=wake_word, voice=voice)
 
     def save(self, path: Path = CONFIG_PATH):
         temp = path.with_suffix(".tmp")
@@ -219,11 +255,7 @@ class WidgetConfig:
         try:
             if path.exists():
                 raw_data = json.loads(path.read_text())
-                config = cls.from_dict(raw_data)
-                # Migrate legacy format to new format
-                if "static" in raw_data or "state" in raw_data or isinstance(raw_data.get("theme"), str):
-                    config.save(path)
-                return config
+                return cls.from_dict(raw_data)
         except (json.JSONDecodeError, IOError):
             pass
         return cls(
@@ -236,84 +268,10 @@ class WidgetConfig:
         """Get merged theme colors as RGB arrays for Swift widget."""
         return get_merged_theme_colors(self.theme.base, self.theme.overrides)
 
-    # Convenience accessors for backward compatibility
-    @property
-    def grid_width(self) -> int:
-        return self.display.grid_width
-
-    @property
-    def grid_height(self) -> int:
-        return self.display.grid_height
-
-    @property
-    def test_status(self) -> str:
-        return self.testing.status
-
-    @property
-    def test_weather(self) -> str:
-        return self.testing.weather
-
-    @property
-    def test_weather_intensity(self) -> float:
-        return self.testing.weather_intensity
-
-    @property
-    def test_context_percent(self) -> float:
-        return self.testing.context_percent
-
-    @property
-    def test_wind_speed(self) -> float:
-        return self.testing.wind_speed
-
-    # Legacy property name for testing.enabled
-    @property
-    def testing_enabled(self) -> bool:
-        return self.testing.enabled
-
-
-class ConfigWatcher:
-    """Watches config file for changes."""
-
-    def __init__(self, callback: Callable[[WidgetConfig], None], poll_interval: float = 0.2):
-        self.callback = callback
-        self.poll_interval = poll_interval
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._last_mtime = 0.0
-        self._last_config: Optional[WidgetConfig] = None
-
-    def start(self):
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._watch_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=1.0)
-            self._thread = None
-
-    def _watch_loop(self):
-        while self._running:
-            try:
-                if CONFIG_PATH.exists():
-                    mtime = CONFIG_PATH.stat().st_mtime
-                    if mtime != self._last_mtime:
-                        self._last_mtime = mtime
-                        config = WidgetConfig.load()
-                        if self._last_config is None or config.to_dict() != self._last_config.to_dict():
-                            self._last_config = config
-                            self.callback(config)
-            except (IOError, OSError):
-                pass
-            time.sleep(self.poll_interval)
 
 
 # Global instance
 _config: Optional[WidgetConfig] = None
-_watchers: list[ConfigWatcher] = []
 
 
 def get_config() -> WidgetConfig:
@@ -331,33 +289,3 @@ def set_config(config: WidgetConfig):
     config.save()
 
 
-def watch_config(callback: Callable[[WidgetConfig], None]) -> ConfigWatcher:
-    """Start watching config for changes."""
-    watcher = ConfigWatcher(callback)
-    watcher.start()
-    _watchers.append(watcher)
-    return watcher
-
-
-def restart_daemon_and_widget():
-    """Restart the daemon process and widget."""
-    subprocess.run(["pkill", "-f", "clarvis"], capture_output=True)
-    subprocess.run(["pkill", "-f", "ClarvisWidget"], capture_output=True)
-
-    time.sleep(0.5)
-
-    subprocess.Popen(
-        [sys.executable, "-m", "clarvis.daemon"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-
-    widget_path = PROJECT_ROOT / "ClarvisWidget" / "ClarvisWidget"
-    if widget_path.exists():
-        subprocess.Popen(
-            [str(widget_path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )

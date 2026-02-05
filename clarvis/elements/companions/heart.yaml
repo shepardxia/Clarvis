@@ -1,0 +1,9 @@
+kind: companion
+name: heart
+art: |
+  .:::.
+  :::::
+   :::
+    :
+width: 5
+height: 4

@@ -23,9 +23,12 @@ class StateStore:
             "weather": {},
             "location": {},
             "time": {},
+            "voice_text": {},
         }
         self._observers: list[Callable[[str, dict], None]] = []
         self._lock = threading.RLock()  # Reentrant for nested calls
+        self._status_locked = False
+        self._pre_lock_status: dict | None = None
 
     def subscribe(self, callback: Callable[[str, dict], None]) -> Callable[[], None]:
         """
@@ -47,7 +50,31 @@ class StateStore:
 
         return unsubscribe
 
-    def update(self, section: str, value: dict, notify: bool = True) -> None:
+    @property
+    def status_locked(self) -> bool:
+        """Whether status updates are currently locked by the voice pipeline."""
+        return self._status_locked
+
+    def lock_status(self) -> None:
+        """Lock status updates — external writes to 'status' are ignored.
+
+        Saves the current status so it can be restored on unlock.
+        Used by the voice pipeline to prevent Claude session status
+        from overriding voice feedback states.
+        """
+        with self._lock:
+            self._pre_lock_status = self._state.get("status", {}).copy()
+            self._status_locked = True
+
+    def unlock_status(self) -> None:
+        """Unlock status updates and restore the pre-lock status."""
+        with self._lock:
+            self._status_locked = False
+            if self._pre_lock_status is not None:
+                self._state["status"] = self._pre_lock_status
+                self._pre_lock_status = None
+
+    def update(self, section: str, value: dict, notify: bool = True, force: bool = False) -> None:
         """
         Update a state section and notify observers.
 
@@ -55,8 +82,11 @@ class StateStore:
             section: State section name (status, sessions, weather, etc.)
             value: New value for the section
             notify: Whether to notify observers (default True)
+            force: Bypass status lock (used by voice pipeline)
         """
         with self._lock:
+            if section == "status" and self._status_locked and not force:
+                return
             self._state[section] = value
             observers = self._observers.copy()  # Copy to avoid mutation during iteration
 

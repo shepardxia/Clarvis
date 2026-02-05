@@ -1,23 +1,26 @@
-"""Unix socket server for pushing frames to Swift widget."""
+"""Unix socket server for bidirectional communication with Swift widget.
+
+Protocol: Newline-delimited JSON messages in both directions.
+- Daemon → Widget: grid data (rows/cell_colors/theme_color) or commands (have "method" key)
+- Widget → Daemon: results (have "method" key, e.g. "asr_result")
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import threading
-from pathlib import Path
+from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 SOCKET_PATH = "/tmp/clarvis-widget.sock"
 
 
 class WidgetSocketServer:
-    """
-    Push display frames to connected Swift widgets via Unix socket.
-
-    Protocol: Newline-delimited JSON messages.
-    Each frame is a JSON object followed by newline.
-    """
+    """Bidirectional socket server for widget communication."""
 
     def __init__(self, socket_path: str = SOCKET_PATH):
         self.socket_path = socket_path
@@ -26,6 +29,12 @@ class WidgetSocketServer:
         self._lock = threading.Lock()
         self._running = False
         self._accept_thread: threading.Thread | None = None
+        self._read_threads: list[threading.Thread] = []
+        self._message_callback: Callable[[dict], None] | None = None
+
+    def on_message(self, callback: Callable[[dict], None]) -> None:
+        """Register callback for messages received from widget."""
+        self._message_callback = callback
 
     def start(self) -> None:  # pragma: no cover
         """Start the socket server and begin accepting connections."""
@@ -40,8 +49,8 @@ class WidgetSocketServer:
         self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind(self.socket_path)
-        self.server_socket.listen(5)  # Allow a few pending connections
-        self.server_socket.settimeout(1.0)  # For clean shutdown
+        self.server_socket.listen(5)
+        self.server_socket.settimeout(1.0)
 
         self._running = True
 
@@ -75,6 +84,11 @@ class WidgetSocketServer:
             self._accept_thread.join(timeout=2.0)
             self._accept_thread = None
 
+        # Wait for read threads
+        for t in self._read_threads:
+            t.join(timeout=1.0)
+        self._read_threads.clear()
+
         # Clean up socket file
         if os.path.exists(self.socket_path):
             try:
@@ -83,27 +97,53 @@ class WidgetSocketServer:
                 pass
 
     def _accept_loop(self) -> None:  # pragma: no cover
-        """Accept incoming connections."""
+        """Accept incoming connections and start read threads."""
         while self._running and self.server_socket:
             try:
                 client, _ = self.server_socket.accept()
                 client.setblocking(True)
                 with self._lock:
                     self.clients.append(client)
+                # Start a read thread for this client
+                t = threading.Thread(
+                    target=self._read_from_client,
+                    args=(client,),
+                    daemon=True,
+                )
+                t.start()
+                self._read_threads.append(t)
             except socket.timeout:
-                continue  # Check _running flag
+                continue
             except OSError:
-                break  # Socket closed
+                break
+
+    def _read_from_client(self, client: socket.socket) -> None:  # pragma: no cover
+        """Read newline-delimited JSON messages from a connected widget."""
+        buffer = b""
+        try:
+            while self._running:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    if not line:
+                        continue
+                    try:
+                        message = json.loads(line.decode("utf-8"))
+                        if self._message_callback and "method" in message:
+                            self._message_callback(message)
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        logger.warning("Bad message from widget: %s", e)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass
 
     def push_frame(self, frame_data: dict) -> int:  # pragma: no cover
-        """
-        Push a frame to all connected clients.
-
-        Args:
-            frame_data: Frame data dict to send as JSON
+        """Push a frame to all connected clients.
 
         Returns:
-            Number of clients that received the frame
+            Number of clients that received the frame.
         """
         if not self.clients:
             return 0
@@ -120,7 +160,6 @@ class WidgetSocketServer:
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     dead_clients.append(client)
 
-            # Remove dead clients
             for client in dead_clients:
                 try:
                     client.close()
@@ -130,6 +169,14 @@ class WidgetSocketServer:
                     self.clients.remove(client)
 
         return sent_count
+
+    def send_command(self, command: dict) -> int:  # pragma: no cover
+        """Send a command to all connected widgets.
+
+        Commands are JSON objects with a "method" key.
+        Uses the same transport as push_frame.
+        """
+        return self.push_frame(command)
 
     @property
     def client_count(self) -> int:

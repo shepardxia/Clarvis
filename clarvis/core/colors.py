@@ -62,6 +62,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "eureka": ColorDef(220, (1.0, 0.85, 0.0)),        # bright gold - breakthrough!
         "celebration": ColorDef(214, (1.0, 0.7, 0.0)),    # warm gold - task complete!
         "activated": ColorDef(220, (1.0, 0.85, 0.2)),     # golden amber - activated/wake
+        "listening": ColorDef(48, (0.2, 1.0, 0.6)),        # bright mint - actively listening
+        "responding": ColorDef(117, (0.5, 0.7, 1.0)),      # soft blue - speaking response
     },
 
     # CRT Amber - classic amber phosphor terminal
@@ -79,6 +81,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "eureka": ColorDef(226, (1.0, 1.0, 0.3)),     # bright white-amber
         "celebration": ColorDef(226, (1.0, 1.0, 0.3)),
         "activated": ColorDef(226, (1.0, 1.0, 0.3)),  # bright amber
+        "listening": ColorDef(214, (1.0, 0.7, 0.0)),    # warm amber - listening
+        "responding": ColorDef(178, (0.8, 0.6, 0.1)),   # mid amber - speaking
     },
 
     # CRT Green - classic green phosphor terminal
@@ -96,6 +100,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "eureka": ColorDef(156, (0.7, 1.0, 0.5)),     # bright lime
         "celebration": ColorDef(156, (0.7, 1.0, 0.5)),
         "activated": ColorDef(156, (0.7, 1.0, 0.5)),  # bright lime
+        "listening": ColorDef(46, (0.0, 1.0, 0.0)),     # bright green - listening
+        "responding": ColorDef(34, (0.0, 0.7, 0.2)),    # mid green - speaking
     },
 
     # Synthwave - 80s neon aesthetic
@@ -113,6 +119,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "eureka": ColorDef(226, (1.0, 1.0, 0.4)),     # neon yellow
         "celebration": ColorDef(226, (1.0, 1.0, 0.4)),
         "activated": ColorDef(226, (1.0, 1.0, 0.4)),   # neon yellow
+        "listening": ColorDef(51, (0.0, 1.0, 1.0)),     # electric cyan - listening
+        "responding": ColorDef(207, (1.0, 0.4, 0.8)),   # pink - speaking
     },
 
     # C64 - Commodore 64 palette
@@ -130,6 +138,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "eureka": ColorDef(227, (1.0, 1.0, 0.5)),     # yellow
         "celebration": ColorDef(227, (1.0, 1.0, 0.5)),
         "activated": ColorDef(80, (0.4, 0.7, 0.7)),   # cyan
+        "listening": ColorDef(71, (0.4, 0.8, 0.4)),     # green - listening
+        "responding": ColorDef(117, (0.6, 0.7, 1.0)),   # light blue - speaking
     },
 
     # Matrix - 90s hacker aesthetic
@@ -147,6 +157,8 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "eureka": ColorDef(231, (1.0, 1.0, 1.0)),     # white flash
         "celebration": ColorDef(231, (1.0, 1.0, 1.0)),
         "activated": ColorDef(231, (1.0, 1.0, 1.0)),  # white flash
+        "listening": ColorDef(46, (0.0, 1.0, 0.0)),     # bright green - listening
+        "responding": ColorDef(35, (0.0, 0.8, 0.4)),    # teal green - speaking
     },
 }
 
@@ -203,30 +215,6 @@ def get_current_theme() -> str:
 
 
 # =============================================================================
-# Base Palette (for backwards compatibility)
-# =============================================================================
-
-class Palette:
-    """Base color palette."""
-    # Neutrals
-    BLACK = ColorDef(0, (0.0, 0.0, 0.0))
-    GRAY = ColorDef(8, (0.53, 0.53, 0.53))
-    DARK_GRAY = ColorDef(8, (0.4, 0.4, 0.45))
-    WHITE = ColorDef(15, (1.0, 1.0, 1.0))
-
-    # Primary colors
-    YELLOW = ColorDef(11, (1.0, 0.87, 0.0))
-    GREEN = ColorDef(10, (0.0, 1.0, 0.67))
-    BLUE = ColorDef(12, (0.4, 0.5, 1.0))
-    MAGENTA = ColorDef(13, (1.0, 0.0, 1.0))
-    RED = ColorDef(9, (1.0, 0.33, 0.33))
-    CYAN = ColorDef(51, (0.0, 0.9, 0.9))
-    ORANGE = ColorDef(208, (1.0, 0.5, 0.0))
-    GOLD = ColorDef(220, (1.0, 0.85, 0.0))
-    PINK = ColorDef(207, (1.0, 0.4, 0.8))
-
-
-# =============================================================================
 # Status Colors (uses current theme)
 # =============================================================================
 
@@ -236,39 +224,11 @@ class StatusColors:
     @classmethod
     def get(cls, status: str) -> ColorDef:
         """Get color for a status string."""
-        return STATUS_MAP.get(status, STATUS_MAP.get("idle", Palette.GRAY))
+        return STATUS_MAP.get(status, STATUS_MAP.get("idle", ColorDef(8, (0.53, 0.53, 0.53))))
 
 
 # Initialize STATUS_MAP with default theme
 STATUS_MAP: dict[str, ColorDef] = THEMES[DEFAULT_THEME].copy()
-
-
-# =============================================================================
-# Legacy Compatibility - ANSI codes for existing code
-# =============================================================================
-
-# Simple dict of name -> ANSI code (for renderer.py)
-ANSI_COLORS = {
-    "gray": Palette.GRAY.ansi,
-    "white": Palette.WHITE.ansi,
-    "yellow": Palette.YELLOW.ansi,
-    "green": Palette.GREEN.ansi,
-    "blue": Palette.BLUE.ansi,
-    "magenta": Palette.MAGENTA.ansi,
-    "cyan": Palette.CYAN.ansi,
-    "orange": Palette.ORANGE.ansi,
-    "gold": Palette.GOLD.ansi,
-    "pink": Palette.PINK.ansi,
-}
-
-
-def get_status_ansi() -> Dict[str, int]:
-    """Get status -> ANSI code mapping for current theme."""
-    return {status: color.ansi for status, color in STATUS_MAP.items()}
-
-
-# For backwards compatibility (uses current theme)
-STATUS_ANSI = get_status_ansi()
 
 
 # =============================================================================

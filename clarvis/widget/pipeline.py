@@ -8,7 +8,7 @@ making layers fully opaque within their rendered area.
 
 from __future__ import annotations
 import numpy as np
-from typing import Callable, Optional
+from typing import Callable
 
 # Space character code - background fill
 SPACE = ord(' ')
@@ -43,12 +43,14 @@ class Layer:
     """A single rendering layer with char and color arrays and bounding box tracking."""
 
     def __init__(self, name: str, priority: int, width: int, height: int,
-                 render_func: Callable[['Layer'], None] | None = None):
+                 render_func: Callable[['Layer'], None] | None = None,
+                 transparent: bool = False):
         self.name = name
         self.priority = priority
         self.width = width
         self.height = height
         self.render_func = render_func
+        self.transparent = transparent
 
         # NumPy arrays for vectorized operations
         self.chars = np.full((height, width), SPACE, dtype=np.uint32)
@@ -167,9 +169,10 @@ class RenderPipeline:
         self.out_colors = np.zeros((height, width), dtype=np.uint8)
 
     def add_layer(self, name: str, priority: int,
-                  render_func: Callable[[Layer], None] | None = None) -> Layer:
+                  render_func: Callable[[Layer], None] | None = None,
+                  transparent: bool = False) -> Layer:
         """Create and register a new layer."""
-        layer = Layer(name, priority, self.width, self.height, render_func)
+        layer = Layer(name, priority, self.width, self.height, render_func, transparent)
         self.layers[name] = layer
         return layer
 
@@ -204,12 +207,22 @@ class RenderPipeline:
                 layer.clear()
                 layer.render_func(layer)
 
-            # Composite: entire bounding box overwrites (layer is opaque in its bbox)
+            # Composite: bounding box region overwrites lower layers
             bbox = layer.bbox
             if bbox is not None:
                 x1, y1, x2, y2 = bbox
-                self.out_chars[y1:y2, x1:x2] = layer.chars[y1:y2, x1:x2]
-                self.out_colors[y1:y2, x1:x2] = layer.colors[y1:y2, x1:x2]
+                if layer.transparent:
+                    # Only overwrite non-space characters (weather shows through gaps)
+                    region = layer.chars[y1:y2, x1:x2]
+                    mask = region != SPACE
+                    self.out_chars[y1:y2, x1:x2] = np.where(
+                        mask, region, self.out_chars[y1:y2, x1:x2])
+                    self.out_colors[y1:y2, x1:x2] = np.where(
+                        mask, layer.colors[y1:y2, x1:x2],
+                        self.out_colors[y1:y2, x1:x2])
+                else:
+                    self.out_chars[y1:y2, x1:x2] = layer.chars[y1:y2, x1:x2]
+                    self.out_colors[y1:y2, x1:x2] = layer.colors[y1:y2, x1:x2]
 
         return self.out_chars, self.out_colors
 
@@ -218,85 +231,15 @@ class RenderPipeline:
         self.render()
         return '\n'.join(''.join(chr(c) for c in row) for row in self.out_chars)
 
-    def to_ansi(self) -> str:
-        """Render and return ANSI-colored text.
+    def to_grid(self) -> tuple[list[str], list[list[int]]]:
+        """Render and return structured grid data.
 
-        Color code 0 is treated as "default/theme color" and emits reset code.
-        This allows Swift to use its theme color for those characters.
+        Returns:
+            (rows, cell_colors) where rows is a list of strings (one per row)
+            and cell_colors is a 2D list of ANSI 256 color codes per cell.
+            Color 0 means "use theme/default color".
         """
         self.render()
-        lines = []
-        for y in range(self.height):
-            parts = []
-            current_color = -1
-            for x in range(self.width):
-                color = self.out_colors[y, x]
-                char = chr(self.out_chars[y, x])
-                if color != current_color:
-                    if color == 0:
-                        # Color 0 = use default/theme color
-                        parts.append("\033[0m")
-                    else:
-                        parts.append(f"\033[38;5;{color}m")
-                    current_color = color
-                parts.append(char)
-            parts.append("\033[0m")
-            lines.append(''.join(parts))
-        return '\n'.join(lines)
+        rows = [''.join(chr(c) for c in row) for row in self.out_chars]
+        return rows, self.out_colors.tolist()
 
-
-# =============================================================================
-# Demo
-# =============================================================================
-
-if __name__ == "__main__":
-    import time
-
-    # Create pipeline
-    p = RenderPipeline(20, 10)
-
-    # Layer 0: Background particles
-    def render_particles(layer: Layer):
-        import random
-        for _ in range(15):
-            x, y = random.randint(0, 19), random.randint(0, 9)
-            layer.put(x, y, random.choice(['*', '+', '.']), color=8)
-
-    particles = p.add_layer("particles", priority=0, render_func=render_particles)
-
-    # Layer 50: Avatar (higher priority, will cover particles)
-    def render_avatar(layer: Layer):
-        face = [
-            "+=========+",
-            "|   o o   |",
-            "|    u    |",
-            "| * o * o |",
-            "+=========+",
-        ]
-        for dy, line in enumerate(face):
-            layer.put_text(4, 2 + dy, line, color=10)
-
-    avatar = p.add_layer("avatar", priority=50, render_func=render_avatar)
-
-    # Layer 80: Progress bar
-    def render_bar(layer: Layer):
-        for i in range(12):
-            char = '#' if i < 7 else '-'
-            color = 10 if i < 7 else 8
-            layer.put(4 + i, 8, char, color)
-
-    bar = p.add_layer("bar", priority=80, render_func=render_bar)
-
-    # Animate
-    print("\033[2J\033[H")  # Clear screen
-    print("Pipeline Demo (Ctrl+C to stop)\n")
-
-    try:
-        for _ in range(30):
-            print("\033[3;0H")  # Move cursor
-            print(p.to_ansi())
-            time.sleep(0.2)
-    except KeyboardInterrupt:
-        pass
-
-    print("\nDone!")

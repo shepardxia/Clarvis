@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Background daemon for Clarvis - handles status processing and data refreshes."""
+"""Background daemon for Clarvis - handles status processing and data refreshes.
+
+CentralHubDaemon is the orchestration layer that wires together:
+- HookProcessor: translates Claude Code hook events into semantic statuses
+- CommandHandlers: IPC request handlers for MCP server communication
+- DisplayManager: FPS-limited rendering loop
+- RefreshManager: periodic weather/location/time updates
+- Scheduler: unified periodic task runner (replaces scattered polling threads)
+- StateStore: single source of truth for all state
+"""
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import fcntl
 import json
@@ -13,23 +23,24 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional
 
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-
-from .core import read_hub_data
+from .core.cache import HUB_DATA_FILE, read_hub_data
 from .core.state import StateStore, get_state_store
 from .core.session_tracker import SessionTracker
 from .core.display_manager import DisplayManager
 from .core.refresh_manager import RefreshManager
+from .core.scheduler import Scheduler
 from .core.ipc import DaemonServer
+from .core.hook_processor import HookProcessor
+from .core.command_handlers import CommandHandlers
 from .services.token_usage import TokenUsageService
-from .services.thinking_feed import get_session_manager
 from .services.whimsy_verb import WhimsyManager
+from .services.voice_agent import VoiceAgent
+from .services.voice_orchestrator import VoiceCommandOrchestrator
 from .services.wake_word import WakeWordService, WakeWordConfig
 from .widget.renderer import FrameRenderer
-from .widget.config import get_config, watch_config, WidgetConfig, restart_daemon_and_widget
+from .widget.config import get_config
 from .widget.socket_server import WidgetSocketServer, get_socket_server
 
 
@@ -48,7 +59,7 @@ class PidLock:
     def __init__(self, pid_file: Path = None):
         self.pid_file = pid_file or self.DEFAULT_PID_FILE
         self._lock_fd: Optional[int] = None
-        self._original_handlers: Dict[int, Any] = {}
+        self._original_handlers: dict = {}
 
     def acquire(self) -> bool:
         """Attempt to acquire the daemon lock.
@@ -56,21 +67,16 @@ class PidLock:
         Returns:
             True if lock acquired, False if another instance is running.
         """
-        # Check for stale PID file first
         if self.pid_file.exists():
             try:
                 old_pid = int(self.pid_file.read_text().strip())
-                # Check if process is actually running
-                os.kill(old_pid, 0)  # Signal 0 = check existence
-                # Process exists - check if we can get the lock anyway
+                os.kill(old_pid, 0)
             except (ValueError, ProcessLookupError, PermissionError):
-                # PID file is stale (process doesn't exist or invalid)
                 try:
                     self.pid_file.unlink()
                 except OSError:
                     pass
 
-        # Open/create PID file
         try:
             self._lock_fd = os.open(
                 str(self.pid_file),
@@ -81,11 +87,9 @@ class PidLock:
             print(f"Error: Cannot create PID file {self.pid_file}: {e}", file=sys.stderr)
             return False
 
-        # Try to acquire exclusive lock (non-blocking)
         try:
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (IOError, OSError):
-            # Another process holds the lock
             os.close(self._lock_fd)
             self._lock_fd = None
             try:
@@ -95,15 +99,12 @@ class PidLock:
                 print("Error: Daemon already running", file=sys.stderr)
             return False
 
-        # Write our PID
         os.ftruncate(self._lock_fd, 0)
         os.write(self._lock_fd, f"{os.getpid()}\n".encode())
         os.fsync(self._lock_fd)
 
-        # Register cleanup handlers
         self._register_signal_handlers()
         atexit.register(self.release)
-
         return True
 
     def release(self) -> None:
@@ -116,13 +117,11 @@ class PidLock:
                 pass
             self._lock_fd = None
 
-        # Remove PID file
         try:
             self.pid_file.unlink()
         except OSError:
             pass
 
-        # Restore original signal handlers
         for sig, handler in self._original_handlers.items():
             signal.signal(sig, handler)
         self._original_handlers.clear()
@@ -131,7 +130,6 @@ class PidLock:
         """Register signal handlers for graceful cleanup."""
         def cleanup_handler(signum, frame):
             self.release()
-            # Re-raise with default handler for proper exit
             signal.signal(signum, signal.SIG_DFL)
             os.kill(os.getpid(), signum)
 
@@ -151,49 +149,30 @@ class PidLock:
 _daemon_lock: Optional[PidLock] = None
 
 
-class StatusHandler(FileSystemEventHandler):
-    """File system event handler for status updates."""
-
-    def __init__(self, daemon):
-        self.daemon = daemon
-        self._target = str(self.daemon.status_raw_file.resolve())
-
-    def on_modified(self, event):
-        if event.src_path == self._target:
-            self.daemon.process_status_updates()
-
-    def on_moved(self, event):
-        if event.dest_path == self._target:
-            self.daemon.process_status_updates()
-
-    def on_created(self, event):
-        if event.src_path == self._target:
-            self.daemon.process_status_updates()
-
-
 class CentralHubDaemon:
-    """Background daemon for Clarvis - uses StateStore as single source of truth."""
+    """Background daemon for Clarvis - uses StateStore as single source of truth.
+
+    Orchestrates hook processing, command handling, display rendering,
+    and background services. Delegates domain logic to focused modules:
+
+    - HookProcessor: event classification, staleness, context building
+    - CommandHandlers: IPC request handlers for MCP server
+    - DisplayManager: rendering loop
+    - RefreshManager: data refresh (passive, driven by Scheduler)
+    - Scheduler: unified periodic tasks (replaces RefreshManager thread,
+      ConfigWatcher thread, staleness polling, and persist debounce timers)
+    """
 
     def __init__(
         self,
-        status_raw_file: Path = None,
-        hub_data_file: Path = None,
-        output_file: Path = None,
         refresh_interval: int = 30,
-        display_fps: int = None,  # Now defaults to config value
+        display_fps: int = None,
         state_store: StateStore = None,
         socket_server: WidgetSocketServer = None,
     ):
-        # File paths
-        self.status_raw_file = status_raw_file or Path("/tmp/claude-status-raw.json")
-        self.hub_data_file = hub_data_file or Path("/tmp/clarvis-data.json")
-        self.output_file = output_file or Path("/tmp/widget-display.json")
         self.refresh_interval = refresh_interval
 
-        # Load config
         config = get_config()
-        
-        # Use config FPS if not explicitly provided
         self.display_fps = display_fps if display_fps is not None else config.display.fps
 
         # Core state
@@ -202,16 +181,17 @@ class CentralHubDaemon:
         self.command_server = DaemonServer()
         self.token_usage_service: Optional[TokenUsageService] = None
         self.wake_word_service: Optional[WakeWordService] = None
+        self.voice_agent: Optional[VoiceAgent] = None
+        self.voice_orchestrator: Optional[VoiceCommandOrchestrator] = None
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self.scheduler: Optional[Scheduler] = None
 
-        # Threading
-        self.observer: Observer | None = None
         self.running = False
-        self._lock = threading.Lock()
 
         # Display manager with pre-warmed renderer
         renderer = FrameRenderer(
-            width=config.grid_width,
-            height=config.grid_height,
+            width=config.display.grid_width,
+            height=config.display.grid_height,
             avatar_x_offset=config.display.avatar_x_offset,
             avatar_y_offset=config.display.avatar_y_offset,
             bar_x_offset=config.display.bar_x_offset,
@@ -221,68 +201,53 @@ class CentralHubDaemon:
         self.display = DisplayManager(
             renderer=renderer,
             socket_server=self.socket_server,
-            output_file=self.output_file,
             fps=self.display_fps,
         )
 
         # Whimsy verb manager
         self.whimsy = WhimsyManager(
-            context_provider=lambda: self._get_rich_context(),
+            context_provider=lambda: self.hook_processor.get_rich_context(),
         )
 
-        # Refresh manager (created after display for dependency)
+        # Refresh manager (passive — Scheduler drives it)
         self.refresh = RefreshManager(
             state=self.state,
             display_manager=self.display,
-            interval=refresh_interval,
         )
 
-        # Load initial state from hub file
-        self._load_initial_state()
+        # Hook processor (event classification, staleness, context)
+        self.hook_processor = HookProcessor(
+            state=self.state,
+            session_tracker=self.session_tracker,
+        )
 
-        # Subscribe to state changes for file persistence
+        # Command handlers (IPC request handlers for MCP server)
+        self.commands = CommandHandlers(
+            state=self.state,
+            session_tracker=self.session_tracker,
+            refresh=self.refresh,
+            whimsy=self.whimsy,
+            command_server=self.command_server,
+            token_usage_service_provider=lambda: self.token_usage_service,
+            voice_orchestrator_provider=lambda: self.voice_orchestrator,
+        )
+
+        # Asyncio debounce state (replaces threading.Timer)
+        self._persist_handle: Optional[asyncio.TimerHandle] = None
+
+        # Load initial state and subscribe to changes
+        self._load_initial_state()
         self.state.subscribe(self._on_state_change)
 
-    # --- Backward-compatible properties ---
+    # --- State initialization and persistence ---
 
-    @property
-    def sessions(self) -> dict:
-        """Backward-compatible access to sessions."""
-        return self.state.get("sessions")
-
-    @property
-    def display_status(self) -> str:
-        """Backward-compatible access to display status."""
-        status = self.state.get("status")
-        return status.get("status", "idle") if status else "idle"
-
-    @property
-    def display_color(self) -> str:
-        """Backward-compatible access to display color."""
-        status = self.state.get("status")
-        return status.get("color", "gray") if status else "gray"
-
-    @property
-    def display_context_percent(self) -> float:
-        """Backward-compatible access to display context percent."""
-        status = self.state.get("status")
-        return status.get("context_percent", 0.0) if status else 0.0
-
-    def _load_initial_state(self):
+    def _load_initial_state(self) -> None:
         """Load initial state from hub data file."""
         hub_data = read_hub_data()
 
-        # Load into StateStore
-        if hub_data.get("status"):
-            self.state.update("status", hub_data["status"], notify=False)
-        if hub_data.get("sessions"):
-            self.state.update("sessions", hub_data["sessions"], notify=False)
-        if hub_data.get("weather"):
-            self.state.update("weather", hub_data["weather"], notify=False)
-        if hub_data.get("location"):
-            self.state.update("location", hub_data["location"], notify=False)
-        if hub_data.get("time"):
-            self.state.update("time", hub_data["time"], notify=False)
+        for section in ("status", "sessions", "weather", "location", "time"):
+            if hub_data.get(section):
+                self.state.update(section, hub_data[section], notify=False)
 
         # Initialize display from loaded state
         status = self.state.get("status")
@@ -291,560 +256,110 @@ class CentralHubDaemon:
 
         weather = self.state.get("weather")
         if weather:
-            weather_type = weather.get("widget_type", "clear")
-            intensity = weather.get("widget_intensity", 0.0)
-            wind_speed = weather.get("wind_speed", 0.0)
-            self.display.set_weather(weather_type, intensity, wind_speed)
+            self.display.set_weather(
+                weather.get("widget_type", "clear"),
+                weather.get("widget_intensity", 0.0),
+                weather.get("wind_speed", 0.0),
+            )
 
-    def _on_state_change(self, section: str, value: dict):
-        """Handle state changes - persist to file."""
-        self._persist_to_file()
+    def _on_state_change(self, section: str, value: dict) -> None:
+        """Handle state changes - debounced persist to file.
 
-    def _persist_to_file(self):
-        """Persist current state to hub data file."""
+        Uses a trailing-edge debounce via asyncio.call_later: each state
+        change cancels the previous timer and schedules a new one 1s out.
+        Thread-safe via call_soon_threadsafe.
+        """
+        if self._event_loop is not None:
+            self._event_loop.call_soon_threadsafe(self._schedule_persist)
+
+    def _schedule_persist(self) -> None:
+        """Schedule a debounced persist on the event loop (must be called on loop thread)."""
+        if self._persist_handle is not None:
+            self._persist_handle.cancel()
+        self._persist_handle = self._event_loop.call_later(1.0, self._persist_to_file)
+
+    def _persist_to_file(self) -> None:
+        """Persist current state to hub data file (atomic write)."""
+        import tempfile
+        self._persist_handle = None
         hub_data = self.state.get_all()
         hub_data["updated_at"] = datetime.now().isoformat()
 
-        temp_file = self.hub_data_file.with_suffix('.tmp')
-        temp_file.write_text(json.dumps(hub_data, indent=2))
-        temp_file.rename(self.hub_data_file)
+        fd, temp_path = tempfile.mkstemp(
+            suffix='.tmp', dir=HUB_DATA_FILE.parent
+        )
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(hub_data, f)
+            os.rename(temp_path, HUB_DATA_FILE)
+        except Exception:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
-    # --- Status Processing ---
+    def _flush_persist(self) -> None:
+        """Cancel pending debounce and persist immediately. Called on shutdown."""
+        if self._persist_handle is not None:
+            self._persist_handle.cancel()
+            self._persist_handle = None
+        self._persist_to_file()
 
-    # Tool categories for semantic status mapping
-    READING_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS", "NotebookRead"}
-    WRITING_TOOLS = {"Write", "Edit", "NotebookEdit"}
-    EXECUTING_TOOLS = {"Bash", "TodoWrite", "TodoRead"}
-    THINKING_TOOLS = {"Task", "EnterPlanMode", "ExitPlanMode"}
-    AWAITING_TOOLS = {"AskUserQuestion"}
-
-    # Keywords for MCP tool classification
-    READING_KEYWORDS = {"read", "get", "list", "find", "search", "fetch", "query", "inspect", "browse", "view"}
-    WRITING_KEYWORDS = {"write", "create", "edit", "replace", "insert", "delete", "update", "add", "remove", "set"}
-    EXECUTING_KEYWORDS = {"execute", "run", "shell", "browser", "click", "navigate", "type", "press", "play", "pause"}
-
-    def _classify_tool(self, tool_name: str) -> tuple[str, str]:
-        """Classify a tool into status/color based on its name and semantics.
-
-        Returns (status, color) tuple.
-        """
-        # Explicit matches first (highest priority)
-        if tool_name in self.READING_TOOLS:
-            return "reading", "cyan"
-        if tool_name in self.WRITING_TOOLS:
-            return "writing", "magenta"
-        if tool_name in self.EXECUTING_TOOLS:
-            return "executing", "orange"
-        if tool_name in self.THINKING_TOOLS:
-            return "thinking", "yellow"
-        if tool_name in self.AWAITING_TOOLS:
-            return "awaiting", "blue"
-
-        # MCP tool heuristics (pattern matching)
-        if tool_name.startswith("mcp__"):
-            lower = tool_name.lower()
-            # Check keywords in order of specificity
-            if any(kw in lower for kw in self.WRITING_KEYWORDS):
-                return "writing", "magenta"
-            if any(kw in lower for kw in self.EXECUTING_KEYWORDS):
-                return "executing", "orange"
-            if any(kw in lower for kw in self.READING_KEYWORDS):
-                return "reading", "cyan"
-
-        # Default for unknown tools
-        return "running", "green"
+    # --- Hook event processing (delegated to HookProcessor) ---
 
     def process_hook_event(self, raw_data: dict) -> dict:
         """Process raw hook event into status/color based on tool_name."""
-        session_id = raw_data.get("session_id", "unknown")
-        event = raw_data.get("hook_event_name", "")
-        tool_name = raw_data.get("tool_name", "")
-        tool_error = raw_data.get("tool_error")  # Check for errors
-        context_window = raw_data.get("context_window") or {}
-        context_percent = context_window.get("used_percentage") or 0
+        return self.hook_processor.process_hook_event(raw_data)
 
-        # Get existing status from state
-        existing_status = self.state.get("status")
+    def _handle_hook_event(self, **raw_data) -> dict:
+        """Process a hook event received via IPC (replaces file-based watcher)."""
+        # Stash transcript_path for whimsy context
+        tp = raw_data.get("transcript_path")
+        if tp:
+            self.hook_processor.last_transcript_path = tp
 
-        # Map events to status/color with tool-based refinement
-        if event == "PreToolUse":
-            status, color = self._classify_tool(tool_name)
-        elif event == "PostToolUse":
-            # Check if tool encountered an error
-            if tool_error:
-                status, color = "reviewing", "magenta"
-            else:
-                status, color = "thinking", "yellow"
-        elif event == "UserPromptSubmit":
-            status, color = "thinking", "yellow"
-        elif event == "Stop":
-            # Check for special animation triggers
-            special = self._check_special_animation(session_id, raw_data)
-            if special:
-                status, color = special
-            else:
-                status, color = "awaiting", "blue"
-        elif event == "Notification":
-            status, color = "awaiting", "blue"
-        elif context_window:
-            status = existing_status.get("status", "idle")
-            color = existing_status.get("color", "gray")
-        else:
-            status, color = "idle", "gray"
+        processed = self.process_hook_event(raw_data)
+        self.state.update("status", processed)
 
-        # Update session history with tool info and outcome
-        tool_succeeded = not bool(tool_error) if event == "PostToolUse" else None
-        self.session_tracker.update(session_id, status, context_percent, tool_name, tool_succeeded)
+        if (processed.get("session_id") == self.session_tracker.displayed_id
+                and not self.state.status_locked):
+            self.display.set_status(processed.get("status", "idle"))
 
-        # Use last known context if current is 0
-        effective_context = context_percent or self.session_tracker.get_last_context(session_id)
-
-        # High context warning at 70%+
-        high_context = effective_context >= 70
-
-        # Get session data for output
-        session = self.session_tracker.get(session_id)
-
-        return {
-            "session_id": session_id,
-            "status": status,
-            "color": color,
-            "context_percent": effective_context,
-            "high_context": high_context,
-            "status_history": session.get("status_history", []).copy(),
-            "context_history": session.get("context_history", []).copy(),
-            "tool_history": session.get("tool_history", []).copy(),
-            "tool_outcomes": session.get("tool_outcomes", []).copy(),
-            "timestamp": datetime.now().isoformat(),
-        }
-
-    def process_status_updates(self):
-        """Watch for raw hook events and process them."""
-        if not self.status_raw_file.exists():
-            return
-
-        try:
-            raw_data = json.loads(self.status_raw_file.read_text())
-            processed = self.process_hook_event(raw_data)
-
-            # Update state (triggers observers, including file persistence)
-            self.state.update("status", processed)
-
-            # Update display if this is the displayed session
-            if processed.get("session_id") == self.session_tracker.displayed_id:
-                self.display.set_status(processed.get("status", "idle"))
-
-            # Trigger whimsy verb on user prompt submit (with cooldown)
-            self._maybe_trigger_whimsy(raw_data.get("hook_event_name"))
-
-            # Periodically clean up stale sessions
-            self.session_tracker.cleanup_stale()
-
-        except (json.JSONDecodeError, IOError):
-            pass
-
-
-    def _check_special_animation(self, session_id: str, raw_data: dict) -> tuple[str, str] | None:
-        """Check if Stop event should trigger a special animation.
-
-        Returns (status, color) tuple if special animation should play, None otherwise.
-
-        Triggers:
-        - eureka: Created something (Write/Edit succeeded), especially after failures
-        - celebration: Productive session (5+ tools) without creation
-        """
-        session = self.session_tracker.get(session_id)
-        tool_history = session.get("tool_history", [])
-        tool_outcomes = session.get("tool_outcomes", [])
-
-        # Need some activity to trigger special animations
-        if len(tool_history) < 3:
-            return None
-
-        creative_tools = {"Write", "Edit", "NotebookEdit"}
-        recent_tools = tool_history[-5:] if len(tool_history) >= 5 else tool_history
-
-        # Check for eureka: successful Write/Edit, especially after failures
-        recent_outcomes = tool_outcomes[-5:] if len(tool_outcomes) >= 5 else tool_outcomes
-        had_failures = any(not o.get("succeeded", True) for o in recent_outcomes)
-        had_creative_success = any(
-            o.get("tool") in creative_tools and o.get("succeeded", False)
-            for o in recent_outcomes
-        )
-
-        # Eureka: created something successfully (bonus if after failures = problem solved)
-        if had_creative_success:
-            return ("eureka", "gold")
-
-        # Fallback: check tool history if outcomes not tracked yet
-        if any(t in creative_tools for t in recent_tools):
-            return ("eureka", "gold")
-
-        # Celebration: productive session (5+ tools) without creation
-        if len(tool_history) >= 5:
-            return ("celebration", "gold")
-
-        return None
-
-    def _maybe_trigger_whimsy(self, event: str | None):
-        """Trigger whimsy verb generation when switching to thinking status."""
+        event = raw_data.get("hook_event_name")
         if event:
             self.whimsy.maybe_generate(event)
+        self.session_tracker.cleanup_stale()
 
-    def _check_status_staleness(self, timeout_seconds: int = 30) -> bool:
-        """Check if status is stale and reset to idle if so.
+        if raw_data.get("hook_event_name", "") != "Stop" and self.scheduler:
+            self.scheduler.set_mode("active")
 
-        Returns True if status was reset, False otherwise.
-        """
-        status = self.state.get("status")
-        if not status:
-            return False
+    # --- Staleness check (called by Scheduler) ---
 
-        timestamp_str = status.get("timestamp")
-        current_status = status.get("status", "idle")
+    def _check_staleness(self) -> None:
+        """Check for stale status and reset to idle + switch to idle mode."""
+        stale_reset = self.hook_processor.check_status_staleness()
+        if stale_reset and not self.state.status_locked:
+            self.display.set_status("idle")
+            if self.scheduler:
+                self.scheduler.set_mode("idle")
 
-        # Don't reset if already idle or awaiting (these are resting states)
-        if current_status in ("idle", "awaiting", "resting"):
-            return False
+    # --- Health check (called by Scheduler) ---
 
-        if timestamp_str:
-            try:
-                last_update = datetime.fromisoformat(timestamp_str)
-                age = datetime.now() - last_update
-                if age.total_seconds() > timeout_seconds:
-                    # Status is stale, reset to idle
-                    stale_status = {
-                        **status,
-                        "status": "idle",
-                        "color": "gray",
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                    self.state.update("status", stale_status)
-                    self.display.set_status("idle")
-                    return True
-            except (ValueError, TypeError):
-                pass
+    def _check_health(self) -> None:
+        """Restart display thread if it died unexpectedly."""
+        if self.display._thread and not self.display._thread.is_alive():
+            self.display.start(self._get_display_state, state_store=self.state)
 
-        return False
+    # --- Mode transitions ---
 
-    def _get_rich_context(self, max_messages: int = 5, max_chars: int = 1500) -> str:
-        """Build task-focused context for whimsy verb generation.
+    def _on_mode_change(self, mode: str) -> None:
+        """Handle scheduler mode transitions — adjust display FPS."""
+        if mode == "active":
+            self.display.set_fps(self.display_fps)
+        else:
+            self.display.set_fps(1)
 
-        Prioritizes what Claude is doing over ambient info.
-        """
-        parts = []
-
-        # --- PRIMARY: What Claude is doing ---
-        status = self.state.get("status")
-        if status:
-            # Current status
-            current_status = status.get("status", "idle")
-            parts.append(f"status: {current_status}")
-
-            # Current/recent tools (what action is happening)
-            tool_history = status.get("tool_history", [])
-            if tool_history:
-                recent = tool_history[-3:]
-                # Map to descriptive actions
-                tool_actions = {
-                    "Read": "reading code",
-                    "Grep": "searching codebase",
-                    "Glob": "finding files",
-                    "Write": "writing new code",
-                    "Edit": "editing code",
-                    "Bash": "running commands",
-                    "Task": "delegating to subagent",
-                    "WebFetch": "fetching from web",
-                    "WebSearch": "searching web",
-                }
-                actions = [tool_actions.get(t, t.lower()) for t in recent]
-                parts.append(f"doing: {', '.join(actions)}")
-
-            # Context pressure (cognitive load indicator)
-            ctx_pct = status.get("context_percent", 0)
-            if ctx_pct > 70:
-                parts.append(f"context: {ctx_pct:.0f}% full (deep in complex task)")
-            elif ctx_pct > 40:
-                parts.append(f"context: {ctx_pct:.0f}% (working steadily)")
-
-        # --- SECONDARY: Conversation (the actual task) ---
-        chat = self._get_chat_context(max_messages, max_msg_len=200)
-        if chat:
-            parts.append(f"conversation:\n{chat}")
-
-        # --- TERTIARY: Ambient context ---
-        ambient = []
-
-        # Weather
-        weather = self.state.get("weather")
-        if weather and weather.get("temperature"):
-            desc = weather.get("description", "").lower()
-            temp = weather.get("temperature", "")
-            ambient.append(f"{temp}°F {desc}")
-
-        # Time
-        time_data = self.state.get("time")
-        if time_data and time_data.get("timestamp"):
-            try:
-                dt = datetime.fromisoformat(time_data["timestamp"])
-                hour = dt.hour
-                period = "morning" if 5 <= hour < 12 else "afternoon" if 12 <= hour < 17 else "evening" if 17 <= hour < 21 else "night"
-                ambient.append(f"{dt.strftime('%A')} {period}")
-            except (ValueError, KeyError):
-                pass
-
-        # Music
-        try:
-            from clautify import Clautify
-            now = Clautify().now_playing()
-            if now and now.get("state") == "PLAYING":
-                title = now.get("title", "")[:25]
-                artist = now.get("artist", "")[:15]
-                if title:
-                    ambient.append(f"music: {title}" + (f" by {artist}" if artist else ""))
-        except Exception:
-            pass
-
-        if ambient:
-            parts.append(f"environment: {', '.join(ambient)}")
-
-        result = "\n".join(parts)
-        return result[:max_chars] if len(result) > max_chars else result
-
-    def _get_chat_context(self, max_messages: int = 5, max_msg_len: int = 150) -> str:
-        """Extract recent chat context from transcript file (compact format)."""
-        try:
-            if not self.status_raw_file.exists():
-                return ""
-
-            raw_data = json.loads(self.status_raw_file.read_text())
-            transcript_path = raw_data.get("transcript_path")
-
-            if not transcript_path or not Path(transcript_path).exists():
-                return ""
-
-            messages = []
-            with open(transcript_path, 'r') as f:
-                lines = f.readlines()
-
-            for line in reversed(lines[-50:]):
-                try:
-                    entry = json.loads(line)
-                    entry_type = entry.get("type")
-
-                    if entry_type in ("user", "assistant"):
-                        content = entry.get("message", {}).get("content", "")
-
-                        if isinstance(content, list):
-                            texts = [c.get("text", "") for c in content
-                                     if c.get("type") == "text" and not c.get("text", "").startswith("<system")]
-                            content = " ".join(texts)
-
-                        if content and not content.startswith("<system"):
-                            role = "U" if entry_type == "user" else "A"
-                            # Truncate and clean
-                            content = content[:max_msg_len].replace("\n", " ").strip()
-                            messages.append(f"{role}: {content}")
-
-                            if len(messages) >= max_messages:
-                                break
-                except json.JSONDecodeError:
-                    continue
-
-            messages.reverse()
-            return "\n".join(messages)
-
-        except Exception as e:
-            return ""
-
-    # --- Status Watcher ---
-
-    def start_status_watcher(self):
-        """Start watching for status updates in background."""
-        with self._lock:
-            if self.observer is not None:
-                return
-
-            self.observer = Observer()
-            handler = StatusHandler(self)
-            self.observer.schedule(handler, str(self.status_raw_file.parent), recursive=False)
-            self.observer.start()
-
-        self.process_status_updates()
-
-    def stop_status_watcher(self):
-        """Stop the status watcher."""
-        with self._lock:
-            if self.observer is not None:
-                self.observer.stop()
-                self.observer.join()
-                self.observer = None
-
-    # --- Lifecycle ---
-
-    def _on_config_change(self, new_config: WidgetConfig):
-        """Handle config file changes."""
-        # Check if grid size changed (requires restart)
-        if (new_config.grid_width != self.display.renderer.width or
-            new_config.grid_height != self.display.renderer.height):
-            print(f"Grid size changed, restarting...")
-            restart_daemon_and_widget()
-            return
-
-        # Update position offsets if changed
-        renderer = self.display.renderer
-        if (renderer.avatar_x_offset != new_config.display.avatar_x_offset or
-            renderer.avatar_y_offset != new_config.display.avatar_y_offset or
-            renderer.bar_x_offset != new_config.display.bar_x_offset or
-            renderer.bar_y_offset != new_config.display.bar_y_offset):
-            renderer.avatar_x_offset = new_config.display.avatar_x_offset
-            renderer.avatar_y_offset = new_config.display.avatar_y_offset
-            renderer.bar_x_offset = new_config.display.bar_x_offset
-            renderer.bar_y_offset = new_config.display.bar_y_offset
-            renderer._recalculate_layout()
-
-        # If testing mode, apply overrides immediately
-        if new_config.testing.enabled:
-            self.display.set_status(new_config.test_status)
-            self.display.set_weather(
-                new_config.test_weather,
-                new_config.test_weather_intensity,
-                new_config.test_wind_speed
-            )
-
-    def _register_command_handlers(self):
-        """Register handlers for IPC commands from MCP server."""
-        # State queries
-        self.command_server.register("get_state", self._cmd_get_state)
-        self.command_server.register("get_status", self._cmd_get_status)
-        self.command_server.register("get_weather", self._cmd_get_weather)
-        self.command_server.register("get_sessions", self._cmd_get_sessions)
-        self.command_server.register("get_session", self._cmd_get_session)
-        self.command_server.register("get_token_usage", self.get_token_usage)
-
-        # Actions
-        self.command_server.register("refresh_weather", self._cmd_refresh_weather)
-        self.command_server.register("refresh_time", self._cmd_refresh_time)
-        self.command_server.register("refresh_location", self._cmd_refresh_location)
-        self.command_server.register("refresh_all", self._cmd_refresh_all)
-
-        # Whimsy verbs
-        self.command_server.register("get_thinking_context", self._cmd_get_thinking_context)
-        self.command_server.register("get_whimsy_verb", self._cmd_get_whimsy_verb)
-        self.command_server.register("get_whimsy_stats", self._cmd_get_whimsy_stats)
-
-        # Utility
-        self.command_server.register("ping", lambda: "pong")
-
-    def _cmd_get_state(self) -> dict:
-        """Get full Clarvis state."""
-        status = self.state.get("status")
-        weather = self.state.get("weather")
-        time_data = self.state.get("time")
-        sessions = self.state.get("sessions")
-
-        session_details = {}
-        for session_id, data in sessions.items():
-            session_details[session_id] = {
-                "last_status": data.get("last_status", "unknown"),
-                "last_context": data.get("last_context", 0),
-                "status_history": data.get("status_history", []),
-                "context_history": data.get("context_history", []),
-            }
-
-        return {
-            "displayed_session": status.get("session_id"),
-            "status": status.get("status", "unknown"),
-            "color": status.get("color", "gray"),
-            "context_percent": status.get("context_percent", 0),
-            "status_history": status.get("status_history", []),
-            "context_history": status.get("context_history", []),
-            "weather": {
-                "type": weather.get("description", "unknown"),
-                "temperature": weather.get("temperature"),
-                "wind_speed": weather.get("wind_speed", 0),
-                "intensity": weather.get("intensity", 0),
-                "city": weather.get("city", "unknown"),
-                "widget_type": weather.get("widget_type", "clear"),
-            },
-            "time": time_data.get("timestamp"),
-            "sessions": session_details,
-        }
-
-    def _cmd_get_status(self) -> dict:
-        """Get current status."""
-        return self.state.get("status")
-
-    def _cmd_get_weather(self) -> dict:
-        """Get current weather."""
-        return self.state.get("weather")
-
-    def _cmd_get_sessions(self) -> list:
-        """List all tracked sessions."""
-        return self.session_tracker.list_all()
-
-    def _cmd_get_session(self, session_id: str) -> dict:
-        """Get details for a specific session."""
-        return self.session_tracker.get_details(session_id)
-
-    def get_token_usage(self) -> Dict[str, Any]:
-        """Get current token usage data.
-
-        Returns:
-            Dict with usage data, last_updated, and is_stale flag
-        """
-        if not self.token_usage_service:
-            return {"error": "Token usage service not initialized", "is_stale": True}
-        return self.token_usage_service.get_usage()
-
-    def _cmd_refresh_weather(self, latitude: float = None, longitude: float = None) -> dict:
-        """Refresh weather and return new data."""
-        return self.refresh.refresh_weather(latitude, longitude)
-
-    def _cmd_refresh_time(self, timezone: str = None) -> dict:
-        """Refresh time and return new data."""
-        return self.refresh.refresh_time(timezone)
-
-    def _cmd_refresh_location(self) -> dict:
-        """Refresh location and return new data."""
-        lat, lon, city = self.refresh.refresh_location()
-        return {"latitude": lat, "longitude": lon, "city": city}
-
-    def _cmd_refresh_all(self) -> str:
-        """Refresh all data sources."""
-        self.refresh.refresh_all()
-        return "ok"
-
-    def _cmd_get_thinking_context(self, limit: int = 500) -> dict:
-        """Get latest thinking context from active sessions."""
-        manager = get_session_manager()
-        latest = manager.get_latest_thought()
-        if not latest:
-            return {"context": None, "session_id": None}
-
-        # Truncate to limit
-        text = latest.get("text", "")
-        if len(text) > limit:
-            text = text[-limit:]
-
-        return {
-            "context": text,
-            "session_id": latest.get("session_id"),
-            "project": latest.get("project"),
-            "timestamp": latest.get("timestamp"),
-        }
-
-    def _cmd_get_whimsy_verb(self, context: str = None) -> dict:
-        """Generate whimsy verb from context or latest thinking."""
-        if not context:
-            ctx_data = self._cmd_get_thinking_context()
-            context = ctx_data.get("context")
-
-        return self.whimsy.generate_sync(context)
-
-    def _cmd_get_whimsy_stats(self) -> dict:
-        """Get whimsy verb usage statistics."""
-        return self.whimsy.stats
+    # --- Display state ---
 
     def _get_display_state(self) -> tuple[str, float, str | None]:
         """Get current display state for rendering.
@@ -855,38 +370,103 @@ class CentralHubDaemon:
         config = get_config()
 
         if config.testing.enabled:
-            # Testing mode overrides
-            self.display.set_status(config.test_status)
+            self.display.set_status(config.testing.status)
             self.display.set_weather(
-                config.test_weather,
-                config.test_weather_intensity,
-                config.test_wind_speed
+                config.testing.weather,
+                config.testing.weather_intensity,
+                config.testing.wind_speed
             )
-            return config.test_status, config.test_context_percent, self.whimsy.current_verb
+            return config.testing.status, config.testing.context_percent, self.whimsy.current_verb
 
         status = self.state.get("status")
         context_percent = status.get("context_percent", 0) if status else 0
         display_status = status.get("status", "idle") if status else "idle"
         return display_status, context_percent, self.whimsy.current_verb
 
-    def start(self):
+    # --- Voice pipeline ---
+
+    def _init_voice_pipeline(self) -> None:
+        """Initialize voice agent + orchestrator with the captured event loop.
+
+        Called from run() after self._event_loop is set, so both
+        components receive the loop for consistent thread-to-async bridging.
+        """
+        config = get_config()
+        needs_voice = (
+            config.wake_word.enabled
+            and config.voice.enabled
+            and self.wake_word_service is not None
+            and self._event_loop is not None
+        )
+        if not needs_voice:
+            return
+
+        self.voice_agent = VoiceAgent(
+            event_loop=self._event_loop,
+            model=config.voice.model,
+            max_thinking_tokens=config.voice.max_thinking_tokens,
+        )
+        self.voice_orchestrator = VoiceCommandOrchestrator(
+            event_loop=self._event_loop,
+            socket_server=self.socket_server,
+            voice_agent=self.voice_agent,
+            state_store=self.state,
+            wake_word_service=self.wake_word_service,
+            tts_voice=config.voice.tts_voice,
+            tts_speed=config.voice.tts_speed,
+            asr_timeout=config.voice.asr_timeout,
+            silence_timeout=config.voice.silence_timeout,
+            text_linger=config.voice.text_linger,
+        )
+        self.socket_server.on_message(
+            self.voice_orchestrator.handle_widget_message
+        )
+        print("[Daemon] Voice command pipeline initialized", flush=True)
+
+    def _on_wake_word_detected(self) -> None:
+        """Handle wake word detection -- trigger voice command pipeline.
+
+        Called from hey-buddy's detector thread, NOT the asyncio event loop.
+        """
+        print("[Daemon] Wake word detected", flush=True)
+
+        if self.voice_orchestrator and self._event_loop:
+            asyncio.run_coroutine_threadsafe(
+                self.voice_orchestrator.on_wake_word(),
+                self._event_loop,
+            )
+            return
+
+        # Fallback when voice pipeline is not initialized: brief activation flash.
+        self.display.set_status("activated")
+
+        def revert_after_delay() -> None:
+            time.sleep(2.0)
+            current = self.state.get("status")
+            current_status = current.get("status", "idle") if current else "idle"
+            if current_status == "activated":
+                self.display.set_status("awaiting")
+
+        threading.Thread(target=revert_after_delay, daemon=True).start()
+
+    # --- Lifecycle ---
+
+    def start(self) -> None:
         """Start the daemon."""
         if self.running:
             return
 
         self.running = True
 
-        # Start config watcher
-        self.config_watcher = watch_config(self._on_config_change)
-
-        # Register and start command server for MCP communication
-        self._register_command_handlers()
+        # IPC command server
+        self.commands.register_all()
+        self.command_server.register("hook_event", self._handle_hook_event)
         self.command_server.start()
 
-        # Start socket server for widget connections
+        # Widget socket server
         self.socket_server.start()
 
-        # Initialize token usage service
+        # Token usage service
         config = get_config()
         if config.token_usage.enabled:
             self.token_usage_service = TokenUsageService(
@@ -894,7 +474,7 @@ class CentralHubDaemon:
             )
             self.token_usage_service.start()
 
-        # Initialize wake word service
+        # Wake word service
         if config.wake_word.enabled:
             wake_config = WakeWordConfig(
                 enabled=config.wake_word.enabled,
@@ -912,113 +492,106 @@ class CentralHubDaemon:
             print(f"[Daemon] Starting wake word service with threshold={wake_config.threshold}", flush=True)
             self.wake_word_service.start()
 
-        # Start status watcher
-        self.start_status_watcher()
+        # Display rendering
+        self.display.start(self._get_display_state, state_store=self.state)
 
-        # Start display rendering (pass state getter callback)
-        self.display.start(self._get_display_state)
-
-        # Start background refresh loop
-        self.refresh.start()
-
-        # Initial refresh
+        # Initial data refresh (blocking, runs once before Scheduler takes over)
         self.refresh.refresh_all()
 
-    def _on_wake_word_detected(self) -> None:
-        """Handle wake word detection - trigger activated animation."""
-        print("[Daemon] Wake word callback triggered!", flush=True)
-        # Update display to activated status
-        self.display.set_status("activated")
-        print(f"[Daemon] Set display status to 'activated'", flush=True)
+    def _start_scheduler(self) -> None:
+        """Set up and start the unified Scheduler on the event loop.
 
-        # Schedule reversion to previous status after animation duration
-        def revert_status():
-            time.sleep(2.0)  # Animation duration
-            status = self.state.get("status")
-            previous = status.get("status", "idle") if status else "idle"
-            if previous == "activated":
-                previous = "awaiting"  # Fall back to awaiting after activation
-            self.display.set_status(previous)
+        Called from run() after the event loop is captured.
+        """
+        self.scheduler = Scheduler(self._event_loop)
 
-        threading.Thread(target=revert_status, daemon=True).start()
+        # Periodic data refresh (blocking HTTP I/O → executor)
+        self.scheduler.register(
+            "refresh",
+            self.refresh.refresh_all,
+            active_interval=self.refresh_interval,
+            idle_interval=300,
+            blocking=True,
+        )
 
-    def stop(self):
+        # Staleness check (cheap, inline)
+        self.scheduler.register(
+            "staleness",
+            self._check_staleness,
+            active_interval=5,
+            idle_interval=30,
+        )
+
+        # Health check — restart display thread if died (cheap, inline)
+        self.scheduler.register(
+            "health",
+            self._check_health,
+            active_interval=10,
+            idle_interval=30,
+        )
+
+        # Thinking feed — poll transcript files for new thinking blocks
+        from .services.thinking_feed import get_session_manager
+        session_mgr = get_session_manager()
+        self.scheduler.register(
+            "thinking_feed",
+            session_mgr.poll_sessions,
+            active_interval=5,
+            idle_interval=30,
+            blocking=True,
+        )
+
+        # FPS adjustment on mode change
+        self.scheduler.on_mode_change(self._on_mode_change)
+
+        self.scheduler.start()
+
+    def stop(self) -> None:
         """Stop the daemon."""
         if not self.running:
             return
 
         self.running = False
+        self._flush_persist()
 
-        # Stop config watcher
-        if hasattr(self, 'config_watcher') and self.config_watcher:
-            self.config_watcher.stop()
+        # Shut down voice agent first — needs the event loop still running
+        if self.voice_agent and self._event_loop:
+            future = asyncio.run_coroutine_threadsafe(
+                self.voice_agent.shutdown(), self._event_loop
+            )
+            try:
+                future.result(timeout=5.0)
+            except Exception:
+                pass  # Best-effort — daemon is exiting anyway
 
-        self.refresh.stop()
-        self.stop_status_watcher()
+        if self.scheduler:
+            self.scheduler.stop()
+
         self.display.stop()
         self.socket_server.stop()
         self.command_server.stop()
 
-        # Stop token usage service
         if self.token_usage_service:
             self.token_usage_service.stop()
 
-        # Stop wake word service
         if self.wake_word_service:
             self.wake_word_service.stop()
 
-    def run(self):
+    async def run(self) -> None:
         """Run the daemon until interrupted."""
+        self._event_loop = asyncio.get_running_loop()
         self.start()
+        self._start_scheduler()
+        self._init_voice_pipeline()
         try:
+            # Event-driven — sleep indefinitely, all work happens via
+            # callbacks (scheduler timers, IPC handlers).
             while self.running:
-                # Restart managers if their threads died unexpectedly
-                if self.refresh._thread and not self.refresh._thread.is_alive():
-                    self.refresh.start()
-                if self.display._thread and not self.display._thread.is_alive():
-                    self.display.start(self._get_display_state)
-
-                # Check for stale status and reset to idle if needed
-                self._check_status_staleness()
-
-                time.sleep(5)
+                await asyncio.sleep(3600)
         except KeyboardInterrupt:
             pass
         finally:
             self.stop()
-
-
-# Global daemon instance for backward compatibility
-_daemon_instance: CentralHubDaemon | None = None
-
-
-def get_daemon() -> CentralHubDaemon:
-    """Get or create the global daemon instance."""
-    global _daemon_instance
-    if _daemon_instance is None:
-        _daemon_instance = CentralHubDaemon()
-    return _daemon_instance
-
-
-# Backward compatibility functions
-def refresh_location() -> tuple[float, float, str]:
-    """Refresh location data and write to hub."""
-    return get_daemon().refresh.refresh_location()
-
-
-def refresh_weather(latitude: float = None, longitude: float = None, city: str = None) -> dict:
-    """Refresh weather data and write to hub."""
-    return get_daemon().refresh.refresh_weather(latitude, longitude, city)
-
-
-def refresh_time(timezone: str = None) -> dict:
-    """Refresh time data and write to hub."""
-    return get_daemon().refresh.refresh_time(timezone)
-
-
-def refresh_all():
-    """Refresh all data sources."""
-    get_daemon().refresh.refresh_all()
 
 
 def main():
@@ -1026,18 +599,16 @@ def main():
     global _daemon_lock
 
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
-        # One-shot refresh doesn't need lock
         daemon = CentralHubDaemon()
         daemon.refresh.refresh_all()
     else:
-        # Acquire singleton lock before starting daemon
         _daemon_lock = PidLock()
         if not _daemon_lock.acquire():
             sys.exit(1)
 
         try:
             daemon = CentralHubDaemon()
-            daemon.run()
+            asyncio.run(daemon.run())
         finally:
             _daemon_lock.release()
 

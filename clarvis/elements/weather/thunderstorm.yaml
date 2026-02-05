@@ -1,0 +1,16 @@
+kind: weather_type
+name: thunderstorm
+particles:
+  - rain_drop
+  - rain_drop
+  - rain_drop
+  - rain_bang
+  - lightning_bolt
+  - lightning_slash
+  - lightning_back
+spawn:
+  position: top
+  vx_base: 0.05
+  vx_variance: 0.1
+  vy_range: [0.6, 1.0]
+  lifetime_range: [15, 40]

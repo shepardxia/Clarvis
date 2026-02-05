@@ -1,0 +1,8 @@
+kind: companion
+name: duck
+art: |
+  _
+  >(')<
+  ~~
+width: 5
+height: 3

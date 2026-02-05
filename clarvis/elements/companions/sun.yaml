@@ -1,0 +1,8 @@
+kind: companion
+name: sun
+art: |
+  \|/
+  -o-
+  /|\
+width: 3
+height: 3

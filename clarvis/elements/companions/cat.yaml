@@ -1,0 +1,11 @@
+kind: companion
+name: cat
+# /\_/\
+# (o.o)
+#  > <
+art: |
+  /\_/\
+  (o.o)
+   > <
+width: 5
+height: 3

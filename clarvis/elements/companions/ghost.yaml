@@ -1,0 +1,9 @@
+kind: companion
+name: ghost
+art: |
+  .-.
+  |o o|
+  | ~ |
+  '~'~'
+width: 5
+height: 4

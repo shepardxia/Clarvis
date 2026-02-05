@@ -15,7 +15,7 @@ from .pipeline import RenderPipeline
 from ..elements.registry import ElementRegistry
 from ..archetypes import FaceArchetype, WeatherArchetype, ProgressArchetype
 from ..archetypes.weather import BoundingBox
-from ..core.colors import ANSI_COLORS as COLORS, get_status_ansi
+from ..core.colors import StatusColors
 
 
 class FrameRenderer:
@@ -52,10 +52,9 @@ class FrameRenderer:
         self.bar_x_offset = bar_x_offset
         self.bar_y_offset = bar_y_offset
 
-        # Element registry with hot-reload
+        # Element registry
         self.registry = ElementRegistry()
         self.registry.load_all()
-        self.registry.start_watching()
 
         # Pipeline with layers
         self.pipeline = RenderPipeline(width, height)
@@ -63,6 +62,12 @@ class FrameRenderer:
         self.avatar_layer = self.pipeline.add_layer("avatar", priority=50)
         self.bar_layer = self.pipeline.add_layer("bar", priority=80)
         self.verb_layer = self.pipeline.add_layer("verb", priority=90)
+        self.text_layer = self.pipeline.add_layer("voice_text", priority=95, transparent=True)
+
+        # Voice text state
+        self._voice_text = ""
+        self._voice_reveal_chars = 0
+        self._voice_active = False
 
         # Calculate layout
         self._recalculate_layout()
@@ -74,7 +79,6 @@ class FrameRenderer:
 
         # Animation state
         self.current_status = "idle"
-        self.current_color = get_status_ansi().get("idle", COLORS["gray"])
         
         # Pre-warm all caches for instant runtime performance
         self.prewarm_caches()
@@ -128,12 +132,28 @@ class FrameRenderer:
         """Set current status."""
         if status != self.current_status:
             self.current_status = status
-            self.current_color = get_status_ansi().get(status, COLORS["gray"])
             self.face.set_status(status)
 
     def set_weather(self, weather_type: str, intensity: float = 0.6, wind_speed: float = 0.0):
         """Set weather type and intensity."""
         self.weather.set_weather(weather_type, intensity, wind_speed)
+
+    # Voice text display
+    TEXT_X_MARGIN = 2
+    TEXT_Y_START = 1
+    TEXT_MAX_ROWS = 8
+
+    def set_voice_text(self, text: str, reveal_chars: int) -> None:
+        """Set voice text and how many characters to reveal."""
+        self._voice_text = text
+        self._voice_reveal_chars = reveal_chars
+        self._voice_active = bool(text)
+
+    def clear_voice_text(self) -> None:
+        """Clear voice text display."""
+        self._voice_text = ""
+        self._voice_reveal_chars = 0
+        self._voice_active = False
 
     def tick(self):
         """Advance animation state."""
@@ -150,7 +170,7 @@ class FrameRenderer:
             h=self.AVATAR_HEIGHT
         )
         self.weather.set_exclusion_zones([avatar_box])
-        self.weather.render(self.weather_layer, color=COLORS["white"])
+        self.weather.render(self.weather_layer, color=15)
 
     def _render_celestial(self, hour: Optional[int] = None):
         """Render sun or moon based on time of day, arcing across the top."""
@@ -170,7 +190,7 @@ class FrameRenderer:
             # Daytime: sun arcs from left to right
             art = self.SUN_ART
             progress = (hour - 6) / 14  # 14 hours of daylight
-            color = COLORS["yellow"]
+            color = 220  # yellow — theme-independent
         else:
             # Nighttime: moon arcs from left to right
             art = self.MOON_ART
@@ -180,7 +200,7 @@ class FrameRenderer:
             else:
                 night_hour = hour + 4
             progress = night_hour / 10  # 10 hours of night
-            color = COLORS["white"]
+            color = 15
 
         x = margin + int(progress * available_width)
         y = 0  # Top of screen
@@ -203,7 +223,7 @@ class FrameRenderer:
             x=self.bar_x,
             y=self.bar_y,
             percent=context_percent,
-            color=COLORS["gray"]
+            color=StatusColors.get("idle").ansi
         )
 
     def _render_verb(self, verb: Optional[str]):
@@ -219,55 +239,70 @@ class FrameRenderer:
 
         self.verb_layer.put_text(verb_x, verb_y, display_verb, 249)
 
-    def render(self, context_percent: float = 0, whimsy_verb: Optional[str] = None, hour: Optional[int] = None) -> str:
-        """Render complete frame (plain text)."""
+    def _render_voice_text(self):
+        """Render voice response text with word-wrap and character reveal."""
+        self.text_layer.clear()
+        if not self._voice_active or not self._voice_text:
+            return
+
+        revealed = self._voice_text[:self._voice_reveal_chars]
+        if not revealed:
+            return
+
+        text_width = self.width - (2 * self.TEXT_X_MARGIN)
+        lines = self._word_wrap(revealed, text_width)
+
+        # Tail-scroll: show last N lines if text exceeds available rows
+        if len(lines) > self.TEXT_MAX_ROWS:
+            lines = lines[-self.TEXT_MAX_ROWS:]
+
+        for row_idx, line in enumerate(lines):
+            y = self.TEXT_Y_START + row_idx
+            if y >= self.height:
+                break
+            self.text_layer.put_text(self.TEXT_X_MARGIN, y, line, 255)
+
+    @staticmethod
+    def _word_wrap(text: str, width: int) -> list[str]:
+        """Word-wrap text to fit within width columns."""
+        words = text.split(' ')
+        lines: list[str] = []
+        current = ""
+
+        for word in words:
+            if len(word) > width:
+                if current:
+                    lines.append(current)
+                    current = ""
+                while len(word) > width:
+                    lines.append(word[:width])
+                    word = word[width:]
+                current = word
+                continue
+
+            test = f"{current} {word}" if current else word
+            if len(test) <= width:
+                current = test
+            else:
+                lines.append(current)
+                current = word
+
+        if current:
+            lines.append(current)
+        return lines
+
+    def render_grid(self, context_percent: float = 0, whimsy_verb: Optional[str] = None, hour: Optional[int] = None) -> tuple[list[str], list[list[int]]]:
+        """Render complete frame and return structured grid data.
+
+        Returns:
+            (rows, cell_colors) — rows is a list of strings (one per grid row),
+            cell_colors is a 2D list of ANSI 256 color codes per cell.
+        """
         self._render_weather()
         self._render_celestial(hour)
         self._render_avatar()
         self._render_bar(context_percent)
-        self._render_verb(whimsy_verb)
-        return self.pipeline.to_string()
-
-    def render_colored(self, context_percent: float = 0, whimsy_verb: Optional[str] = None, hour: Optional[int] = None) -> str:
-        """Render complete frame with ANSI colors."""
-        self._render_weather()
-        self._render_celestial(hour)
-        self._render_avatar()
-        self._render_bar(context_percent)
-        self._render_verb(whimsy_verb)
-        return self.pipeline.to_ansi()
-
-
-# =============================================================================
-# Test
-# =============================================================================
-
-if __name__ == "__main__":
-    import time
-
-    renderer = FrameRenderer(width=18, height=10)
-    renderer.set_status("running")
-    renderer.set_weather("clear", 0.0)
-
-    print("\033[2J\033[H")
-    print("Pipeline Renderer Demo (Ctrl+C to stop)\n")
-
-    try:
-        ctx = 0
-        hour = 6  # Start at sunrise
-        for _ in range(100):
-            renderer.tick()
-            frame = renderer.render(context_percent=ctx, hour=hour)
-
-            print("\033[3;0H")
-            print(frame)
-            body = "sun" if 6 <= hour < 20 else "moon"
-            print(f"\nStatus: {renderer.current_status}  Hour: {hour:02d}:00  ({body})")
-
-            ctx = (ctx + 1) % 100
-            hour = (hour + 1) % 24
-            time.sleep(0.3)
-    except KeyboardInterrupt:
-        pass
-
-    print("\nDone!")
+        if not self._voice_active:
+            self._render_verb(whimsy_verb)
+        self._render_voice_text()
+        return self.pipeline.to_grid()

@@ -41,7 +41,10 @@ I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see 
 Then restart Claude Code and launch me:
 
 ```bash
-./ClarvisWidget/ClarvisWidget &
+clarvis start         # Start daemon + widget
+clarvis status        # Check what's running
+clarvis restart       # Stop, rebuild widget if needed, start
+clarvis logs          # Tail daemon logs
 ```
 
 Want me to know your exact location? `brew install corelocationcli`
@@ -56,18 +59,19 @@ My face is rendered using a high-performance ASCII engine with aggressive cachin
 Status Change
      |
      v
-+--------------+     +---------------+     +--------------+
-| State Cache  | --> | Pre-computed  | --> |    Layer     |
-| (per status) |     |   Matrices    |     | Compositing  |
-+--------------+     +---------------+     +--------------+
-     |                      |                     |
-     v                      v                     v
- 0.2us switch         0.05ms render         Socket Push
++--------------+     +---------------+     +--------------+     +---------------+
+| State Cache  | --> | Pre-computed  | --> |    Layer     | --> |  Grid Wire    |
+| (per status) |     |   Matrices    |     | Compositing  |     | (rows+colors) |
++--------------+     +---------------+     +--------------+     +---------------+
+     |                      |                     |                     |
+     v                      v                     v                     v
+ 0.2us switch         0.05ms render         NumPy arrays          Unix Socket
 ```
 
 - **State-based caching** — All 358 animation frames pre-computed at startup (~77KB)
 - **Instant status switches** — Cached matrices mean 0.2μs state transitions
-- **Layer compositing** — Weather, face, and progress bar on separate layers
+- **Layer compositing** — Weather, face, and progress bar on separate NumPy layers
+- **Structured grid output** — Rows + per-cell color codes sent as JSON, no ANSI encoding
 - **Socket streaming** — Frames push to widget via Unix socket, no polling
 
 ### Animation System
@@ -116,11 +120,13 @@ def _tick_physics_batch(p_x, p_y, p_vx, p_vy, ...):
 | Component | Time | Notes |
 |-----------|------|-------|
 | Status switch | 0.2μs | Cached matrix swap |
-| Full render | 0.06ms | Pre-computed frames |
+| Python render + grid | 0.084ms | NumPy compositing + `.tolist()` |
+| JSON serialize | 0.027ms | 3-field wire format |
+| Swift GridRenderer | ~0.1ms | Run-length color batching |
 | Weather tick | 0.002ms | JIT-compiled batch |
-| **Total frame** | **~0.1ms** | vs 333ms budget @ 3 FPS |
+| **Total frame** | **~0.21ms** | vs 333ms budget @ 3 FPS |
 
-**CPU usage: ~0.03%** for rendering. The daemon spends most time sleeping.
+**CPU usage: ~1.2 CPU sec/hour** at 3 FPS. The daemon spends most time sleeping.
 
 ### Tool-Aware Animations
 
@@ -140,15 +146,17 @@ The daemon maps Claude's tool calls to semantic states:
 clarvis/
 ├── server.py              # MCP server entry point
 ├── daemon.py              # Central hub daemon
-├── core/                  # State management, caching
-├── services/              # Weather, location, Sonos
+├── core/                  # State management, display loop, IPC
+├── services/              # Weather, location, voice pipeline, Sonos
 ├── archetypes/            # Face, weather, progress renderers
 │   ├── face.py            # State-cached face animations
 │   ├── weather.py         # JIT-compiled particle system
 │   └── progress.py        # Percentage-cached progress bar
 ├── elements/              # Declarative YAML definitions
 │   └── animations/        # Status animations + shorthands
-└── widget/                # Renderer, socket server
+├── widget/                # Render pipeline, socket server
+└── ClarvisWidget/         # Native Cocoa widget (Swift)
+    └── main.swift         # GridRenderer, socket client, ASR
 ```
 
 ## Credits

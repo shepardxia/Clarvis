@@ -1,0 +1,9 @@
+kind: companion
+name: skull
+art: |
+  .-.
+  |x x|
+  | ~ |
+  '---'
+width: 5
+height: 4

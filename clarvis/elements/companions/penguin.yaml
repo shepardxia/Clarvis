@@ -1,0 +1,8 @@
+kind: companion
+name: penguin
+art: |
+  (o_o)
+  (   )
+  " "
+width: 5
+height: 3

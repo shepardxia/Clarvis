@@ -1,5 +1,5 @@
 """
-Element registry - discovers, loads, caches, and hot-reloads YAML element definitions.
+Element registry - discovers, loads, and caches YAML element definitions.
 """
 
 import threading
@@ -7,40 +7,17 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import yaml
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
-
-
-class ElementChangeHandler(FileSystemEventHandler):
-    """Watchdog handler that triggers registry reload on file changes."""
-
-    def __init__(self, registry: "ElementRegistry"):
-        self.registry = registry
-
-    def on_modified(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.endswith(('.yaml', '.yml')):
-            self.registry.reload(event.src_path)
-
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.endswith(('.yaml', '.yml')):
-            self.registry.reload(event.src_path)
 
 
 class ElementRegistry:
     """
     Central registry for all visual element definitions.
 
-    Discovers and loads YAML files from element directories.
-    Supports hot-reloading via file system watching.
+    Discovers and loads YAML files from element directories at startup.
 
     Usage:
         registry = ElementRegistry(['clarvis/elements'])
         registry.load_all()
-        registry.start_watching()
 
         eyes = registry.get('eyes', 'normal')
         animation = registry.get('animations', 'thinking')
@@ -63,8 +40,6 @@ class ElementRegistry:
         self._elements: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self._listeners: list[Callable[[str, str], None]] = []
-        self._observers: list[Observer] = []
-        self._watching = False
         self._shorthands: Optional[dict] = None
 
     def load_all(self) -> None:
@@ -342,30 +317,6 @@ class ElementRegistry:
                 listener(kind, name)
             except Exception as e:
                 print(f"Warning: Listener error on {kind}/{name}: {e}")
-
-    def start_watching(self) -> None:
-        """Start watching element directories for changes."""
-        if self._watching:
-            return
-
-        for base_path in self.paths:
-            if not base_path.exists():
-                continue
-            observer = Observer()
-            handler = ElementChangeHandler(self)
-            observer.schedule(handler, str(base_path), recursive=True)
-            observer.start()
-            self._observers.append(observer)
-
-        self._watching = True
-
-    def stop_watching(self) -> None:
-        """Stop watching element directories."""
-        for observer in self._observers:
-            observer.stop()
-            observer.join()
-        self._observers.clear()
-        self._watching = False
 
     def __contains__(self, key: tuple[str, str]) -> bool:
         """Check if an element exists: ('eyes', 'normal') in registry"""

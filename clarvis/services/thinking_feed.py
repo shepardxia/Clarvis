@@ -9,14 +9,11 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
 
 
 class SessionStatus(Enum):
@@ -159,25 +156,6 @@ IDLE_TIMEOUT_SECONDS = 600  # 10 minutes
 ENDED_GRACE_PERIOD_SECONDS = 30  # Keep ended sessions briefly for final queries
 
 
-class JsonlFileHandler(FileSystemEventHandler):  # pragma: no cover
-    """Handle .jsonl file changes."""
-
-    def __init__(self, callback):
-        self.callback = callback
-
-    def on_modified(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.endswith(".jsonl"):
-            self.callback(Path(event.src_path))
-
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.endswith(".jsonl"):
-            self.callback(Path(event.src_path))
-
-
 class SessionManager:  # pragma: no cover
     """
     Manages all active Claude Code sessions.
@@ -191,40 +169,15 @@ class SessionManager:  # pragma: no cover
     def __init__(self):
         self.sessions: dict[str, SessionState] = {}
         self._lock = threading.Lock()
-        self._observer: Observer | None = None
-        self._lifecycle_thread: threading.Thread | None = None
-        self._running = False
+        self._known_files: dict[Path, float] = {}  # path -> last mtime
 
     def start(self):
-        """Start watching for session files and managing lifecycle."""
-        if self._running:
-            return
-
-        self._running = True
-
-        # Initial scan for existing sessions
+        """Initial scan for existing session files."""
         self._scan_existing_sessions()
 
-        # Start file watcher
-        self._observer = Observer()
-        handler = JsonlFileHandler(self._on_file_change)
-
-        if CLAUDE_PROJECTS_DIR.exists():
-            self._observer.schedule(handler, str(CLAUDE_PROJECTS_DIR), recursive=True)
-            self._observer.start()
-
-        # Start lifecycle management thread
-        self._lifecycle_thread = threading.Thread(target=self._lifecycle_loop, daemon=True)
-        self._lifecycle_thread.start()
-
     def stop(self):
-        """Stop watching and cleanup."""
-        self._running = False
-
-        if self._observer:
-            self._observer.stop()
-            self._observer.join(timeout=2)
-            self._observer = None
+        """Cleanup."""
+        pass
 
     def _scan_existing_sessions(self):
         """Scan for existing session files on startup."""
@@ -232,11 +185,11 @@ class SessionManager:  # pragma: no cover
             return
 
         for jsonl_file in CLAUDE_PROJECTS_DIR.glob("*/*.jsonl"):
+            try:
+                self._known_files[jsonl_file] = jsonl_file.stat().st_mtime
+            except OSError:
+                continue
             self._process_session_file(jsonl_file)
-
-    def _on_file_change(self, file_path: Path):
-        """Handle file change notification."""
-        self._process_session_file(file_path)
 
     def _process_session_file(self, file_path: Path):
         """Process a session file, extracting new thinking blocks."""
@@ -284,28 +237,41 @@ class SessionManager:  # pragma: no cover
                 for block in blocks:
                     session.add_thought(block)
 
-    def _lifecycle_loop(self):
-        """Background loop to manage session lifecycle."""
-        while self._running:
-            time.sleep(30)  # Check every 30 seconds
+    def poll_sessions(self) -> None:
+        """Poll for new/modified session files and clean up stale sessions.
 
-            now = datetime.now()
-            to_remove = []
+        Designed to be called periodically by the Scheduler. Replaces both
+        the watchdog Observer and the lifecycle thread.
+        """
+        # --- Poll for file changes ---
+        if CLAUDE_PROJECTS_DIR.exists():
+            for jsonl_file in CLAUDE_PROJECTS_DIR.glob("*/*.jsonl"):
+                try:
+                    mtime = jsonl_file.stat().st_mtime
+                except OSError:
+                    continue
+                if mtime != self._known_files.get(jsonl_file):
+                    self._known_files[jsonl_file] = mtime
+                    self._process_session_file(jsonl_file)
 
-            with self._lock:
-                for session_id, session in self.sessions.items():
-                    idle_seconds = (now - session.last_activity).total_seconds()
+        # --- Lifecycle cleanup ---
+        now = datetime.now()
+        to_remove = []
 
-                    if session.status == SessionStatus.ACTIVE:
-                        if idle_seconds > IDLE_TIMEOUT_SECONDS:
-                            session.status = SessionStatus.ENDED
+        with self._lock:
+            for session_id, session in self.sessions.items():
+                idle_seconds = (now - session.last_activity).total_seconds()
 
-                    elif session.status == SessionStatus.ENDED:
-                        if idle_seconds > IDLE_TIMEOUT_SECONDS + ENDED_GRACE_PERIOD_SECONDS:
-                            to_remove.append(session_id)
+                if session.status == SessionStatus.ACTIVE:
+                    if idle_seconds > IDLE_TIMEOUT_SECONDS:
+                        session.status = SessionStatus.ENDED
 
-                for session_id in to_remove:
-                    del self.sessions[session_id]
+                elif session.status == SessionStatus.ENDED:
+                    if idle_seconds > IDLE_TIMEOUT_SECONDS + ENDED_GRACE_PERIOD_SECONDS:
+                        to_remove.append(session_id)
+
+            for session_id in to_remove:
+                del self.sessions[session_id]
 
     # --- Public query methods ---
 

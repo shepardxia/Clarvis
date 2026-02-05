@@ -1,0 +1,11 @@
+kind: companion
+name: cat_sleepy
+# /\_/\
+# (-.-)
+#  > <
+art: |
+  /\_/\
+  (-.-)
+   > <
+width: 5
+height: 3

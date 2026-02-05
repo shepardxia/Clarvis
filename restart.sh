@@ -1,21 +1,22 @@
 #!/bin/bash
-# Restart Clarvis daemon and widget
+# Restart Clarvis daemon and widget.
 
 cd "$(dirname "$0")"
 
-echo "Stopping services..."
-pkill -f "clarvis" 2>/dev/null
-pkill -f "ClarvisWidget" 2>/dev/null
-sleep 1
-
-echo "Starting daemon..."
-uv run python -m clarvis.daemon &
+# Kill existing
+pkill -f 'clarvis\.daemon' 2>/dev/null
+pkill -f 'ClarvisWidget' 2>/dev/null
 sleep 0.5
 
-echo "Starting widget..."
-./ClarvisWidget/ClarvisWidget &>/dev/null &
+mkdir -p logs
 
-echo "Done. PIDs:"
-echo "  Daemon: $(pgrep -f 'clarvis')"
-echo "  Widget: $(pgrep -f 'ClarvisWidget')"
+# Start
+.venv/bin/python -m clarvis.daemon >>logs/daemon.out.log 2>>logs/daemon.err.log &
+./ClarvisWidget/ClarvisWidget >>logs/widget.out.log 2>>logs/widget.err.log &
 
+sleep 1
+DPID=$(pgrep -f 'clarvis\.daemon' | head -1)
+WPID=$(pgrep -f 'ClarvisWidget' | head -1)
+
+echo "daemon: ${DPID:-FAILED}"
+echo "widget: ${WPID:-FAILED}"

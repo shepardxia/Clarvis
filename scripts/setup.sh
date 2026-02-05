@@ -2,11 +2,10 @@
 set -e
 
 # Clarvis Setup Script
-# Installs MCP server and configures Claude Code
+# Installs dependencies, configures MCP server, and sets up CLI.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-MCP_CONFIG="$HOME/.claude/.mcp.json"
 
 # Colors
 RED='\033[0;31m'
@@ -23,7 +22,6 @@ print_error() { echo -e "${RED}✗ $1${NC}"; }
 check_dependencies() {
     print_header "Checking dependencies..."
 
-    # Check for uv (preferred) or python3
     if command -v uv &> /dev/null; then
         print_success "uv found"
         USE_UV=true
@@ -65,62 +63,67 @@ setup_venv() {
 configure_mcp() {
     print_header "Configuring MCP server..."
 
-    mkdir -p "$(dirname "$MCP_CONFIG")"
-
-    # Build the command based on uv or venv
-    if [ "$USE_UV" = true ]; then
-        MCP_COMMAND="uv"
-        MCP_ARGS='["run", "--directory", "'"$REPO_DIR"'", "python", "-m", "clarvis.server"]'
-    else
-        MCP_COMMAND="$REPO_DIR/.venv/bin/python"
-        MCP_ARGS='["-m", "clarvis.server"]'
+    if ! command -v claude &> /dev/null; then
+        print_warning "claude CLI not found — skipping MCP config"
+        echo "  Install Claude Code first: npm install -g @anthropic-ai/claude-code"
+        echo "  Then re-run this script or manually run:"
+        echo "    claude mcp add -s user clarvis -- $REPO_DIR/.venv/bin/python -m clarvis.server"
+        return
     fi
 
-    # Create or update .mcp.json
-    python3 << EOF
-import json
-import os
+    # Remove existing entry if present, then add fresh
+    claude mcp remove -s user clarvis 2>/dev/null || true
+    claude mcp add -s user clarvis -- "$REPO_DIR/.venv/bin/python" -m clarvis.server
 
-config_path = "$MCP_CONFIG"
-
-try:
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-except:
-    config = {}
-
-if 'mcpServers' not in config:
-    config['mcpServers'] = {}
-
-config['mcpServers']['clarvis'] = {
-    'command': '$MCP_COMMAND',
-    'args': $MCP_ARGS
+    print_success "MCP server configured (user scope)"
 }
 
-with open(config_path, 'w') as f:
-    json.dump(config, f, indent=2)
+install_cli() {
+    print_header "Installing CLI..."
 
-print("Added clarvis to", config_path)
-EOF
+    chmod +x "$REPO_DIR/clarvis.sh"
+    mkdir -p "$REPO_DIR/logs"
 
-    print_success "MCP server configured"
-}
+    # Find a writable bin directory on PATH
+    local link_dir=""
+    for dir in /opt/homebrew/bin /usr/local/bin; do
+        if [ -d "$dir" ] && [ -w "$dir" ]; then
+            link_dir="$dir"
+            break
+        fi
+    done
 
-setup_daemon() {
-    print_header "Setting up background daemon (optional)..."
-
-    PLIST_SRC="$SCRIPT_DIR/com.centralhub.daemon.plist"
-    PLIST_DST="$HOME/Library/LaunchAgents/com.clarvis.refresh.plist"
-
-    if [ -f "$PLIST_SRC" ]; then
-        # Update paths in plist
-        sed "s|/path/to/clarvis|$REPO_DIR|g" "$PLIST_SRC" > "$PLIST_DST"
-        launchctl unload "$PLIST_DST" 2>/dev/null || true
-        launchctl load "$PLIST_DST"
-        print_success "Daemon installed and started"
-    else
-        print_warning "Daemon plist not found, skipping"
+    if [ -z "$link_dir" ]; then
+        print_warning "No writable bin dir found on PATH"
+        echo "  Manually add to PATH or symlink:"
+        echo "    ln -sf $REPO_DIR/clarvis.sh /usr/local/bin/clarvis"
+        return
     fi
+
+    ln -sf "$REPO_DIR/clarvis.sh" "$link_dir/clarvis"
+    print_success "CLI installed: clarvis (-> $link_dir/clarvis)"
+}
+
+configure_voice() {
+    print_header "Configuring voice agent..."
+
+    local voice_dir="$HOME/.clarvis/voice-project"
+    mkdir -p "$voice_dir"
+
+    # Voice project MCP config — points to this repo's server
+    cat > "$voice_dir/.mcp.json" << MCPEOF
+{
+  "mcpServers": {
+    "clarvis": {
+      "command": "$REPO_DIR/.venv/bin/python",
+      "args": ["-m", "clarvis.server"],
+      "cwd": "$REPO_DIR"
+    }
+  }
+}
+MCPEOF
+
+    print_success "Voice agent MCP config updated"
 }
 
 print_next_steps() {
@@ -128,32 +131,23 @@ print_next_steps() {
 
 ════════════════════════════════════════════════════════════════
 
-                    SETUP COMPLETE! ✓
+                    SETUP COMPLETE!
 
 ════════════════════════════════════════════════════════════════
 
-Next steps:
+Usage:
+  clarvis start     Start daemon and widget
+  clarvis stop      Stop all processes
+  clarvis restart   Stop then start
+  clarvis status    Show running processes
+  clarvis logs      Tail daemon logs
+  clarvis debug     Attach to voice agent session
 
-1. RESTART CLAUDE CODE
-   Close and reopen Claude Code to load the MCP server
-
-2. START THE WIDGET (optional)
-   $REPO_DIR/ClarvisWidget/ClarvisWidget &
-
-3. TEST MCP TOOLS
-   Ask Claude: "What's the weather?"
-   Ask Claude: "What time is it?"
+Restart Claude Code to load the MCP server.
 
 OPTIONAL: Enable GPS Location
-   brew install corelocationcli
-   CoreLocationCLI -j  # approve the popup once
-
-════════════════════════════════════════════════════════════════
-
-Locations:
-  Repository:     $REPO_DIR
-  MCP Config:     $MCP_CONFIG
-  Widget:         $REPO_DIR/ClarvisWidget/ClarvisWidget
+  brew install corelocationcli
+  CoreLocationCLI -j  # approve the popup once
 
 ════════════════════════════════════════════════════════════════
 
@@ -163,14 +157,15 @@ EOF
 main() {
     echo ""
     echo "╔════════════════════════════════════════════════════════════════╗"
-    echo "║                      Clarvis Setup                             ║"
+    echo "║                      Clarvis Setup                           ║"
     echo "╚════════════════════════════════════════════════════════════════╝"
     echo ""
 
     check_dependencies
     setup_venv
     configure_mcp
-    setup_daemon
+    install_cli
+    configure_voice
 
     print_success "Setup complete!"
     print_next_steps

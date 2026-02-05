@@ -3,39 +3,28 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.centralhub.daemon</string>
-    
+    <string>com.clarvis.daemon</string>
+
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/env</string>
-        <string>uv</string>
-        <string>run</string>
-        <string>--directory</string>
-        <string>PROJECT_DIR_PLACEHOLDER</string>
-        <string>python</string>
+        <string>__PROJECT_DIR__/.venv/bin/python</string>
         <string>-m</string>
-        <string>src.daemon</string>
+        <string>clarvis.daemon</string>
     </array>
-    
+
     <key>RunAtLoad</key>
     <true/>
-    
-    <key>KeepAlive</key>
-    <true/>
-    
+
     <key>StandardOutPath</key>
-    <string>PROJECT_DIR_PLACEHOLDER/logs/daemon.out.log</string>
-    
+    <string>__PROJECT_DIR__/logs/daemon.out.log</string>
+
     <key>StandardErrorPath</key>
-    <string>PROJECT_DIR_PLACEHOLDER/logs/daemon.err.log</string>
-    
-    <key>WorkingDirectory</key>
-    <string>PROJECT_DIR_PLACEHOLDER</string>
-    
+    <string>__PROJECT_DIR__/logs/daemon.err.log</string>
+
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PATH</key>
-        <string>/Users/shepardxia/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
     </dict>
 </dict>
 </plist>

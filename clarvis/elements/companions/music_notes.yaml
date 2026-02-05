@@ -1,0 +1,8 @@
+kind: companion
+name: music_notes
+art: |
+  d  b
+  | |
+  o o
+width: 4
+height: 3

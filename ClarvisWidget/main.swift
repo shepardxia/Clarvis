@@ -1,5 +1,7 @@
 import Cocoa
 import Foundation
+import Speech
+import AVFoundation
 
 // MARK: - Configuration
 
@@ -83,54 +85,57 @@ struct Config {
     static var pulseSpeed: Double { widgetConfig.pulseSpeed }
 }
 
-// MARK: - ANSI Color Parsing
+// MARK: - Grid Renderer
 
-class AnsiParser {
-    // Convert ANSI 256 color code to NSColor
-    static func ansi256ToColor(_ code: Int) -> NSColor {
-        if code < 16 {
-            // Standard colors
-            let colors: [(CGFloat, CGFloat, CGFloat)] = [
-                (0, 0, 0),       // 0: black
-                (0.8, 0, 0),     // 1: red
-                (0, 0.8, 0),     // 2: green
-                (0.8, 0.8, 0),   // 3: yellow
-                (0, 0, 0.8),     // 4: blue
-                (0.8, 0, 0.8),   // 5: magenta
-                (0, 0.8, 0.8),   // 6: cyan
-                (0.75, 0.75, 0.75), // 7: white
-                (0.5, 0.5, 0.5), // 8: bright black (gray)
-                (1, 0, 0),       // 9: bright red
-                (0, 1, 0),       // 10: bright green
-                (1, 1, 0),       // 11: bright yellow
-                (0, 0, 1),       // 12: bright blue
-                (1, 0, 1),       // 13: bright magenta
-                (0, 1, 1),       // 14: bright cyan
-                (1, 1, 1),       // 15: bright white
-            ]
-            let (r, g, b) = colors[code]
-            return NSColor(red: r, green: g, blue: b, alpha: 1)
-        } else if code < 232 {
-            // 216 color cube (6x6x6)
-            let idx = code - 16
-            let r = CGFloat((idx / 36) % 6) / 5.0
-            let g = CGFloat((idx / 6) % 6) / 5.0
-            let b = CGFloat(idx % 6) / 5.0
-            return NSColor(red: r, green: g, blue: b, alpha: 1)
-        } else {
-            // Grayscale (24 steps)
-            let gray = CGFloat(code - 232) / 23.0
-            return NSColor(white: gray, alpha: 1)
+class GridRenderer {
+    /// 256-entry ANSI color cache, built once at startup.
+    static let colorCache: [NSColor] = {
+        var colors = [NSColor]()
+        colors.reserveCapacity(256)
+
+        // 0-15: Standard + bright colors
+        let std: [(CGFloat, CGFloat, CGFloat)] = [
+            (0, 0, 0),       // 0: black
+            (0.8, 0, 0),     // 1: red
+            (0, 0.8, 0),     // 2: green
+            (0.8, 0.8, 0),   // 3: yellow
+            (0, 0, 0.8),     // 4: blue
+            (0.8, 0, 0.8),   // 5: magenta
+            (0, 0.8, 0.8),   // 6: cyan
+            (0.75, 0.75, 0.75), // 7: white
+            (0.5, 0.5, 0.5), // 8: bright black (gray)
+            (1, 0, 0),       // 9: bright red
+            (0, 1, 0),       // 10: bright green
+            (1, 1, 0),       // 11: bright yellow
+            (0, 0, 1),       // 12: bright blue
+            (1, 0, 1),       // 13: bright magenta
+            (0, 1, 1),       // 14: bright cyan
+            (1, 1, 1),       // 15: bright white
+        ]
+        for (r, g, b) in std { colors.append(NSColor(red: r, green: g, blue: b, alpha: 1)) }
+
+        // 16-231: 6×6×6 color cube
+        for i in 0..<216 {
+            let r = CGFloat((i / 36) % 6) / 5.0
+            let g = CGFloat((i / 6) % 6) / 5.0
+            let b = CGFloat(i % 6) / 5.0
+            colors.append(NSColor(red: r, green: g, blue: b, alpha: 1))
         }
-    }
 
-    // Parse ANSI-escaped string into attributed string
-    static func parse(_ input: String, defaultColor: NSColor, font: NSFont) -> NSAttributedString {
+        // 232-255: Grayscale ramp
+        for i in 0..<24 {
+            let gray = CGFloat(i) / 23.0
+            colors.append(NSColor(white: gray, alpha: 1))
+        }
+
+        return colors
+    }()
+
+    /// Build an NSAttributedString from grid rows and per-cell color arrays.
+    /// Color 0 → use `defaultColor` (theme color).
+    static func build(rows: [String], colors: [[Int]], defaultColor: NSColor, font: NSFont) -> NSAttributedString {
         let result = NSMutableAttributedString()
-        var currentColor = defaultColor
-        var i = input.startIndex
 
-        // Fixed paragraph style to prevent line height variations and wrapping
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 0
         paragraphStyle.paragraphSpacing = 0
@@ -138,45 +143,36 @@ class AnsiParser {
         paragraphStyle.maximumLineHeight = font.pointSize * 1.2
         paragraphStyle.lineBreakMode = .byClipping
 
-        while i < input.endIndex {
-            // Check for escape sequence
-            if input[i] == "\u{1b}" || input[i] == "\u{001b}" {
-                let nextIdx = input.index(after: i)
-                if nextIdx < input.endIndex && input[nextIdx] == "[" {
-                    // Find the end of the escape sequence (ends with 'm')
-                    var endIdx = input.index(after: nextIdx)
-                    while endIdx < input.endIndex && input[endIdx] != "m" {
-                        endIdx = input.index(after: endIdx)
-                    }
-                    if endIdx < input.endIndex {
-                        // Parse the escape code
-                        let codeStart = input.index(after: nextIdx)
-                        let codeStr = String(input[codeStart..<endIdx])
-
-                        if codeStr == "0" {
-                            // Reset
-                            currentColor = defaultColor
-                        } else if codeStr.hasPrefix("38;5;") {
-                            // 256 color foreground
-                            let colorCode = Int(codeStr.dropFirst(5)) ?? 7
-                            currentColor = ansi256ToColor(colorCode)
-                        }
-
-                        i = input.index(after: endIdx)
-                        continue
-                    }
-                }
+        for (rowIdx, row) in rows.enumerated() {
+            if rowIdx > 0 {
+                result.append(NSAttributedString(string: "\n", attributes: [.font: font, .paragraphStyle: paragraphStyle]))
             }
 
-            // Regular character - add with current color and fixed line height
-            let char = String(input[i])
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: currentColor,
-                .font: font,
-                .paragraphStyle: paragraphStyle
-            ]
-            result.append(NSAttributedString(string: char, attributes: attrs))
-            i = input.index(after: i)
+            let rowColors = rowIdx < colors.count ? colors[rowIdx] : []
+            let chars = Array(row)
+            var runStart = 0
+
+            while runStart < chars.count {
+                let code = runStart < rowColors.count ? rowColors[runStart] : 0
+                let color = code > 0 && code < 256 ? colorCache[code] : defaultColor
+
+                // Accumulate run of same color code (integer compare, not object identity)
+                var runEnd = runStart + 1
+                while runEnd < chars.count {
+                    let nextCode = runEnd < rowColors.count ? rowColors[runEnd] : 0
+                    if nextCode != code { break }
+                    runEnd += 1
+                }
+
+                let runStr = String(chars[runStart..<runEnd])
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: color,
+                    .font: font,
+                    .paragraphStyle: paragraphStyle
+                ]
+                result.append(NSAttributedString(string: runStr, attributes: attrs))
+                runStart = runEnd
+            }
         }
 
         return result
@@ -186,19 +182,146 @@ class AnsiParser {
 // MARK: - Data Model
 
 struct WidgetData: Codable {
-    let status: String?
-    let frame: String?
-    let color: [Double]?  // RGB array [r, g, b] from daemon
-    let context_percent: Double?
-    let timestamp: Double?
-    let border_width: Int?
-    let border_pulse: Bool?
+    let rows: [String]?
+    let cell_colors: [[Int]]?
+    let theme_color: [Double]?  // RGB [r, g, b] for border + default text
 
     var nsColor: NSColor {
-        guard let rgb = color, rgb.count == 3 else {
+        guard let rgb = theme_color, rgb.count == 3 else {
             return NSColor.gray
         }
         return NSColor(red: CGFloat(rgb[0]), green: CGFloat(rgb[1]), blue: CGFloat(rgb[2]), alpha: 1.0)
+    }
+}
+
+// MARK: - ASR Manager
+
+class ASRManager {
+    private let speechRecognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private let audioEngine = AVAudioEngine()
+    private var timeoutTimer: Timer?
+    private var silenceTimer: Timer?
+    private var lastTranscript = ""
+    private var hasDeliveredResult = false
+
+    /// Called once with (success, text?, error?)
+    var onResult: ((Bool, String?, String?) -> Void)?
+
+    init(locale: Locale = Locale(identifier: "en-US")) {
+        self.speechRecognizer = SFSpeechRecognizer(locale: locale)
+            ?? SFSpeechRecognizer()
+    }
+
+    var isAvailable: Bool { speechRecognizer?.isAvailable ?? false }
+
+    func requestAuthorization(completion: @escaping (Bool) -> Void) {
+        SFSpeechRecognizer.requestAuthorization { status in
+            DispatchQueue.main.async { completion(status == .authorized) }
+        }
+    }
+
+    func startRecognition(timeout: TimeInterval = 10.0, silenceTimeout: TimeInterval = 3.0) {
+        stopRecognition()
+        hasDeliveredResult = false
+        lastTranscript = ""
+
+        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
+            deliverResult(success: false, error: "Speech recognizer not available")
+            return
+        }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        if #available(macOS 13.0, *) {
+            request.requiresOnDeviceRecognition = true
+        }
+
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            request.append(buffer)
+        }
+
+        audioEngine.prepare()
+        do {
+            try audioEngine.start()
+        } catch {
+            deliverResult(success: false, error: "Audio engine failed: \(error.localizedDescription)")
+            return
+        }
+
+        self.recognitionRequest = request
+        let silenceDuration = silenceTimeout
+
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            DispatchQueue.main.async {
+                guard let self = self, !self.hasDeliveredResult else { return }
+
+                if let result = result {
+                    self.lastTranscript = result.bestTranscription.formattedString
+
+                    // Reset silence timer on new speech
+                    self.silenceTimer?.invalidate()
+                    self.silenceTimer = Timer.scheduledTimer(
+                        withTimeInterval: silenceDuration, repeats: false
+                    ) { _ in self.finalize() }
+
+                    if result.isFinal {
+                        self.finalize()
+                    }
+                }
+
+                if let error = error {
+                    if self.lastTranscript.isEmpty {
+                        self.deliverResult(success: false, error: error.localizedDescription)
+                    } else {
+                        self.finalize()
+                    }
+                }
+            }
+        }
+
+        // Overall timeout
+        timeoutTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+            guard let self = self, !self.hasDeliveredResult else { return }
+            if self.lastTranscript.isEmpty {
+                self.deliverResult(success: false, error: "Timeout — no speech detected")
+            } else {
+                self.finalize()
+            }
+        }
+    }
+
+    private func finalize() {
+        deliverResult(success: true, text: lastTranscript)
+    }
+
+    private func deliverResult(success: Bool, text: String? = nil, error: String? = nil) {
+        guard !hasDeliveredResult else { return }
+        hasDeliveredResult = true
+        stopRecognition()
+        onResult?(success, text, error)
+    }
+
+    func stopRecognition() {
+        timeoutTimer?.invalidate()
+        timeoutTimer = nil
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
+
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
     }
 }
 
@@ -212,6 +335,7 @@ class SocketClient {
     private var shouldRun = true
 
     var onFrame: ((WidgetData) -> Void)?
+    var onCommand: ((String, [String: Any]) -> Void)?
     var onConnectionChange: ((Bool) -> Void)?
 
     init(socketPath: String = Config.socketPath) {
@@ -259,6 +383,16 @@ class SocketClient {
         readThread?.start()
     }
 
+    func send(_ message: [String: Any]) {
+        guard isConnected, fileDescriptor >= 0 else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: message),
+              var json = String(data: data, encoding: .utf8) else { return }
+        json += "\n"
+        json.withCString { ptr in
+            _ = Darwin.write(fileDescriptor, ptr, strlen(ptr))
+        }
+    }
+
     func disconnect() {
         shouldRun = false
         isConnected = false
@@ -292,7 +426,14 @@ class SocketClient {
                 let lineData = buffer[..<newlineIndex]
                 buffer = Data(buffer[(newlineIndex + 1)...])
 
-                if let frame = try? JSONDecoder().decode(WidgetData.self, from: lineData) {
+                // Check if this is a command (has "method" key) or a frame
+                if let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                   let method = json["method"] as? String {
+                    let params = json["params"] as? [String: Any] ?? [:]
+                    DispatchQueue.main.async {
+                        self.onCommand?(method, params)
+                    }
+                } else if let frame = try? JSONDecoder().decode(WidgetData.self, from: lineData) {
                     DispatchQueue.main.async {
                         self.onFrame?(frame)
                     }
@@ -346,10 +487,12 @@ class PulsingBorderView: NSView {
 class WidgetWindowController: NSWindowController {
     var borderView: PulsingBorderView!
     var textField: NSTextField!
+    var responseOverlay: NSScrollView!
+    var responseTextView: NSTextView!
     var pulseTimer: Timer?
     var pollTimer: Timer?  // Fallback polling
     var socketClient: SocketClient!
-    var currentStatus = "idle"
+    var asrManager: ASRManager!
     var socketConnected = false
 
     convenience init() {
@@ -364,6 +507,8 @@ class WidgetWindowController: NSWindowController {
 
         setupWindow()
         setupViews()
+        setupResponseOverlay()
+        setupASR()
         setupSocket()
         startTimers()
         positionWindow()
@@ -414,6 +559,45 @@ class WidgetWindowController: NSWindowController {
         borderView.addSubview(textField)
     }
 
+    func setupResponseOverlay() {
+        let inset: CGFloat = 16
+        let overlayFrame = borderView.bounds.insetBy(dx: inset, dy: inset)
+
+        let scrollView = NSScrollView(frame: overlayFrame)
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.isHidden = true
+
+        let textView = NSTextView(frame: scrollView.contentView.bounds)
+        textView.isEditable = false
+        textView.isSelectable = false
+        textView.drawsBackground = false
+        textView.textColor = .white
+        textView.font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        textView.textContainerInset = NSSize(width: 4, height: 4)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.autoresizingMask = [.width]
+
+        scrollView.documentView = textView
+
+        borderView.addSubview(scrollView)
+        responseOverlay = scrollView
+        responseTextView = textView
+    }
+
+    func setupASR() {
+        asrManager = ASRManager()
+        asrManager.requestAuthorization { granted in
+            if !granted {
+                NSLog("ClarvisWidget: Speech recognition not authorized")
+            }
+        }
+    }
+
     func setupSocket() {
         socketClient = SocketClient()
 
@@ -421,9 +605,15 @@ class WidgetWindowController: NSWindowController {
             self?.updateDisplay(data)
         }
 
+        socketClient.onCommand = { [weak self] method, params in
+            self?.handleCommand(method, params)
+        }
+
         socketClient.onConnectionChange = { [weak self] connected in
             self?.socketConnected = connected
             if !connected {
+                self?.asrManager.stopRecognition()  // Release mic on disconnect
+                self?.clearResponse()
                 self?.textField.stringValue = "Reconnecting..."
             }
         }
@@ -458,18 +648,14 @@ class WidgetWindowController: NSWindowController {
     }
 
     func updateDisplay(_ data: WidgetData) {
-        // Get color from daemon (RGB array)
         let color = data.nsColor
         borderView.borderColor = color
 
-        if let status = data.status {
-            currentStatus = status
-        }
-
-        if let frame = data.frame {
+        if let rows = data.rows, let cellColors = data.cell_colors {
             let font = NSFont(name: Config.fontName, size: Config.fontSize)
                 ?? NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
-            textField.attributedStringValue = AnsiParser.parse(frame, defaultColor: color, font: font)
+            textField.attributedStringValue = GridRenderer.build(
+                rows: rows, colors: cellColors, defaultColor: color, font: font)
         }
     }
 
@@ -479,6 +665,66 @@ class WidgetWindowController: NSWindowController {
         let x = screenRect.maxX - Config.windowSize.width - 40
         let y = screenRect.maxY - Config.windowSize.height - 40
         window.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    // MARK: - Command Handling
+
+    // Voice pipeline IPC protocol — typed in Python as frozen dataclasses
+    // (see clarvis/services/voice_orchestrator.py for canonical definitions):
+    //
+    //   Inbound  (daemon -> widget):
+    //     start_asr     { timeout: Float, silence_timeout: Float, id: String }
+    //     show_response { text: String }
+    //     clear_response {}
+    //
+    //   Outbound (widget -> daemon):
+    //     asr_result    { success: Bool, id: String, text?: String, error?: String }
+    func handleCommand(_ method: String, _ params: [String: Any]) {
+        switch method {
+        case "start_asr":
+            let timeout = params["timeout"] as? TimeInterval ?? 10.0
+            let silenceTimeout = params["silence_timeout"] as? TimeInterval ?? 3.0
+            let id = params["id"] as? String ?? ""
+            startASR(timeout: timeout, silenceTimeout: silenceTimeout, id: id)
+        case "show_response":
+            if let text = params["text"] as? String {
+                showResponse(text)
+            }
+        case "clear_response":
+            clearResponse()
+        default:
+            break
+        }
+    }
+
+    func startASR(timeout: TimeInterval, silenceTimeout: TimeInterval, id: String) {
+        asrManager.onResult = { [weak self] success, text, error in
+            guard let self = self else { return }
+            var result: [String: Any] = ["success": success, "id": id]
+            if let text = text { result["text"] = text }
+            if let error = error { result["error"] = error }
+
+            self.socketClient.send([
+                "method": "asr_result",
+                "params": result
+            ])
+        }
+        asrManager.startRecognition(timeout: timeout, silenceTimeout: silenceTimeout)
+    }
+
+    func showResponse(_ text: String) {
+        responseTextView.string = text
+        responseOverlay.isHidden = false
+        textField.isHidden = true
+
+        // Scroll to bottom for streaming updates
+        responseTextView.scrollToEndOfDocument(nil)
+    }
+
+    func clearResponse() {
+        responseOverlay.isHidden = true
+        textField.isHidden = false
+        responseTextView.string = ""
     }
 
     func show() {

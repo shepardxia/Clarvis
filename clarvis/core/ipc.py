@@ -1,8 +1,8 @@
 """IPC protocol for daemon communication.
 
-Simple JSON-RPC style protocol over Unix socket.
-Request: {"method": "name", "params": {...}}
-Response: {"result": ...} or {"error": "message"}
+JSON-RPC style protocol over Unix socket.
+Request:      {"method": "name", "params": {...}}  → response sent
+Notification: {"method": "name", "params": {...}, "notify": true}  → no response
 """
 
 from __future__ import annotations
@@ -107,7 +107,8 @@ class DaemonServer:
                     line, buffer = buffer.split(b"\n", 1)
                     if line:
                         response = self._process_request(line.decode("utf-8"))
-                        client.sendall(response.encode("utf-8") + b"\n")
+                        if response is not None:
+                            client.sendall(response.encode("utf-8") + b"\n")
 
         except (socket.timeout, ConnectionResetError, BrokenPipeError):
             pass
@@ -117,29 +118,32 @@ class DaemonServer:
             except Exception:
                 pass
 
-    def _process_request(self, request_str: str) -> str:
-        """Process a JSON request and return JSON response."""
+    def _process_request(self, request_str: str) -> Optional[str]:
+        """Process a JSON request. Returns response string, or None for notifications."""
         try:
             request = json.loads(request_str)
             method = request.get("method")
             params = request.get("params", {})
+            is_notify = request.get("notify", False)
 
             if not method:
-                return json.dumps({"error": "Missing method"})
+                return None if is_notify else json.dumps({"error": "Missing method"})
 
             handler = self._handlers.get(method)
             if not handler:
-                return json.dumps({"error": f"Unknown method: {method}"})
+                return None if is_notify else json.dumps({"error": f"Unknown method: {method}"})
 
             result = handler(**params)
+            if is_notify:
+                return None
             return json.dumps({"result": result})
 
         except json.JSONDecodeError as e:
             return json.dumps({"error": f"Invalid JSON: {e}"})
         except TypeError as e:
-            return json.dumps({"error": f"Invalid params: {e}"})
+            return None if is_notify else json.dumps({"error": f"Invalid params: {e}"})
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return None if is_notify else json.dumps({"error": str(e)})
 
 
 class DaemonClient:

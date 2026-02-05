@@ -1,8 +1,7 @@
-"""Widget rendering - pipeline, archetypes, and display service."""
+"""Widget rendering - pipeline, archetypes, and socket server."""
 
 from .renderer import FrameRenderer
 from .pipeline import RenderPipeline, Layer
-from .display_service import DisplayService, main as run_display_service
 from .socket_server import get_socket_server, reset_socket_server
 
 # Status colors are centralized in core.colors
@@ -14,9 +13,6 @@ __all__ = [
     # Pipeline
     "RenderPipeline",
     "Layer",
-    # Display service
-    "DisplayService",
-    "run_display_service",
     # Socket server
     "get_socket_server",
     "reset_socket_server",
