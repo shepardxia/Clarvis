@@ -19,12 +19,10 @@ dependencies = [
 ]
 
 [tool.uv]
-environments = ["sys_platform == 'darwin'"]
 
 [tool.uv.sources]
-clautify = { path = "../clautify", editable = true }
-heybuddy = { path = "../hey-buddy", editable = true }
-genlm-backend = { path = "../../genlm/mlx/genlm-backend", editable = true }
+clautify = { git = "https://github.com/shepardxia/clautify.git" }
+heybuddy = { git = "https://github.com/shepardxia/hey-buddy.git" }
 
 [project.scripts]
 clarvis = "clarvis.server:main"
