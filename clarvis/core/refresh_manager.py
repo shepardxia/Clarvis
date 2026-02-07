@@ -5,13 +5,49 @@ Business logic only — scheduling is handled by the Scheduler.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
-
-from . import DEFAULT_TIMEZONE, get_current_time
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     from .display_manager import DisplayManager
     from .state import StateStore
+
+DEFAULT_TIMEZONE = "America/Los_Angeles"
+
+
+@dataclass
+class TimeData:
+    """Current time data."""
+
+    time: str  # HH:MM format
+    date: str  # YYYY-MM-DD format
+    day: str  # Full day name
+    timezone: str
+    iso_timestamp: str
+
+    def to_dict(self) -> dict:
+        return {
+            "time": self.time,
+            "date": self.date,
+            "day": self.day,
+            "timezone": self.timezone,
+            "timestamp": self.iso_timestamp,
+        }
+
+
+def get_current_time(timezone: str = DEFAULT_TIMEZONE) -> TimeData:
+    """Get current time in the specified timezone."""
+    tz = ZoneInfo(timezone)
+    now = datetime.now(tz)
+    return TimeData(
+        time=now.strftime("%H:%M"),
+        date=now.strftime("%Y-%m-%d"),
+        day=now.strftime("%A"),
+        timezone=timezone,
+        iso_timestamp=now.isoformat(),
+    )
 
 
 class RefreshManager:
@@ -32,7 +68,7 @@ class RefreshManager:
 
     def refresh_location(self) -> tuple[float, float, str]:
         """Refresh location data."""
-        from ..services.location import get_location_full
+        from ..services.weather import get_location_full
 
         location_data = get_location_full()
         self.state.update("location", location_data)

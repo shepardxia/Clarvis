@@ -5,8 +5,8 @@ import time
 import pytest
 
 from clarvis.core.colors import STATUS_MAP, ColorDef, StatusColors
+from clarvis.core.hook_processor import classify_tool
 from clarvis.core.session_tracker import SessionTracker
-from clarvis.core.tool_classifier import classify_tool
 
 # ── StateStore ──────────────────────────────────────────────────────
 

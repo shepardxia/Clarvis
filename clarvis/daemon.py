@@ -15,17 +15,14 @@ from __future__ import annotations
 import asyncio
 import atexit
 import fcntl
-import json
 import os
 import signal
 import sys
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .core.cache import HUB_DATA_FILE, read_hub_data
 from .core.command_handlers import CommandHandlers
 from .core.display_manager import DisplayManager
 from .core.hook_processor import HookProcessor
@@ -230,78 +227,6 @@ class CentralHubDaemon:
             token_usage_service_provider=lambda: self.token_usage_service,
             voice_orchestrator_provider=lambda: self.voice_orchestrator,
         )
-
-        # Asyncio debounce state (replaces threading.Timer)
-        self._persist_handle: Optional[asyncio.TimerHandle] = None
-
-        # Load initial state and subscribe to changes
-        self._load_initial_state()
-        self.state.subscribe(self._on_state_change)
-
-    # --- State initialization and persistence ---
-
-    def _load_initial_state(self) -> None:
-        """Load initial state from hub data file."""
-        hub_data = read_hub_data()
-
-        for section in ("status", "sessions", "weather", "location", "time"):
-            if hub_data.get(section):
-                self.state.update(section, hub_data[section], notify=False)
-
-        # Initialize display from loaded state
-        status = self.state.get("status")
-        if status:
-            self.display.set_status(status.get("status", "idle"))
-
-        weather = self.state.get("weather")
-        if weather:
-            self.display.set_weather(
-                weather.get("widget_type", "clear"),
-                weather.get("widget_intensity", 0.0),
-                weather.get("wind_speed", 0.0),
-            )
-
-    def _on_state_change(self, section: str, value: dict) -> None:
-        """Handle state changes - debounced persist to file.
-
-        Uses a trailing-edge debounce via asyncio.call_later: each state
-        change cancels the previous timer and schedules a new one 1s out.
-        Thread-safe via call_soon_threadsafe.
-        """
-        if self._event_loop is not None:
-            self._event_loop.call_soon_threadsafe(self._schedule_persist)
-
-    def _schedule_persist(self) -> None:
-        """Schedule a debounced persist on the event loop (must be called on loop thread)."""
-        if self._persist_handle is not None:
-            self._persist_handle.cancel()
-        self._persist_handle = self._event_loop.call_later(1.0, self._persist_to_file)
-
-    def _persist_to_file(self) -> None:
-        """Persist current state to hub data file (atomic write)."""
-        import tempfile
-
-        self._persist_handle = None
-        hub_data = self.state.get_all()
-        hub_data["updated_at"] = datetime.now().isoformat()
-
-        fd, temp_path = tempfile.mkstemp(suffix=".tmp", dir=HUB_DATA_FILE.parent)
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(hub_data, f)
-            os.rename(temp_path, HUB_DATA_FILE)
-        except Exception:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-
-    def _flush_persist(self) -> None:
-        """Cancel pending debounce and persist immediately. Called on shutdown."""
-        if self._persist_handle is not None:
-            self._persist_handle.cancel()
-            self._persist_handle = None
-        self._persist_to_file()
 
     # --- Hook event processing (delegated to HookProcessor) ---
 
@@ -606,8 +531,6 @@ class CentralHubDaemon:
             return
 
         self.running = False
-        self._flush_persist()
-
         # Shut down voice agent first — needs the event loop still running
         if self.voice_agent and self._event_loop:
             future = asyncio.run_coroutine_threadsafe(self.voice_agent.shutdown(), self._event_loop)

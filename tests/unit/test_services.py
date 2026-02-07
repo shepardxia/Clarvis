@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from clarvis.services import location
+from clarvis.services import weather as location
 
 
 @pytest.fixture(autouse=True)

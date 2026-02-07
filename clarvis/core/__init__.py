@@ -1,11 +1,10 @@
-"""Core utilities - caching, time services, state management, IPC, colors, and managers."""
+"""Core utilities - state management, IPC, colors, scheduling, and managers."""
 
 # isort: skip_file
-# Import order matters: refresh_manager imports DEFAULT_TIMEZONE from this package,
-# so time_service must be imported first.
+# Import order matters: refresh_manager defines DEFAULT_TIMEZONE/TimeData/get_current_time,
+# and must be imported before modules that depend on them via this package.
 
-from .cache import read_hub_data
-from .time_service import DEFAULT_TIMEZONE, TimeData, get_current_time
+from .refresh_manager import DEFAULT_TIMEZONE, TimeData, get_current_time
 from .state import StateStore, get_state_store
 from .ipc import DaemonClient, DaemonServer, get_daemon_client
 from .colors import (
@@ -18,12 +17,9 @@ from .session_tracker import SessionTracker
 from .display_manager import DisplayManager
 from .refresh_manager import RefreshManager
 from .scheduler import Scheduler
-from .tool_classifier import classify_tool
-from .hook_processor import HookProcessor
+from .hook_processor import HookProcessor, classify_tool
 
 __all__ = [
-    # Cache
-    "read_hub_data",
     # Time
     "get_current_time",
     "TimeData",
