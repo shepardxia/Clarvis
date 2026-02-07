@@ -39,7 +39,7 @@ Clarvis lives in a monorepo with sibling dependencies. Clone all repos into the 
 ```bash
 mkdir clarvis-suite && cd clarvis-suite
 git clone git@github.com:shepardxia/Clarvis.git
-git clone git@github.com:shepardxia/clautify.git SpotAPI
+git clone git@github.com:shepardxia/clautify.git
 git clone git@github.com:shepardxia/hey-buddy.git
 ```
 

@@ -14,15 +14,15 @@ import curses
 import logging
 import os
 import sys
-import time
 import threading
+import time
 import warnings
-import numpy as np
 from collections import deque
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 
-from heybuddy import WakeWordDetector, DetectorConfig
+import numpy as np
+from heybuddy import DetectorConfig, WakeWordDetector
 
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 
@@ -45,11 +45,13 @@ class Event:
 # Daemon connection (optional — degrades gracefully if daemon is down)
 # ──────────────────────────────────────────────────────────────────────
 
+
 class DaemonConnection:
     """Polls the Clarvis daemon for state and voice context over IPC."""
 
     def __init__(self, poll_interval: float = DAEMON_POLL_INTERVAL):
         from clarvis.core.ipc import DaemonClient
+
         self._client = DaemonClient(timeout=2.0)
         self._poll_interval = poll_interval
         self._state: dict = {}
@@ -96,6 +98,7 @@ class DaemonConnection:
 # Helpers
 # ──────────────────────────────────────────────────────────────────────
 
+
 def make_bar(value: float, width: int, threshold: float = 0.0) -> str:
     filled = int(value * width)
     filled = max(0, min(filled, width))
@@ -123,8 +126,8 @@ def _addnstr(scr, row, col, text, maxlen, attr=0):
 # Wake word detector thread
 # ──────────────────────────────────────────────────────────────────────
 
-def run_pipeline(events: deque, lock: threading.Lock, stop_event: threading.Event,
-                 live_state: dict):
+
+def run_pipeline(events: deque, lock: threading.Lock, stop_event: threading.Event, live_state: dict):
     """Background thread: run WakeWordDetector with callbacks.
 
     All stdout/stderr is suppressed so onnxruntime logs
@@ -149,7 +152,7 @@ def run_pipeline(events: deque, lock: threading.Lock, stop_event: threading.Even
 def _run_pipeline_inner(events, lock, stop_event, live_state):
     def on_audio(window, vad_prob, model_prob):
         now = time.time()
-        rms = float(np.sqrt(np.mean(window ** 2)))
+        rms = float(np.sqrt(np.mean(window**2)))
         peak = float(np.max(np.abs(window)))
         speech = vad_prob > VAD_THRESHOLD
 
@@ -160,24 +163,31 @@ def _run_pipeline_inner(events, lock, stop_event, live_state):
             live_state["vad_speech"] = speech
 
             if speech:
-                events.append(Event(now, "vad", vad_prob,
-                                    f"Speech VAD={vad_prob:.3f}"))
+                events.append(Event(now, "vad", vad_prob, f"Speech VAD={vad_prob:.3f}"))
 
             if model_prob > 0:
                 live_state["model_prob"] = model_prob
-                events.append(Event(
-                    now, "model", model_prob,
-                    f"prob={model_prob:.4f} VAD={vad_prob:.3f}",
-                ))
+                events.append(
+                    Event(
+                        now,
+                        "model",
+                        model_prob,
+                        f"prob={model_prob:.4f} VAD={vad_prob:.3f}",
+                    )
+                )
 
     def on_detected():
         now = time.time()
         with lock:
             live_state["last_detect"] = now
-            events.append(Event(
-                now, "detect", 0,
-                "*** DETECTED ***",
-            ))
+            events.append(
+                Event(
+                    now,
+                    "detect",
+                    0,
+                    "*** DETECTED ***",
+                )
+            )
 
     config = DetectorConfig(
         model_path=str(MODEL_DIR / "clarvis_final.onnx"),
@@ -206,6 +216,7 @@ def _run_pipeline_inner(events, lock, stop_event, live_state):
 # ──────────────────────────────────────────────────────────────────────
 # Curses UI
 # ──────────────────────────────────────────────────────────────────────
+
 
 def main(stdscr):
     curses.curs_set(0)
@@ -237,7 +248,8 @@ def main(stdscr):
 
     # Start wake word detector thread
     pipeline = threading.Thread(
-        target=run_pipeline, args=(events, lock, stop_event, live_state),
+        target=run_pipeline,
+        args=(events, lock, stop_event, live_state),
         daemon=True,
     )
     pipeline.start()
@@ -260,13 +272,12 @@ def main(stdscr):
                 curses.curs_set(1)
                 h_tmp, w_tmp = stdscr.getmaxyx()
                 prompt = "Voice sim> "
-                _addnstr(stdscr, h_tmp - 1, 0, prompt, w_tmp - 1,
-                         curses.A_BOLD | curses.color_pair(4))
+                _addnstr(stdscr, h_tmp - 1, 0, prompt, w_tmp - 1, curses.A_BOLD | curses.color_pair(4))
                 stdscr.refresh()
                 try:
-                    sim_input = stdscr.getstr(
-                        h_tmp - 1, len(prompt), w_tmp - len(prompt) - 1
-                    ).decode("utf-8", errors="replace")
+                    sim_input = stdscr.getstr(h_tmp - 1, len(prompt), w_tmp - len(prompt) - 1).decode(
+                        "utf-8", errors="replace"
+                    )
                 except Exception:
                     sim_input = ""
                 curses.noecho()
@@ -277,14 +288,22 @@ def main(stdscr):
                     formatted = vc.get("formatted", "").strip()
                     preview = formatted.replace("\n", " | ") if formatted else "(no context)"
                     with lock:
-                        events.append(Event(
-                            time.time(), "sim", 0,
-                            f"CTX: {preview}",
-                        ))
-                        events.append(Event(
-                            time.time(), "sim", 0,
-                            f"MSG: {sim_input}",
-                        ))
+                        events.append(
+                            Event(
+                                time.time(),
+                                "sim",
+                                0,
+                                f"CTX: {preview}",
+                            )
+                        )
+                        events.append(
+                            Event(
+                                time.time(),
+                                "sim",
+                                0,
+                                f"MSG: {sim_input}",
+                            )
+                        )
                 continue
 
             h, w = stdscr.getmaxyx()
@@ -310,8 +329,7 @@ def main(stdscr):
             title = " Wake Word Debug "
             pad = max(0, (min(w, 80) - len(title)) // 2)
             header_line = "\u2550" * pad + title + "\u2550" * pad
-            _addnstr(stdscr, row, 0, header_line, w - 1,
-                     curses.A_BOLD | curses.color_pair(4))
+            _addnstr(stdscr, row, 0, header_line, w - 1, curses.A_BOLD | curses.color_pair(4))
             row += 1
 
             hints = "q=quit"
@@ -325,35 +343,55 @@ def main(stdscr):
             if since_detect >= 0 and since_detect < DETECT_DISPLAY_SECS:
                 banner = f"  *** WAKE WORD DETECTED ({since_detect:.1f}s ago) ***  "
                 pad_l = max(0, (min(w, 80) - len(banner)) // 2)
-                _addnstr(stdscr, row, 0, " " * pad_l + banner, w - 1,
-                         curses.A_BOLD | curses.color_pair(6))
+                _addnstr(
+                    stdscr,
+                    row,
+                    0,
+                    " " * pad_l + banner,
+                    w - 1,
+                    curses.A_BOLD | curses.color_pair(6),
+                )
                 row += 1
             elif since_detect >= 0:
-                _addnstr(stdscr, row, 0, f" Last detection: {since_detect:.0f}s ago",
-                         w - 1, curses.color_pair(5))
+                _addnstr(
+                    stdscr,
+                    row,
+                    0,
+                    f" Last detection: {since_detect:.0f}s ago",
+                    w - 1,
+                    curses.color_pair(5),
+                )
                 row += 1
             else:
-                _addnstr(stdscr, row, 0, " No detections yet",
-                         w - 1, curses.color_pair(5))
+                _addnstr(stdscr, row, 0, " No detections yet", w - 1, curses.color_pair(5))
                 row += 1
 
-            _addnstr(stdscr, row, 0, "\u2500" * min(w - 1, 80), w - 1,
-                     curses.color_pair(5))
+            _addnstr(stdscr, row, 0, "\u2500" * min(w - 1, 80), w - 1, curses.color_pair(5))
             row += 1
 
             # ── Live meters ──
             audio_bar = make_bar(min(audio_peak * 5, 1.0), BAR_WIDTH)
-            _addnstr(stdscr, row, 0,
-                     f" Audio \u2502 {audio_bar} \u2502 rms={audio_rms:.4f} peak={audio_peak:.3f}",
-                     w - 1, curses.color_pair(5))
+            _addnstr(
+                stdscr,
+                row,
+                0,
+                f" Audio \u2502 {audio_bar} \u2502 rms={audio_rms:.4f} peak={audio_peak:.3f}",
+                w - 1,
+                curses.color_pair(5),
+            )
             row += 1
 
             vad_bar = make_bar(vad, BAR_WIDTH, VAD_THRESHOLD)
             vad_color = curses.color_pair(1) if vad_speech else curses.color_pair(5)
             speech_tag = " SPEECH" if vad_speech else ""
-            _addnstr(stdscr, row, 0,
-                     f"   VAD \u2502 {vad_bar} \u2502 {vad:.3f}{speech_tag}",
-                     w - 1, vad_color)
+            _addnstr(
+                stdscr,
+                row,
+                0,
+                f"   VAD \u2502 {vad_bar} \u2502 {vad:.3f}{speech_tag}",
+                w - 1,
+                vad_color,
+            )
             row += 1
 
             prob_bar = make_bar(min(model_prob * 2, 1.0), BAR_WIDTH, THRESHOLD * 2)
@@ -363,14 +401,18 @@ def main(stdscr):
                 prob_color = curses.color_pair(2)
             else:
                 prob_color = curses.color_pair(5)
-            _addnstr(stdscr, row, 0,
-                     f" Model \u2502 {prob_bar} \u2502 {model_prob:.4f} ({model_dur:.0f}ms)",
-                     w - 1, prob_color)
+            _addnstr(
+                stdscr,
+                row,
+                0,
+                f" Model \u2502 {prob_bar} \u2502 {model_prob:.4f} ({model_dur:.0f}ms)",
+                w - 1,
+                prob_color,
+            )
             row += 1
 
             # ── Daemon state ──
-            _addnstr(stdscr, row, 0, "\u2500" * min(w - 1, 80), w - 1,
-                     curses.color_pair(5))
+            _addnstr(stdscr, row, 0, "\u2500" * min(w - 1, 80), w - 1, curses.color_pair(5))
             row += 1
 
             if daemon.connected:
@@ -398,26 +440,28 @@ def main(stdscr):
                     # Compact: strip tags, join lines
                     preview = formatted.replace("<context>\n", "").replace("\n</context>", "")
                     preview = preview.strip().replace("\n", " \u2502 ")
-                    _addnstr(stdscr, row, 0, f" Voice  \u2502 {preview}", w - 1,
-                             curses.color_pair(2))
+                    _addnstr(stdscr, row, 0, f" Voice  \u2502 {preview}", w - 1, curses.color_pair(2))
                     row += 1
                 else:
-                    _addnstr(stdscr, row, 0, " Voice  \u2502 (no context available)",
-                             w - 1, curses.color_pair(5))
+                    _addnstr(
+                        stdscr,
+                        row,
+                        0,
+                        " Voice  \u2502 (no context available)",
+                        w - 1,
+                        curses.color_pair(5),
+                    )
                     row += 1
             else:
-                _addnstr(stdscr, row, 0, " Daemon \u2502 not connected",
-                         w - 1, curses.color_pair(5))
+                _addnstr(stdscr, row, 0, " Daemon \u2502 not connected", w - 1, curses.color_pair(5))
                 row += 1
 
             # ── Event log header ──
-            _addnstr(stdscr, row, 0, "\u2500" * min(w - 1, 80), w - 1,
-                     curses.color_pair(5))
+            _addnstr(stdscr, row, 0, "\u2500" * min(w - 1, 80), w - 1, curses.color_pair(5))
             row += 1
 
             header = " Time     \u2502 Event  \u2502 Details"
-            _addnstr(stdscr, row, 0, header, w - 1,
-                     curses.A_BOLD | curses.color_pair(4))
+            _addnstr(stdscr, row, 0, header, w - 1, curses.A_BOLD | curses.color_pair(4))
             row += 1
 
             # ── Event log ──

@@ -13,13 +13,13 @@ Supports multiple retro themes:
 """
 
 from dataclasses import dataclass
-from typing import Optional, Dict, List
-from typing import Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
 class ColorDef:
     """Color definition with ANSI and RGB values."""
+
     ansi: int  # ANSI 256 color code
     rgb: Tuple[float, float, float]  # RGB values 0.0-1.0 for Swift
 
@@ -27,7 +27,7 @@ class ColorDef:
     def hex(self) -> str:
         """Get hex color string."""
         r, g, b = self.rgb
-        return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
+        return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
 
     def ansi_fg(self) -> str:
         """Get ANSI foreground escape code."""
@@ -53,112 +53,107 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "resting": ColorDef(8, (0.4, 0.4, 0.45)),
         "thinking": ColorDef(11, (1.0, 0.87, 0.0)),
         "running": ColorDef(10, (0.0, 1.0, 0.67)),
-        "executing": ColorDef(208, (1.0, 0.5, 0.0)),      # orange - shell commands
+        "executing": ColorDef(208, (1.0, 0.5, 0.0)),  # orange - shell commands
         "awaiting": ColorDef(12, (0.4, 0.5, 1.0)),
-        "reading": ColorDef(51, (0.0, 0.9, 0.9)),         # cyan - absorbing info
-        "writing": ColorDef(207, (1.0, 0.4, 0.8)),        # pink/magenta - creative
+        "reading": ColorDef(51, (0.0, 0.9, 0.9)),  # cyan - absorbing info
+        "writing": ColorDef(207, (1.0, 0.4, 0.8)),  # pink/magenta - creative
         "reviewing": ColorDef(13, (1.0, 0.0, 1.0)),
         "offline": ColorDef(8, (0.53, 0.53, 0.53)),
-        "eureka": ColorDef(220, (1.0, 0.85, 0.0)),        # bright gold - breakthrough!
-        "celebration": ColorDef(214, (1.0, 0.7, 0.0)),    # warm gold - task complete!
-        "activated": ColorDef(220, (1.0, 0.85, 0.2)),     # golden amber - activated/wake
-        "listening": ColorDef(48, (0.2, 1.0, 0.6)),        # bright mint - actively listening
-        "responding": ColorDef(117, (0.5, 0.7, 1.0)),      # soft blue - speaking response
+        "eureka": ColorDef(220, (1.0, 0.85, 0.0)),  # bright gold - breakthrough!
+        "celebration": ColorDef(214, (1.0, 0.7, 0.0)),  # warm gold - task complete!
+        "activated": ColorDef(220, (1.0, 0.85, 0.2)),  # golden amber - activated/wake
+        "listening": ColorDef(48, (0.2, 1.0, 0.6)),  # bright mint - actively listening
+        "responding": ColorDef(117, (0.5, 0.7, 1.0)),  # soft blue - speaking response
     },
-
     # CRT Amber - classic amber phosphor terminal
     "crt-amber": {
-        "idle": ColorDef(130, (0.6, 0.4, 0.0)),        # dim amber
-        "resting": ColorDef(94, (0.5, 0.3, 0.0)),     # darker amber
-        "thinking": ColorDef(214, (1.0, 0.7, 0.0)),   # bright amber
-        "running": ColorDef(220, (1.0, 0.8, 0.2)),    # warm amber
+        "idle": ColorDef(130, (0.6, 0.4, 0.0)),  # dim amber
+        "resting": ColorDef(94, (0.5, 0.3, 0.0)),  # darker amber
+        "thinking": ColorDef(214, (1.0, 0.7, 0.0)),  # bright amber
+        "running": ColorDef(220, (1.0, 0.8, 0.2)),  # warm amber
         "executing": ColorDef(220, (1.0, 0.8, 0.2)),
-        "awaiting": ColorDef(178, (0.8, 0.6, 0.1)),   # mid amber
+        "awaiting": ColorDef(178, (0.8, 0.6, 0.1)),  # mid amber
         "reading": ColorDef(178, (0.8, 0.6, 0.1)),
         "writing": ColorDef(214, (1.0, 0.7, 0.0)),
         "reviewing": ColorDef(220, (1.0, 0.8, 0.2)),
-        "offline": ColorDef(94, (0.4, 0.25, 0.0)),    # very dim amber
-        "eureka": ColorDef(226, (1.0, 1.0, 0.3)),     # bright white-amber
+        "offline": ColorDef(94, (0.4, 0.25, 0.0)),  # very dim amber
+        "eureka": ColorDef(226, (1.0, 1.0, 0.3)),  # bright white-amber
         "celebration": ColorDef(226, (1.0, 1.0, 0.3)),
         "activated": ColorDef(226, (1.0, 1.0, 0.3)),  # bright amber
-        "listening": ColorDef(214, (1.0, 0.7, 0.0)),    # warm amber - listening
-        "responding": ColorDef(178, (0.8, 0.6, 0.1)),   # mid amber - speaking
+        "listening": ColorDef(214, (1.0, 0.7, 0.0)),  # warm amber - listening
+        "responding": ColorDef(178, (0.8, 0.6, 0.1)),  # mid amber - speaking
     },
-
     # CRT Green - classic green phosphor terminal
     "crt-green": {
-        "idle": ColorDef(22, (0.0, 0.5, 0.0)),        # dim green
-        "resting": ColorDef(22, (0.0, 0.4, 0.0)),     # darker green
-        "thinking": ColorDef(46, (0.0, 1.0, 0.0)),    # bright green
-        "running": ColorDef(118, (0.5, 1.0, 0.2)),    # lime green
+        "idle": ColorDef(22, (0.0, 0.5, 0.0)),  # dim green
+        "resting": ColorDef(22, (0.0, 0.4, 0.0)),  # darker green
+        "thinking": ColorDef(46, (0.0, 1.0, 0.0)),  # bright green
+        "running": ColorDef(118, (0.5, 1.0, 0.2)),  # lime green
         "executing": ColorDef(118, (0.5, 1.0, 0.2)),
-        "awaiting": ColorDef(34, (0.0, 0.7, 0.2)),    # mid green
+        "awaiting": ColorDef(34, (0.0, 0.7, 0.2)),  # mid green
         "reading": ColorDef(34, (0.0, 0.7, 0.2)),
         "writing": ColorDef(46, (0.0, 1.0, 0.0)),
         "reviewing": ColorDef(118, (0.5, 1.0, 0.2)),
-        "offline": ColorDef(22, (0.0, 0.3, 0.0)),     # very dim green
-        "eureka": ColorDef(156, (0.7, 1.0, 0.5)),     # bright lime
+        "offline": ColorDef(22, (0.0, 0.3, 0.0)),  # very dim green
+        "eureka": ColorDef(156, (0.7, 1.0, 0.5)),  # bright lime
         "celebration": ColorDef(156, (0.7, 1.0, 0.5)),
         "activated": ColorDef(156, (0.7, 1.0, 0.5)),  # bright lime
-        "listening": ColorDef(46, (0.0, 1.0, 0.0)),     # bright green - listening
-        "responding": ColorDef(34, (0.0, 0.7, 0.2)),    # mid green - speaking
+        "listening": ColorDef(46, (0.0, 1.0, 0.0)),  # bright green - listening
+        "responding": ColorDef(34, (0.0, 0.7, 0.2)),  # mid green - speaking
     },
-
     # Synthwave - 80s neon aesthetic
     "synthwave": {
-        "idle": ColorDef(55, (0.4, 0.2, 0.6)),        # muted purple
-        "resting": ColorDef(54, (0.3, 0.15, 0.5)),    # dark purple
-        "thinking": ColorDef(199, (1.0, 0.2, 0.6)),   # hot pink
-        "running": ColorDef(51, (0.0, 1.0, 1.0)),     # electric cyan
+        "idle": ColorDef(55, (0.4, 0.2, 0.6)),  # muted purple
+        "resting": ColorDef(54, (0.3, 0.15, 0.5)),  # dark purple
+        "thinking": ColorDef(199, (1.0, 0.2, 0.6)),  # hot pink
+        "running": ColorDef(51, (0.0, 1.0, 1.0)),  # electric cyan
         "executing": ColorDef(208, (1.0, 0.5, 0.2)),  # neon orange
-        "awaiting": ColorDef(33, (0.2, 0.4, 1.0)),    # electric blue
-        "reading": ColorDef(51, (0.0, 1.0, 1.0)),     # electric cyan
-        "writing": ColorDef(207, (1.0, 0.4, 0.8)),    # pink
+        "awaiting": ColorDef(33, (0.2, 0.4, 1.0)),  # electric blue
+        "reading": ColorDef(51, (0.0, 1.0, 1.0)),  # electric cyan
+        "writing": ColorDef(207, (1.0, 0.4, 0.8)),  # pink
         "reviewing": ColorDef(201, (1.0, 0.0, 1.0)),  # magenta
-        "offline": ColorDef(54, (0.3, 0.15, 0.4)),    # dim purple
-        "eureka": ColorDef(226, (1.0, 1.0, 0.4)),     # neon yellow
+        "offline": ColorDef(54, (0.3, 0.15, 0.4)),  # dim purple
+        "eureka": ColorDef(226, (1.0, 1.0, 0.4)),  # neon yellow
         "celebration": ColorDef(226, (1.0, 1.0, 0.4)),
-        "activated": ColorDef(226, (1.0, 1.0, 0.4)),   # neon yellow
-        "listening": ColorDef(51, (0.0, 1.0, 1.0)),     # electric cyan - listening
-        "responding": ColorDef(207, (1.0, 0.4, 0.8)),   # pink - speaking
+        "activated": ColorDef(226, (1.0, 1.0, 0.4)),  # neon yellow
+        "listening": ColorDef(51, (0.0, 1.0, 1.0)),  # electric cyan - listening
+        "responding": ColorDef(207, (1.0, 0.4, 0.8)),  # pink - speaking
     },
-
     # C64 - Commodore 64 palette
     "c64": {
-        "idle": ColorDef(250, (0.7, 0.7, 0.7)),       # light gray
-        "resting": ColorDef(244, (0.5, 0.5, 0.5)),    # medium gray
-        "thinking": ColorDef(117, (0.6, 0.7, 1.0)),   # light blue
-        "running": ColorDef(71, (0.4, 0.8, 0.4)),     # green
+        "idle": ColorDef(250, (0.7, 0.7, 0.7)),  # light gray
+        "resting": ColorDef(244, (0.5, 0.5, 0.5)),  # medium gray
+        "thinking": ColorDef(117, (0.6, 0.7, 1.0)),  # light blue
+        "running": ColorDef(71, (0.4, 0.8, 0.4)),  # green
         "executing": ColorDef(208, (0.9, 0.6, 0.2)),  # orange
-        "awaiting": ColorDef(137, (0.6, 0.5, 0.3)),   # brown
-        "reading": ColorDef(80, (0.4, 0.7, 0.7)),     # cyan
-        "writing": ColorDef(98, (0.6, 0.5, 0.8)),     # purple
+        "awaiting": ColorDef(137, (0.6, 0.5, 0.3)),  # brown
+        "reading": ColorDef(80, (0.4, 0.7, 0.7)),  # cyan
+        "writing": ColorDef(98, (0.6, 0.5, 0.8)),  # purple
         "reviewing": ColorDef(168, (0.8, 0.5, 0.5)),  # light red
-        "offline": ColorDef(240, (0.4, 0.4, 0.4)),    # dark gray
-        "eureka": ColorDef(227, (1.0, 1.0, 0.5)),     # yellow
+        "offline": ColorDef(240, (0.4, 0.4, 0.4)),  # dark gray
+        "eureka": ColorDef(227, (1.0, 1.0, 0.5)),  # yellow
         "celebration": ColorDef(227, (1.0, 1.0, 0.5)),
-        "activated": ColorDef(80, (0.4, 0.7, 0.7)),   # cyan
-        "listening": ColorDef(71, (0.4, 0.8, 0.4)),     # green - listening
-        "responding": ColorDef(117, (0.6, 0.7, 1.0)),   # light blue - speaking
+        "activated": ColorDef(80, (0.4, 0.7, 0.7)),  # cyan
+        "listening": ColorDef(71, (0.4, 0.8, 0.4)),  # green - listening
+        "responding": ColorDef(117, (0.6, 0.7, 1.0)),  # light blue - speaking
     },
-
     # Matrix - 90s hacker aesthetic
     "matrix": {
-        "idle": ColorDef(22, (0.0, 0.4, 0.0)),        # dark green
-        "resting": ColorDef(22, (0.0, 0.3, 0.0)),     # darker green
-        "thinking": ColorDef(46, (0.0, 1.0, 0.0)),    # bright green
-        "running": ColorDef(118, (0.6, 1.0, 0.0)),    # lime
+        "idle": ColorDef(22, (0.0, 0.4, 0.0)),  # dark green
+        "resting": ColorDef(22, (0.0, 0.3, 0.0)),  # darker green
+        "thinking": ColorDef(46, (0.0, 1.0, 0.0)),  # bright green
+        "running": ColorDef(118, (0.6, 1.0, 0.0)),  # lime
         "executing": ColorDef(118, (0.6, 1.0, 0.0)),
-        "awaiting": ColorDef(35, (0.0, 0.8, 0.4)),    # teal green
+        "awaiting": ColorDef(35, (0.0, 0.8, 0.4)),  # teal green
         "reading": ColorDef(35, (0.0, 0.8, 0.4)),
         "writing": ColorDef(46, (0.0, 1.0, 0.0)),
         "reviewing": ColorDef(154, (0.7, 1.0, 0.3)),  # yellow-green
-        "offline": ColorDef(22, (0.0, 0.25, 0.0)),    # very dark green
-        "eureka": ColorDef(231, (1.0, 1.0, 1.0)),     # white flash
+        "offline": ColorDef(22, (0.0, 0.25, 0.0)),  # very dark green
+        "eureka": ColorDef(231, (1.0, 1.0, 1.0)),  # white flash
         "celebration": ColorDef(231, (1.0, 1.0, 1.0)),
         "activated": ColorDef(231, (1.0, 1.0, 1.0)),  # white flash
-        "listening": ColorDef(46, (0.0, 1.0, 0.0)),     # bright green - listening
-        "responding": ColorDef(35, (0.0, 0.8, 0.4)),    # teal green - speaking
+        "listening": ColorDef(46, (0.0, 1.0, 0.0)),  # bright green - listening
+        "responding": ColorDef(35, (0.0, 0.8, 0.4)),  # teal green - speaking
     },
 }
 
@@ -218,6 +213,7 @@ def get_current_theme() -> str:
 # Status Colors (uses current theme)
 # =============================================================================
 
+
 class StatusColors:
     """Maps status names to colors from current theme."""
 
@@ -235,6 +231,7 @@ STATUS_MAP: dict[str, ColorDef] = THEMES[DEFAULT_THEME].copy()
 # Config Export - For Swift/JSON
 # =============================================================================
 
+
 def get_status_colors_for_config() -> Dict[str, Dict]:
     """Get status colors in format suitable for config.json (uses current theme)."""
     return {
@@ -248,8 +245,7 @@ def get_status_colors_for_config() -> Dict[str, Dict]:
 
 
 def get_merged_theme_colors(
-    theme_name: str,
-    overrides: Optional[Dict[str, List[float]]] = None
+    theme_name: str, overrides: Optional[Dict[str, List[float]]] = None
 ) -> Dict[str, List[float]]:
     """
     Get theme colors merged with overrides as RGB arrays.

@@ -49,15 +49,15 @@ class ElementRegistry:
             for base_path in self.paths:
                 if not base_path.exists():
                     continue
-                for yaml_file in base_path.rglob('*.yaml'):
+                for yaml_file in base_path.rglob("*.yaml"):
                     self._load_file(yaml_file)
-                for yaml_file in base_path.rglob('*.yml'):
+                for yaml_file in base_path.rglob("*.yml"):
                     self._load_file(yaml_file)
 
     def _load_file(self, file_path: Path) -> Optional[dict]:
         """Load a single YAML file and register its contents."""
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 data = yaml.safe_load(f)
 
             if not data:
@@ -68,7 +68,7 @@ class ElementRegistry:
             kind, name = self._parse_path(file_path)
 
             # Expand sequences and shorthands for animations
-            if kind == 'animations' and 'frames' in data:
+            if kind == "animations" and "frames" in data:
                 data = self._expand_sequences(data)
                 data = self._expand_shorthands(data)
 
@@ -86,12 +86,12 @@ class ElementRegistry:
     def _expand_sequences(self, data: dict) -> dict:
         """
         Expand sequence references in animation frames.
-        
+
         Supports:
         - sequences: Define reusable frame snippets
         - $sequence_name: Reference to expand inline
         - $sequence_name*N: Repeat sequence N times
-        
+
         Example YAML:
             sequences:
               blink:
@@ -101,29 +101,29 @@ class ElementRegistry:
               sparkle:
                 - { eyes: "✧", border: "✦" }
                 - { eyes: "✦", border: "✧" }
-            
+
             frames:
               - { eyes: "◕", mouth: "◡" }
               - $blink
               - { eyes: "◕", mouth: "◡" }
               - $sparkle*2
         """
-        sequences = data.get('sequences', {})
-        frames = data.get('frames', [])
-        
+        sequences = data.get("sequences", {})
+        frames = data.get("frames", [])
+
         if not sequences:
             return data
-        
+
         expanded_frames = []
         for frame in frames:
-            if isinstance(frame, str) and frame.startswith('$'):
+            if isinstance(frame, str) and frame.startswith("$"):
                 # Parse sequence reference: $name or $name*N
                 ref = frame[1:]  # Remove $
                 repeat = 1
-                if '*' in ref:
-                    ref, repeat_str = ref.split('*', 1)
+                if "*" in ref:
+                    ref, repeat_str = ref.split("*", 1)
                     repeat = int(repeat_str) if repeat_str.isdigit() else 1
-                
+
                 # Expand sequence
                 if ref in sequences:
                     seq_frames = sequences[ref]
@@ -134,44 +134,44 @@ class ElementRegistry:
                     expanded_frames.append(frame)
             else:
                 expanded_frames.append(frame)
-        
+
         # Return modified data with expanded frames
         result = dict(data)
-        result['frames'] = expanded_frames
+        result["frames"] = expanded_frames
         return result
 
     def _load_shorthands(self) -> dict:
         """
         Load shorthands definition file (cached).
-        
+
         Returns:
             Dict with 'eyes', 'mouth', 'border', 'corners', 'presets' mappings.
         """
         if self._shorthands is not None:
             return self._shorthands
-        
+
         # Look for _shorthands.yaml in animations directory
         for base_path in self.paths:
-            shorthand_file = base_path / 'animations' / '_shorthands.yaml'
+            shorthand_file = base_path / "animations" / "_shorthands.yaml"
             if shorthand_file.exists():
                 try:
-                    with open(shorthand_file, 'r') as f:
+                    with open(shorthand_file, "r") as f:
                         self._shorthands = yaml.safe_load(f) or {}
                         return self._shorthands
                 except (yaml.YAMLError, IOError):
                     pass
-        
+
         self._shorthands = {}
         return self._shorthands
 
     def _expand_shorthands(self, data: dict) -> dict:
         """
         Expand shorthand names in animation frames.
-        
+
         Supports:
         - Component shorthands: { eyes: "open" } -> { eyes: "◕" }
         - Frame presets: "happy" -> { eyes: "◕", mouth: "◡", border: "─" }
-        
+
         Example YAML:
             frames:
               - happy                           # Preset expands to full frame
@@ -181,24 +181,24 @@ class ElementRegistry:
         shorthands = self._load_shorthands()
         if not shorthands:
             return data
-        
-        frames = data.get('frames', [])
+
+        frames = data.get("frames", [])
         if not frames:
             return data
-        
-        presets = shorthands.get('presets', {})
+
+        presets = shorthands.get("presets", {})
         component_maps = {
-            'eyes': shorthands.get('eyes', {}),
-            'mouth': shorthands.get('mouth', {}),
-            'border': shorthands.get('border', {}),
-            'corners': shorthands.get('corners', {}),
+            "eyes": shorthands.get("eyes", {}),
+            "mouth": shorthands.get("mouth", {}),
+            "border": shorthands.get("border", {}),
+            "corners": shorthands.get("corners", {}),
         }
-        
+
         expanded_frames = []
         for frame in frames:
             if isinstance(frame, str):
                 # Check if it's a preset name (not a sequence reference)
-                if not frame.startswith('$') and frame in presets:
+                if not frame.startswith("$") and frame in presets:
                     expanded_frames.append(dict(presets[frame]))
                 else:
                     # Unknown string, keep as-is
@@ -215,9 +215,9 @@ class ElementRegistry:
                 expanded_frames.append(expanded_frame)
             else:
                 expanded_frames.append(frame)
-        
+
         result = dict(data)
-        result['frames'] = expanded_frames
+        result["frames"] = expanded_frames
         return result
 
     def _parse_path(self, file_path: Path) -> tuple[str, str]:
@@ -241,7 +241,7 @@ class ElementRegistry:
                     return kind, name
                 elif len(parts) == 1:
                     # File directly in elements/, use 'root' as kind
-                    return 'root', rel_path.stem
+                    return "root", rel_path.stem
             except ValueError:
                 continue
 

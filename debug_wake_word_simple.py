@@ -10,8 +10,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-
-from heybuddy import WakeWordDetector, DetectorConfig
+from heybuddy import DetectorConfig, WakeWordDetector
 
 logging.basicConfig(
     level=logging.DEBUG,

@@ -17,7 +17,13 @@ _cache: dict | None = None
 _cache_time: float = 0.0
 
 # Default location (San Francisco)
-DEFAULT_LOCATION = {"latitude": 37.7749, "longitude": -122.4194, "city": "San Francisco", "timezone": "", "source": "default"}
+DEFAULT_LOCATION = {
+    "latitude": 37.7749,
+    "longitude": -122.4194,
+    "city": "San Francisco",
+    "timezone": "",
+    "source": "default",
+}
 
 
 def _is_corelocation_available() -> bool:
@@ -138,10 +144,3 @@ def get_location(cache_max_age: int = 60) -> tuple[float, float, str]:
     """
     loc = get_location_full(cache_max_age)
     return loc["latitude"], loc["longitude"], loc["city"]
-
-
-def get_cached_timezone() -> str | None:
-    """Get timezone from cached location data, if available."""
-    if _cache and (_time.time() - _cache_time) < 3600:
-        return _cache.get("timezone")
-    return None

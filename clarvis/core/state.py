@@ -2,8 +2,7 @@
 
 import logging
 import threading
-import time
-from typing import Callable, Any, Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +120,7 @@ class StateStore:
             Copy of entire state dict
         """
         with self._lock:
-            return {k: v.copy() if isinstance(v, dict) else v
-                    for k, v in self._state.items()}
+            return {k: v.copy() if isinstance(v, dict) else v for k, v in self._state.items()}
 
     def batch_update(self, updates: dict[str, dict]) -> None:
         """
@@ -158,10 +156,3 @@ def get_state_store() -> StateStore:
             if _store_instance is None:
                 _store_instance = StateStore()
     return _store_instance
-
-
-def reset_state_store() -> None:
-    """Reset the global StateStore instance. Used for testing."""
-    global _store_instance
-    with _store_lock:
-        _store_instance = None

@@ -1,11 +1,10 @@
 """Widget rendering - pipeline, archetypes, and socket server."""
 
-from .renderer import FrameRenderer
-from .pipeline import RenderPipeline, Layer
-from .socket_server import get_socket_server, reset_socket_server
-
 # Status colors are centralized in core.colors
 from ..core.colors import STATUS_MAP as STATUS_COLORS
+from .pipeline import Layer, RenderPipeline
+from .renderer import FrameRenderer
+from .socket_server import get_socket_server
 
 __all__ = [
     # Renderer
@@ -15,7 +14,6 @@ __all__ = [
     "Layer",
     # Socket server
     "get_socket_server",
-    "reset_socket_server",
     # Colors
     "STATUS_COLORS",
 ]

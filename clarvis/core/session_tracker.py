@@ -110,10 +110,7 @@ class SessionTracker:
         """Remove sessions inactive for > TIMEOUT."""
         now = time.time()
         sessions = self.state.get("sessions")
-        active = {
-            sid: data for sid, data in sessions.items()
-            if now - data.get("last_seen", 0) < self.TIMEOUT
-        }
+        active = {sid: data for sid, data in sessions.items() if now - data.get("last_seen", 0) < self.TIMEOUT}
         if len(active) != len(sessions):
             self.state.update("sessions", active)
             if self.displayed_id not in active:

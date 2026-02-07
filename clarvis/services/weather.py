@@ -31,31 +31,32 @@ WEATHER_CODES = {
 # Base intensity by weather code (0-1 scale)
 # More severe weather = higher base intensity
 WEATHER_CODE_INTENSITY = {
-    0: 0.0,    # Clear
-    1: 0.0,    # Mostly Clear
-    2: 0.0,    # Partly Cloudy
-    3: 0.1,    # Overcast
-    45: 0.2,   # Foggy
-    48: 0.3,   # Icy Fog
-    51: 0.3,   # Light Drizzle
-    53: 0.4,   # Drizzle
-    55: 0.5,   # Heavy Drizzle
-    61: 0.4,   # Light Rain
-    63: 0.6,   # Rain
-    65: 0.8,   # Heavy Rain
-    71: 0.4,   # Light Snow
-    73: 0.6,   # Snow
-    75: 0.8,   # Heavy Snow
-    80: 0.5,   # Light Showers
-    81: 0.7,   # Showers
-    82: 0.9,   # Heavy Showers
-    95: 1.0,   # Thunderstorm
+    0: 0.0,  # Clear
+    1: 0.0,  # Mostly Clear
+    2: 0.0,  # Partly Cloudy
+    3: 0.1,  # Overcast
+    45: 0.2,  # Foggy
+    48: 0.3,  # Icy Fog
+    51: 0.3,  # Light Drizzle
+    53: 0.4,  # Drizzle
+    55: 0.5,  # Heavy Drizzle
+    61: 0.4,  # Light Rain
+    63: 0.6,  # Rain
+    65: 0.8,  # Heavy Rain
+    71: 0.4,  # Light Snow
+    73: 0.6,  # Snow
+    75: 0.8,  # Heavy Snow
+    80: 0.5,  # Light Showers
+    81: 0.7,  # Showers
+    82: 0.9,  # Heavy Showers
+    95: 1.0,  # Thunderstorm
 }
 
 
 @dataclass
 class WeatherData:
     """Weather data from Open-Meteo API."""
+
     temperature: float
     weather_code: int
     wind_speed: float
@@ -113,12 +114,7 @@ def calculate_intensity(
     snow_factor = min(snowfall / 5.0, 1.0)
 
     # Weighted combination
-    intensity = (
-        base * 0.4 +
-        wind_factor * 0.2 +
-        precip_factor * 0.2 +
-        snow_factor * 0.2
-    )
+    intensity = base * 0.4 + wind_factor * 0.2 + precip_factor * 0.2 + snow_factor * 0.2
 
     # Clamp to 0-1
     return min(max(intensity, 0.0), 1.0)

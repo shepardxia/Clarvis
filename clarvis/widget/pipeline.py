@@ -7,11 +7,13 @@ making layers fully opaque within their rendered area.
 """
 
 from __future__ import annotations
-import numpy as np
+
 from typing import Callable
 
+import numpy as np
+
 # Space character code - background fill
-SPACE = ord(' ')
+SPACE = ord(" ")
 
 
 def str_to_matrix(template: str) -> np.ndarray:
@@ -26,7 +28,7 @@ def str_to_matrix(template: str) -> np.ndarray:
         '''
         matrix = str_to_matrix(template)  # shape (3, 5)
     """
-    lines = template.strip('\n').split('\n')
+    lines = template.strip("\n").split("\n")
     if not lines:
         return np.array([[]], dtype=np.uint32)
 
@@ -42,9 +44,15 @@ def str_to_matrix(template: str) -> np.ndarray:
 class Layer:
     """A single rendering layer with char and color arrays and bounding box tracking."""
 
-    def __init__(self, name: str, priority: int, width: int, height: int,
-                 render_func: Callable[['Layer'], None] | None = None,
-                 transparent: bool = False):
+    def __init__(
+        self,
+        name: str,
+        priority: int,
+        width: int,
+        height: int,
+        render_func: Callable[["Layer"], None] | None = None,
+        transparent: bool = False,
+    ):
         self.name = name
         self.priority = priority
         self.width = width
@@ -146,7 +154,7 @@ class Layer:
         # Update bbox
         self._expand_bbox_rect(dst_x1, dst_y1, dst_x2 - dst_x1, dst_y2 - dst_y1)
 
-    def fill(self, x: int, y: int, w: int, h: int, char: str = ' ', color: int = 7):
+    def fill(self, x: int, y: int, w: int, h: int, char: str = " ", color: int = 7):
         """Fill a rectangle."""
         x1, y1 = max(0, x), max(0, y)
         x2, y2 = min(self.width, x + w), min(self.height, y + h)
@@ -168,9 +176,13 @@ class RenderPipeline:
         self.out_chars = np.full((height, width), SPACE, dtype=np.uint32)
         self.out_colors = np.zeros((height, width), dtype=np.uint8)
 
-    def add_layer(self, name: str, priority: int,
-                  render_func: Callable[[Layer], None] | None = None,
-                  transparent: bool = False) -> Layer:
+    def add_layer(
+        self,
+        name: str,
+        priority: int,
+        render_func: Callable[[Layer], None] | None = None,
+        transparent: bool = False,
+    ) -> Layer:
         """Create and register a new layer."""
         layer = Layer(name, priority, self.width, self.height, render_func, transparent)
         self.layers[name] = layer
@@ -198,7 +210,7 @@ class RenderPipeline:
         self.out_colors.fill(0)
 
         # Sort layers by priority
-        sorted_layers = sorted(self.layers.values(), key=lambda l: l.priority)
+        sorted_layers = sorted(self.layers.values(), key=lambda layer: layer.priority)
 
         # Render and composite each layer
         for layer in sorted_layers:
@@ -215,11 +227,10 @@ class RenderPipeline:
                     # Only overwrite non-space characters (weather shows through gaps)
                     region = layer.chars[y1:y2, x1:x2]
                     mask = region != SPACE
-                    self.out_chars[y1:y2, x1:x2] = np.where(
-                        mask, region, self.out_chars[y1:y2, x1:x2])
+                    self.out_chars[y1:y2, x1:x2] = np.where(mask, region, self.out_chars[y1:y2, x1:x2])
                     self.out_colors[y1:y2, x1:x2] = np.where(
-                        mask, layer.colors[y1:y2, x1:x2],
-                        self.out_colors[y1:y2, x1:x2])
+                        mask, layer.colors[y1:y2, x1:x2], self.out_colors[y1:y2, x1:x2]
+                    )
                 else:
                     self.out_chars[y1:y2, x1:x2] = layer.chars[y1:y2, x1:x2]
                     self.out_colors[y1:y2, x1:x2] = layer.colors[y1:y2, x1:x2]
@@ -229,7 +240,7 @@ class RenderPipeline:
     def to_string(self) -> str:
         """Render and return plain text."""
         self.render()
-        return '\n'.join(''.join(chr(c) for c in row) for row in self.out_chars)
+        return "\n".join("".join(chr(c) for c in row) for row in self.out_chars)
 
     def to_grid(self) -> tuple[list[str], list[list[int]]]:
         """Render and return structured grid data.
@@ -240,6 +251,5 @@ class RenderPipeline:
             Color 0 means "use theme/default color".
         """
         self.render()
-        rows = [''.join(chr(c) for c in row) for row in self.out_chars]
+        rows = ["".join(chr(c) for c in row) for row in self.out_chars]
         return rows, self.out_colors.tolist()
-

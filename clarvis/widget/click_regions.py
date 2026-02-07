@@ -60,7 +60,9 @@ class ClickRegionManager:
     def push_regions(self) -> None:
         """Push current regions to widget (call on widget connect too)."""
         regions_list = [asdict(r) for r in self._regions.values()]
-        self._socket.send_command({
-            "method": "set_click_regions",
-            "params": {"regions": regions_list},
-        })
+        self._socket.send_command(
+            {
+                "method": "set_click_regions",
+                "params": {"regions": regions_list},
+            }
+        )

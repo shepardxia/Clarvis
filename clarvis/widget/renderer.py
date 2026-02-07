@@ -13,11 +13,11 @@ Uses the layered RenderPipeline for compositing:
 from datetime import datetime
 from typing import Optional
 
-from .pipeline import RenderPipeline
-from ..elements.registry import ElementRegistry
-from ..archetypes import FaceArchetype, WeatherArchetype, ProgressArchetype
+from ..archetypes import FaceArchetype, ProgressArchetype, WeatherArchetype
 from ..archetypes.weather import BoundingBox
 from ..core.colors import StatusColors
+from ..elements.registry import ElementRegistry
+from .pipeline import RenderPipeline
 
 
 class FrameRenderer:
@@ -42,9 +42,15 @@ class FrameRenderer:
     CELESTIAL_WIDTH = 3
     CELESTIAL_HEIGHT = 3
 
-    def __init__(self, width: int = 18, height: int = 10,
-                 avatar_x_offset: int = 0, avatar_y_offset: int = 0,
-                 bar_x_offset: int = 0, bar_y_offset: int = 0):
+    def __init__(
+        self,
+        width: int = 18,
+        height: int = 10,
+        avatar_x_offset: int = 0,
+        avatar_y_offset: int = 0,
+        bar_x_offset: int = 0,
+        bar_y_offset: int = 0,
+    ):
         self.width = width
         self.height = height
 
@@ -87,29 +93,29 @@ class FrameRenderer:
 
         # Animation state
         self.current_status = "idle"
-        
+
         # Pre-warm all caches for instant runtime performance
         self.prewarm_caches()
 
     def prewarm_caches(self) -> dict:
         """Pre-warm all archetype caches for instant runtime performance.
-        
+
         Call at startup to avoid computation during rendering.
         Returns combined stats from all archetypes.
         """
         stats = {
-            'face': self.face.prewarm_cache(),
-            'progress': self.progress.prewarm_cache(),
-            'weather': self.weather.prewarm_shapes(),
+            "face": self.face.prewarm_cache(),
+            "progress": self.progress.prewarm_cache(),
+            "weather": self.weather.prewarm_shapes(),
         }
         return stats
 
     def cache_stats(self) -> dict:
         """Return combined cache statistics from all archetypes."""
         return {
-            'face': self.face.cache_stats(),
-            'progress': self.progress.cache_stats(),
-            'weather': self.weather.cache_stats(),
+            "face": self.face.cache_stats(),
+            "progress": self.progress.cache_stats(),
+            "weather": self.weather.cache_stats(),
         }
 
     def _recalculate_layout(self):
@@ -166,7 +172,7 @@ class FrameRenderer:
     # Mic icon display
     MIC_ICONS = {
         "bracket": {"on": "[M]", "off": "[\u00b7]"},
-        "dot":     {"on": "\u25c9",  "off": "\u25cb"},
+        "dot": {"on": "\u25c9", "off": "\u25cb"},
     }
     MIC_COLOR_OFF = 240  # dim gray
 
@@ -197,12 +203,7 @@ class FrameRenderer:
     def _render_weather(self):
         """Render weather layer."""
         self.weather_layer.clear()
-        avatar_box = BoundingBox(
-            x=self.avatar_x,
-            y=self.avatar_y,
-            w=self.AVATAR_WIDTH,
-            h=self.AVATAR_HEIGHT
-        )
+        avatar_box = BoundingBox(x=self.avatar_x, y=self.avatar_y, w=self.AVATAR_WIDTH, h=self.AVATAR_HEIGHT)
         self.weather.set_exclusion_zones([avatar_box])
         self.weather.render(self.weather_layer, color=15)
 
@@ -257,7 +258,7 @@ class FrameRenderer:
             x=self.bar_x,
             y=self.bar_y,
             percent=context_percent,
-            color=StatusColors.get("idle").ansi
+            color=StatusColors.get("idle").ansi,
         )
 
     def _render_mic_icon(self):
@@ -290,7 +291,7 @@ class FrameRenderer:
         if not self._voice_active or not self._voice_text:
             return
 
-        revealed = self._voice_text[:self._voice_reveal_chars]
+        revealed = self._voice_text[: self._voice_reveal_chars]
         if not revealed:
             return
 
@@ -299,7 +300,7 @@ class FrameRenderer:
 
         # Tail-scroll: show last N lines if text exceeds available rows
         if len(lines) > self.TEXT_MAX_ROWS:
-            lines = lines[-self.TEXT_MAX_ROWS:]
+            lines = lines[-self.TEXT_MAX_ROWS :]
 
         for row_idx, line in enumerate(lines):
             y = self.TEXT_Y_START + row_idx
@@ -310,7 +311,7 @@ class FrameRenderer:
     @staticmethod
     def _word_wrap(text: str, width: int) -> list[str]:
         """Word-wrap text to fit within width columns."""
-        words = text.split(' ')
+        words = text.split(" ")
         lines: list[str] = []
         current = ""
 
@@ -336,7 +337,12 @@ class FrameRenderer:
             lines.append(current)
         return lines
 
-    def render_grid(self, context_percent: float = 0, whimsy_verb: Optional[str] = None, hour: Optional[int] = None) -> tuple[list[str], list[list[int]]]:
+    def render_grid(
+        self,
+        context_percent: float = 0,
+        whimsy_verb: Optional[str] = None,
+        hour: Optional[int] = None,
+    ) -> tuple[list[str], list[list[int]]]:
         """Render complete frame and return structured grid data.
 
         Returns:

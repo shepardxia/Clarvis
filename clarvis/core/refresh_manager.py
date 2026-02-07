@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from . import get_current_time, DEFAULT_TIMEZONE
+from . import DEFAULT_TIMEZONE, get_current_time
 
 if TYPE_CHECKING:
-    from .state import StateStore
     from .display_manager import DisplayManager
+    from .state import StateStore
 
 
 class RefreshManager:
@@ -33,6 +33,7 @@ class RefreshManager:
     def refresh_location(self) -> tuple[float, float, str]:
         """Refresh location data."""
         from ..services.location import get_location_full
+
         location_data = get_location_full()
         self.state.update("location", location_data)
         return location_data["latitude"], location_data["longitude"], location_data["city"]
@@ -46,9 +47,11 @@ class RefreshManager:
         """Refresh weather data."""
         if latitude is None or longitude is None:
             from ..services import get_location
+
             latitude, longitude, city = get_location()
 
         from ..services import fetch_weather
+
         weather = fetch_weather(latitude, longitude)
         weather_dict = {
             **weather.to_dict(),

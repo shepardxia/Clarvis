@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from heybuddy import WakeWordDetector, DetectorConfig
+from heybuddy import DetectorConfig, WakeWordDetector
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +21,7 @@ class WakeWordConfig:
     """Clarvis-side configuration (serialised in config.json)."""
 
     enabled: bool = False
-    model_path: Path = field(
-        default_factory=lambda: DEFAULT_MODEL_DIR / "clarvis_final.onnx"
-    )
+    model_path: Path = field(default_factory=lambda: DEFAULT_MODEL_DIR / "clarvis_final.onnx")
     threshold: float = 0.75
     vad_threshold: float = 0.75
     cooldown: float = 2.0

@@ -4,13 +4,11 @@ Single tool that accepts DSL command strings via the clautify package.
 """
 
 import time
+from contextlib import asynccontextmanager
 from typing import Annotated
 
-from contextlib import asynccontextmanager
-
-from fastmcp import FastMCP, Context
+from fastmcp import Context, FastMCP
 from pydantic import Field
-
 
 # --- Default session factory (lazy init) ---
 
@@ -21,6 +19,7 @@ def _default_get_session():
     """Lazy SpotifySession singleton. No lock needed — asyncio is single-threaded for sync calls."""
     if "instance" not in _session_cache:
         from clautify.dsl import SpotifySession
+
         session = SpotifySession.from_config(eager=False)
         check = session.health_check()
         if check.get("authenticated"):
@@ -56,10 +55,12 @@ def _ensure_devices(session):
 
 # --- Tool ---
 
+
 async def spotify(
-    command: Annotated[str, Field(
-        description='Command string, e.g. \'play "jazz" volume 70 mode shuffle on "Den"\''
-    )],
+    command: Annotated[
+        str,
+        Field(description='Command string, e.g. \'play "jazz" volume 70 mode shuffle on "Den"\''),
+    ],
     ctx: Context = None,
 ) -> dict:
     """Execute a Spotify command using natural command strings.
@@ -74,6 +75,7 @@ async def spotify(
         queue "Stairway to Heaven"
         skip 3
         volume 50
+        volume +10
         get devices
 
     ACTIONS: play "query", pause, resume, skip [N], seek <ms>,
@@ -87,7 +89,7 @@ async def spotify(
     recommend N for <playlist-URI>.
 
     COMPOSABLE MODIFIERS (chain onto actions, or use standalone):
-    volume N (0-100), mode shuffle|repeat|normal, on "device name".
+    volume N (0-100, or +N/-N for relative), mode shuffle|repeat|normal, on "device name".
     Query-only modifiers: limit N, offset N.
 
     TARGETS: Spotify URIs (spotify:track:abc) or quoted strings.

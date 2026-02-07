@@ -6,15 +6,14 @@ the appropriate service (refresh, whimsy, session_tracker, etc.).
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from .state import StateStore
-from .session_tracker import SessionTracker
-from .refresh_manager import RefreshManager
-from .ipc import DaemonServer
 from ..services.thinking_feed import get_session_manager
 from ..services.whimsy_verb import WhimsyManager
-from ..services.token_usage import TokenUsageService
+from .ipc import DaemonServer
+from .refresh_manager import RefreshManager
+from .session_tracker import SessionTracker
+from .state import StateStore
 
 
 class CommandHandlers:

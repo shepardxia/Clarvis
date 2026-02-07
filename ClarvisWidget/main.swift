@@ -3,18 +3,6 @@ import Foundation
 import Speech
 import AVFoundation
 
-private let debugLogPath = "/tmp/clarvis-widget-debug.log"
-func debugLog(_ message: String) {
-    let line = "\(Date()): \(message)\n"
-    if let fh = FileHandle(forWritingAtPath: debugLogPath) {
-        fh.seekToEndOfFile()
-        fh.write(line.data(using: .utf8)!)
-        fh.closeFile()
-    } else {
-        FileManager.default.createFile(atPath: debugLogPath, contents: line.data(using: .utf8))
-    }
-}
-
 // MARK: - Configuration
 
 // RGB as [r, g, b] array
@@ -33,8 +21,8 @@ struct ThemeConfig: Codable {
 }
 
 struct DisplayConfig: Codable {
-    var window_width: CGFloat = 280
-    var window_height: CGFloat = 220
+    var grid_width: Int = 29
+    var grid_height: Int = 12
     var corner_radius: CGFloat = 24
     var bg_alpha: CGFloat = 0.75
     var font_size: CGFloat = 14
@@ -49,14 +37,22 @@ struct WidgetConfigFile: Codable {
 }
 
 struct WidgetConfig {
-    var windowWidth: CGFloat = 280
-    var windowHeight: CGFloat = 220
+    var gridWidth: Int = 29
+    var gridHeight: Int = 12
     var cornerRadius: CGFloat = 24
     var bgAlpha: CGFloat = 0.75
     var fontSize: CGFloat = 14
     var fontName: String = "Courier"
     var borderWidth: CGFloat = 2
     var pulseSpeed: Double = 0.1
+
+    // Derived from grid + font at load time
+    var charWidth: CGFloat = 8.4
+    var lineHeight: CGFloat = 16.8
+    var windowWidth: CGFloat = 280
+    var windowHeight: CGFloat = 220
+
+    static let padding: CGFloat = 20  // textField inset from window edges
 
     static func load() -> WidgetConfig {
         let binaryPath = CommandLine.arguments[0]
@@ -68,9 +64,9 @@ struct WidgetConfig {
             return WidgetConfig()
         }
 
-        return WidgetConfig(
-            windowWidth: file.display.window_width,
-            windowHeight: file.display.window_height,
+        var config = WidgetConfig(
+            gridWidth: file.display.grid_width,
+            gridHeight: file.display.grid_height,
             cornerRadius: file.display.corner_radius,
             bgAlpha: file.display.bg_alpha,
             fontSize: file.display.font_size,
@@ -78,23 +74,31 @@ struct WidgetConfig {
             borderWidth: file.display.border_width,
             pulseSpeed: file.display.pulse_speed
         )
+
+        // Measure actual font metrics — single source of truth for rendering + hit-testing
+        let font = NSFont(name: config.fontName, size: config.fontSize)
+            ?? NSFont.monospacedSystemFont(ofSize: config.fontSize, weight: .medium)
+        config.charWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
+        config.lineHeight = config.fontSize * 1.2
+
+        // Derive window size from grid × font metrics
+        config.windowWidth = CGFloat(config.gridWidth) * config.charWidth + 2 * padding
+        config.windowHeight = CGFloat(config.gridHeight) * config.lineHeight + 2 * padding
+
+        return config
     }
 }
 
 struct Config {
     static let socketPath = "/tmp/clarvis-widget.sock"
-    static let jsonPath = "/tmp/widget-display.json"  // Fallback
-    static let pollInterval: TimeInterval = 0.2
 
-    // Loaded from config file or defaults
     static let widgetConfig = WidgetConfig.load()
     static var windowSize: NSSize { NSSize(width: widgetConfig.windowWidth, height: widgetConfig.windowHeight) }
-    static var cornerRadius: CGFloat { widgetConfig.cornerRadius }
-    static var bgAlpha: CGFloat { widgetConfig.bgAlpha }
-    static var fontSize: CGFloat { widgetConfig.fontSize }
-    static var fontName: String { widgetConfig.fontName }
-    static var borderWidth: CGFloat { widgetConfig.borderWidth }
-    static var pulseSpeed: Double { widgetConfig.pulseSpeed }
+
+    static var font: NSFont {
+        NSFont(name: widgetConfig.fontName, size: widgetConfig.fontSize)
+            ?? NSFont.monospacedSystemFont(ofSize: widgetConfig.fontSize, weight: .medium)
+    }
 }
 
 // MARK: - Grid Renderer
@@ -502,21 +506,21 @@ class PulsingBorderView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2),
-                                 xRadius: Config.cornerRadius,
-                                 yRadius: Config.cornerRadius)
+                                 xRadius: Config.widgetConfig.cornerRadius,
+                                 yRadius: Config.widgetConfig.cornerRadius)
 
-        NSColor(red: 0.05, green: 0.05, blue: 0.08, alpha: Config.bgAlpha).setFill()
+        NSColor(red: 0.05, green: 0.05, blue: 0.08, alpha: Config.widgetConfig.bgAlpha).setFill()
         path.fill()
 
         let intensity = CGFloat((sin(pulsePhase) + 1) / 2)
         let alpha = 0.4 + 0.6 * intensity
         borderColor.withAlphaComponent(alpha).setStroke()
-        path.lineWidth = Config.borderWidth + intensity * 1.5
+        path.lineWidth = Config.widgetConfig.borderWidth + intensity * 1.5
         path.stroke()
     }
 
     func pulse() {
-        pulsePhase += Config.pulseSpeed
+        pulsePhase += Config.widgetConfig.pulseSpeed
         needsDisplay = true
     }
 
@@ -540,8 +544,6 @@ class ClickableWindow: NSWindow {
     var clickRegions: [ClickRegion] = []
     var gridRows = 0
     var gridCols = 0
-    var charWidth: CGFloat = 8.4  // Courier at default size
-    var lineHeight: CGFloat = 16.8  // fontSize * 1.2
 
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
@@ -551,11 +553,8 @@ class ClickableWindow: NSWindow {
             // clicks on mouseDown: if the hit lands inside a click region, fire
             // immediately and skip super (preventing a drag); otherwise fall
             // through to super so the window remains draggable.
-            let cellResult = gridCell(at: event.locationInWindow)
-            debugLog("mouseDown at window=(\(event.locationInWindow.x),\(event.locationInWindow.y)) -> grid=\(cellResult.map { "(\($0.row),\($0.col))" } ?? "nil"), regions=\(clickRegions.count)")
-            if let (row, col) = cellResult,
+            if let (row, col) = gridCell(at: event.locationInWindow),
                let region = clickRegions.first(where: { $0.contains(row: row, col: col) }) {
-                debugLog("HIT region '\(region.id)' — sending region_click")
                 let socketClient = (NSApp.delegate as? AppDelegate)?.widgetController?.socketClient
                 socketClient?.send([
                     "method": "region_click",
@@ -585,14 +584,28 @@ class ClickableWindow: NSWindow {
     }
 
     private func gridCell(at windowPoint: NSPoint) -> (row: Int, col: Int)? {
-        guard let textField = contentView?.subviews.first(where: { $0 is NSTextField }) as? NSTextField else {
+        guard let textField = contentView?.subviews.first(where: { $0 is NSTextField }) as? NSTextField,
+              let cell = textField.cell else {
             return nil
         }
-        let textPoint = textField.convert(windowPoint, from: nil)
 
-        // TextField uses standard macOS coords (origin bottom-left)
-        let col = Int(textPoint.x / charWidth)
-        let row = gridRows - 1 - Int(textPoint.y / lineHeight)
+        // Convert window point to textField's local coordinate system.
+        // NSTextField.isFlipped = true (Apple default), so Y=0 is the TOP
+        // of the text field and Y increases downward — matching grid row order.
+        let localPoint = textField.convert(windowPoint, from: nil)
+
+        // Get the actual text drawing area (accounts for cell internal padding).
+        let titleRect = cell.titleRect(forBounds: textField.bounds)
+
+        // Compute position relative to the text content area.
+        let textX = localPoint.x - titleRect.origin.x
+        let textY = localPoint.y - titleRect.origin.y
+
+        // Map to grid coordinates using config-derived font metrics.
+        // No Y inversion needed — flipped coords already run top-to-bottom,
+        // matching grid row 0 at the top.
+        let col = Int(textX / Config.widgetConfig.charWidth)
+        let row = Int(textY / Config.widgetConfig.lineHeight)
 
         guard row >= 0, row < gridRows, col >= 0, col < gridCols else { return nil }
         return (row, col)
@@ -603,10 +616,6 @@ class ClickableWindow: NSWindow {
         gridCols = cols
     }
 
-    func setCharDimensions(width: CGFloat, height: CGFloat) {
-        charWidth = width
-        lineHeight = height
-    }
 }
 
 // MARK: - Widget Window Controller
@@ -617,7 +626,6 @@ class WidgetWindowController: NSWindowController {
     var responseOverlay: NSScrollView!
     var responseTextView: NSTextView!
     var pulseTimer: Timer?
-    var pollTimer: Timer?  // Fallback polling
     var socketClient: SocketClient!
     var asrManager: ASRManager!
     var socketConnected = false
@@ -671,8 +679,7 @@ class WidgetWindowController: NSWindowController {
         textField.isSelectable = false
         textField.backgroundColor = .clear
         textField.textColor = .gray
-        textField.font = NSFont(name: Config.fontName, size: Config.fontSize)
-            ?? NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
+        textField.font = Config.font
         textField.alignment = .left
         textField.stringValue = "Connecting..."
 
@@ -754,24 +761,6 @@ class WidgetWindowController: NSWindowController {
             self?.borderView.pulse()
         }
 
-        // Fallback file polling (only when socket not connected)
-        pollTimer = Timer.scheduledTimer(withTimeInterval: Config.pollInterval, repeats: true) { [weak self] _ in
-            guard let self = self, !self.socketConnected else { return }
-            self.loadDataFromFile()
-        }
-
-        // Initial file load
-        loadDataFromFile()
-    }
-
-    func loadDataFromFile() {
-        let path = Config.jsonPath
-        guard FileManager.default.fileExists(atPath: path),
-              let data = FileManager.default.contents(atPath: path),
-              let widgetData = try? JSONDecoder().decode(WidgetData.self, from: data) else {
-            return
-        }
-        updateDisplay(widgetData)
     }
 
     func updateDisplay(_ data: WidgetData) {
@@ -779,18 +768,14 @@ class WidgetWindowController: NSWindowController {
         borderView.borderColor = color
 
         if let rows = data.rows, let cellColors = data.cell_colors {
-            let font = NSFont(name: Config.fontName, size: Config.fontSize)
-                ?? NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
+            let font = Config.font
             textField.attributedStringValue = GridRenderer.build(
                 rows: rows, colors: cellColors, defaultColor: color, font: font)
 
-            // Update grid dimensions for click hit-testing
+            // Update grid dimensions for click hit-testing (bounds check only;
+            // charWidth/lineHeight are derived once at startup in Config).
             if let clickableWindow = window as? ClickableWindow {
                 clickableWindow.setGridDimensions(rows: rows.count, cols: rows.first?.count ?? 0)
-                clickableWindow.setCharDimensions(
-                    width: font.maximumAdvancement.width,
-                    height: font.pointSize * 1.2
-                )
             }
         }
     }
@@ -838,15 +823,8 @@ class WidgetWindowController: NSWindowController {
     }
 
     func updateClickRegions(_ regionsData: [[String: Any]]) {
-        guard let clickableWindow = window as? ClickableWindow else {
-            debugLog("updateClickRegions: window is not ClickableWindow")
-            return
-        }
+        guard let clickableWindow = window as? ClickableWindow else { return }
         clickableWindow.clickRegions = regionsData.compactMap { ClickRegion(from: $0) }
-        debugLog("Updated click regions: \(clickableWindow.clickRegions.count) regions")
-        for r in clickableWindow.clickRegions {
-            debugLog("  region '\(r.id)' at row=\(r.row) col=\(r.col) w=\(r.width) h=\(r.height)")
-        }
     }
 
     func startASR(timeout: TimeInterval, silenceTimeout: TimeInterval, id: String) {

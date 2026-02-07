@@ -7,8 +7,8 @@ like physics simulation, animation state machines, etc.
 
 from .base import Archetype, Renderable
 from .face import FaceArchetype
-from .weather import WeatherArchetype
 from .progress import ProgressArchetype
+from .weather import WeatherArchetype
 
 __all__ = [
     "Archetype",

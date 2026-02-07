@@ -79,11 +79,7 @@ class DaemonServer:
             try:
                 client, _ = self.server_socket.accept()
                 # Handle each client in a thread
-                threading.Thread(
-                    target=self._handle_client,
-                    args=(client,),
-                    daemon=True
-                ).start()
+                threading.Thread(target=self._handle_client, args=(client,), daemon=True).start()
             except socket.timeout:
                 continue
             except OSError:

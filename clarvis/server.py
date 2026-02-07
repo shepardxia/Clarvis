@@ -7,32 +7,30 @@ Dependencies injected via lifespan context for testability.
 
 import json
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Optional
 
-from contextlib import asynccontextmanager
-
-from fastmcp import FastMCP, Context
+from fastmcp import Context, FastMCP
 from pydantic import Field
 
-from .core.ipc import get_daemon_client, DaemonClient
+from .core.ipc import DaemonClient, get_daemon_client
 from .services import get_session_manager
 from .spotify_tools import create_spotify_server
 
-
 # --- Tool implementations (module-level, registered by create_app) ---
+
 
 # Helper to get daemon client from context, with connectivity check.
 def _client(ctx: Context) -> DaemonClient:
     client = ctx.fastmcp._lifespan_result["client"]
     if not client.is_daemon_running():
-        raise ConnectionError(
-            "Clarvis daemon is not running. Start it with: clarvis start"
-        )
+        raise ConnectionError("Clarvis daemon is not running. Start it with: clarvis start")
     return client
 
 
 # -- Widget Tools --
+
 
 async def ping(ctx: Context = None) -> str:
     """Test that the server is running and daemon is connected."""
@@ -67,7 +65,7 @@ async def get_time(
     try:
         client = _client(ctx)
         time_dict = client.call("refresh_time", timezone=timezone)
-        dt = datetime.fromisoformat(time_dict['timestamp'])
+        dt = datetime.fromisoformat(time_dict["timestamp"])
         return f"{dt.strftime('%A, %B %d, %Y %H:%M')} ({time_dict['timezone']})"
     except ConnectionError as e:
         return str(e)
@@ -94,7 +92,7 @@ async def get_music_context(ctx: Context = None) -> str:
     try:
         client = _client(ctx)
         time_dict = client.call("refresh_time")
-        dt = datetime.fromisoformat(time_dict['timestamp'])
+        dt = datetime.fromisoformat(time_dict["timestamp"])
         sections.append(f"## Current Time\n{dt.strftime('%A, %B %d, %Y %H:%M')} ({time_dict['timezone']})")
     except Exception:
         sections.append("## Current Time\nUnavailable")
@@ -124,6 +122,7 @@ async def get_music_context(ctx: Context = None) -> str:
 
 
 # -- Thinking Feed Tools (no daemon client needed) --
+
 
 async def list_active_sessions() -> list[dict]:
     """List active Claude Code sessions with project name, status, and thought count."""
@@ -169,6 +168,7 @@ _SESSION_TOOLS = [
 
 
 # --- App factory ---
+
 
 def create_app(daemon_client=None, get_session=None):
     """Create the Clarvis MCP server.

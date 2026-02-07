@@ -12,8 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .state import StateStore
 from .session_tracker import SessionTracker
+from .state import StateStore
 from .tool_classifier import classify_tool
 
 
@@ -101,8 +101,7 @@ class HookProcessor:
 
         recent_outcomes = tool_outcomes[-5:] if len(tool_outcomes) >= 5 else tool_outcomes
         had_creative_success = any(
-            o.get("tool") in creative_tools and o.get("succeeded", False)
-            for o in recent_outcomes
+            o.get("tool") in creative_tools and o.get("succeeded", False) for o in recent_outcomes
         )
 
         if had_creative_success:
@@ -234,7 +233,7 @@ class HookProcessor:
                 return ""
 
             messages = []
-            with open(transcript_path, 'r') as f:
+            with open(transcript_path, "r") as f:
                 lines = f.readlines()
 
             for line in reversed(lines[-50:]):
@@ -246,8 +245,11 @@ class HookProcessor:
                         content = entry.get("message", {}).get("content", "")
 
                         if isinstance(content, list):
-                            texts = [c.get("text", "") for c in content
-                                     if c.get("type") == "text" and not c.get("text", "").startswith("<system")]
+                            texts = [
+                                c.get("text", "")
+                                for c in content
+                                if c.get("type") == "text" and not c.get("text", "").startswith("<system")
+                            ]
                             content = " ".join(texts)
 
                         if content and not content.startswith("<system"):

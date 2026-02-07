@@ -10,11 +10,12 @@ DEFAULT_TIMEZONE = "America/Los_Angeles"
 @dataclass
 class TimeData:
     """Current time data."""
-    time: str          # HH:MM format
-    date: str          # YYYY-MM-DD format
-    day: str           # Full day name (e.g., "Wednesday")
-    timezone: str      # Timezone name
-    iso_timestamp: str # Full ISO timestamp
+
+    time: str  # HH:MM format
+    date: str  # YYYY-MM-DD format
+    day: str  # Full day name (e.g., "Wednesday")
+    timezone: str  # Timezone name
+    iso_timestamp: str  # Full ISO timestamp
 
     def to_dict(self) -> dict:
         """Convert to dict for JSON serialization."""
@@ -25,12 +26,6 @@ class TimeData:
             "timezone": self.timezone,
             "timestamp": self.iso_timestamp,
         }
-
-    def format_display(self) -> str:
-        """Format for human-readable display."""
-        # Parse back to get full formatting
-        dt = datetime.fromisoformat(self.iso_timestamp)
-        return f"{dt.strftime('%A, %B %d, %Y %H:%M')} ({self.timezone})"
 
 
 def get_current_time(timezone: str = DEFAULT_TIMEZONE) -> TimeData:

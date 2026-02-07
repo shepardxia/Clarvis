@@ -32,28 +32,6 @@ class DisplayManager:
         self._thread: Optional[threading.Thread] = None
         self._state_store: Optional[StateStore] = None
 
-    def render_frame(
-        self,
-        status: str,
-        context_percent: float,
-        whimsy_verb: Optional[str] = None,
-    ) -> dict:
-        """Render a single frame and return the output dict.
-
-        Returns a dict with three fields:
-        - rows: list of strings (one per grid row)
-        - cell_colors: 2D list of ANSI 256 color codes per cell
-        - theme_color: [r, g, b] floats for border and default text color
-        """
-        with self._lock:
-            color_def = StatusColors.get(status)
-            rows, cell_colors = self.renderer.render_grid(context_percent, whimsy_verb)
-            return {
-                "rows": rows,
-                "cell_colors": cell_colors,
-                "theme_color": list(color_def.rgb),
-            }
-
     def push_frame(self, output: dict) -> None:
         """Push frame to socket."""
         self.socket_server.push_frame(output)

@@ -26,22 +26,22 @@ from pathlib import Path
 from typing import Optional
 
 from .core.cache import HUB_DATA_FILE, read_hub_data
-from .core.state import StateStore, get_state_store
-from .core.session_tracker import SessionTracker
+from .core.command_handlers import CommandHandlers
 from .core.display_manager import DisplayManager
+from .core.hook_processor import HookProcessor
+from .core.ipc import DaemonServer
 from .core.refresh_manager import RefreshManager
 from .core.scheduler import Scheduler
-from .core.ipc import DaemonServer
-from .core.hook_processor import HookProcessor
-from .core.command_handlers import CommandHandlers
+from .core.session_tracker import SessionTracker
+from .core.state import StateStore, get_state_store
 from .services.token_usage import TokenUsageService
-from .services.whimsy_verb import WhimsyManager
 from .services.voice_agent import VoiceAgent
 from .services.voice_orchestrator import VoiceCommandOrchestrator
-from .services.wake_word import WakeWordService, WakeWordConfig
-from .widget.renderer import FrameRenderer
-from .widget.config import get_config
+from .services.wake_word import WakeWordConfig, WakeWordService
+from .services.whimsy_verb import WhimsyManager
 from .widget.click_regions import ClickRegion, ClickRegionManager
+from .widget.config import get_config
+from .widget.renderer import FrameRenderer
 from .widget.socket_server import WidgetSocketServer, get_socket_server
 
 
@@ -79,11 +79,7 @@ class PidLock:
                     pass
 
         try:
-            self._lock_fd = os.open(
-                str(self.pid_file),
-                os.O_RDWR | os.O_CREAT,
-                0o644
-            )
+            self._lock_fd = os.open(str(self.pid_file), os.O_RDWR | os.O_CREAT, 0o644)
         except OSError as e:
             print(f"Error: Cannot create PID file {self.pid_file}: {e}", file=sys.stderr)
             return False
@@ -129,6 +125,7 @@ class PidLock:
 
     def _register_signal_handlers(self) -> None:
         """Register signal handlers for graceful cleanup."""
+
         def cleanup_handler(signum, frame):
             self.release()
             signal.signal(signum, signal.SIG_DFL)
@@ -283,15 +280,14 @@ class CentralHubDaemon:
     def _persist_to_file(self) -> None:
         """Persist current state to hub data file (atomic write)."""
         import tempfile
+
         self._persist_handle = None
         hub_data = self.state.get_all()
         hub_data["updated_at"] = datetime.now().isoformat()
 
-        fd, temp_path = tempfile.mkstemp(
-            suffix='.tmp', dir=HUB_DATA_FILE.parent
-        )
+        fd, temp_path = tempfile.mkstemp(suffix=".tmp", dir=HUB_DATA_FILE.parent)
         try:
-            with os.fdopen(fd, 'w') as f:
+            with os.fdopen(fd, "w") as f:
                 json.dump(hub_data, f)
             os.rename(temp_path, HUB_DATA_FILE)
         except Exception:
@@ -323,8 +319,7 @@ class CentralHubDaemon:
         processed = self.process_hook_event(raw_data)
         self.state.update("status", processed)
 
-        if (processed.get("session_id") == self.session_tracker.displayed_id
-                and not self.state.status_locked):
+        if processed.get("session_id") == self.session_tracker.displayed_id and not self.state.status_locked:
             self.display.set_status(processed.get("status", "idle"))
 
         event = raw_data.get("hook_event_name")
@@ -374,9 +369,7 @@ class CentralHubDaemon:
         if config.testing.enabled:
             self.display.set_status(config.testing.status)
             self.display.set_weather(
-                config.testing.weather,
-                config.testing.weather_intensity,
-                config.testing.wind_speed
+                config.testing.weather, config.testing.weather_intensity, config.testing.wind_speed
             )
             return config.testing.status, config.testing.context_percent, self.whimsy.current_verb
 
@@ -405,6 +398,7 @@ class CentralHubDaemon:
 
         if config.voice.provider == "mlx":
             from clarvis.services.mlx_voice_agent import MLXVoiceAgent
+
             self.voice_agent = MLXVoiceAgent(
                 event_loop=self._event_loop,
                 model_name=config.voice.mlx_model,
@@ -444,23 +438,23 @@ class CentralHubDaemon:
         if method == "region_click":
             region_id = message.get("params", {}).get("id", "")
             if self._event_loop:
-                self._event_loop.call_soon_threadsafe(
-                    self.click_manager.handle_click, region_id
-                )
+                self._event_loop.call_soon_threadsafe(self.click_manager.handle_click, region_id)
         elif self.voice_orchestrator:
             self.voice_orchestrator.handle_widget_message(message)
 
     def _register_mic_region(self) -> None:
         """Register the mic-toggle click region and update state."""
-        config = get_config()
         row, col, width = self.display.renderer.mic_icon_position()
         region = ClickRegion("mic_toggle", row=row, col=col, width=width, height=1)
         self.click_manager.register(region, self._toggle_voice)
-        self.state.update("mic", {
-            "visible": True,
-            "enabled": self.wake_word_service is not None and self.wake_word_service.is_running,
-            "style": "bracket",
-        })
+        self.state.update(
+            "mic",
+            {
+                "visible": True,
+                "enabled": self.wake_word_service is not None and self.wake_word_service.is_running,
+                "style": "bracket",
+            },
+        )
 
     def _toggle_voice(self) -> None:
         """Toggle wake word listening on/off (click handler for mic region).
@@ -527,9 +521,7 @@ class CentralHubDaemon:
         # Token usage service
         config = get_config()
         if config.token_usage.enabled:
-            self.token_usage_service = TokenUsageService(
-                poll_interval=config.token_usage.poll_interval
-            )
+            self.token_usage_service = TokenUsageService(poll_interval=config.token_usage.poll_interval)
             self.token_usage_service.start()
 
         # Wake word service
@@ -547,7 +539,10 @@ class CentralHubDaemon:
                 config=wake_config,
                 on_detected=self._on_wake_word_detected,
             )
-            print(f"[Daemon] Starting wake word service with threshold={wake_config.threshold}", flush=True)
+            print(
+                f"[Daemon] Starting wake word service with threshold={wake_config.threshold}",
+                flush=True,
+            )
             self.wake_word_service.start()
 
         # Display rendering
@@ -590,6 +585,7 @@ class CentralHubDaemon:
 
         # Thinking feed — poll transcript files for new thinking blocks
         from .services.thinking_feed import get_session_manager
+
         session_mgr = get_session_manager()
         self.scheduler.register(
             "thinking_feed",
@@ -614,9 +610,7 @@ class CentralHubDaemon:
 
         # Shut down voice agent first — needs the event loop still running
         if self.voice_agent and self._event_loop:
-            future = asyncio.run_coroutine_threadsafe(
-                self.voice_agent.shutdown(), self._event_loop
-            )
+            future = asyncio.run_coroutine_threadsafe(self.voice_agent.shutdown(), self._event_loop)
             try:
                 future.result(timeout=5.0)
             except Exception:

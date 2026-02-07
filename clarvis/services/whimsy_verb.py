@@ -20,8 +20,12 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
-SYSTEM_PROMPT = """Generate ONE whimsical gerund (-ing word) that captures what the assistant is doing. Match the task, mood, and environment. Prefer obscure/delightful words. NEVER use: Terminating, Killing, Deleting, Dying, Crashing.{avoid}
-Output ONLY the word."""
+SYSTEM_PROMPT = (
+    "Generate ONE whimsical gerund (-ing word) that captures what the assistant is doing. "
+    "Match the task, mood, and environment. Prefer obscure/delightful words. "
+    "NEVER use: Terminating, Killing, Deleting, Dying, Crashing.{avoid}\n"
+    "Output ONLY the word."
+)
 
 # Track recent verbs to avoid repetition
 _verb_history: list[str] = []

@@ -7,24 +7,24 @@ Uses Numba JIT compilation for performant physics simulation.
 
 import random
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Optional
 
 import numpy as np
 from numba import njit
 
-from ..widget.pipeline import Layer
 from ..elements.registry import ElementRegistry
+from ..widget.pipeline import Layer
 from .base import Archetype
-
 
 # =============================================================================
 # Shape and Particle Data Structures
 # =============================================================================
 
+
 @dataclass
 class Shape:
     """Multi-character pattern for weather particles."""
+
     pattern: tuple[str, ...]
     width: int
     height: int
@@ -35,8 +35,8 @@ class Shape:
         if not text:
             raise ValueError("Shape text cannot be empty")
         # Handle both literal newlines and escaped newlines
-        if '\n' in text:
-            pattern = tuple(line for line in text.split('\n') if line)
+        if "\n" in text:
+            pattern = tuple(line for line in text.split("\n") if line)
         else:
             pattern = (text,)
         height = len(pattern)
@@ -47,6 +47,7 @@ class Shape:
 @dataclass
 class Particle:
     """A single particle for ambient clouds (non-JIT path)."""
+
     x: float
     y: float
     vx: float
@@ -59,6 +60,7 @@ class Particle:
 @dataclass
 class BoundingBox:
     """Rectangle exclusion zone."""
+
     x: int
     y: int
     w: int
@@ -72,15 +74,21 @@ class BoundingBox:
 # Numba JIT-compiled particle physics
 # =============================================================================
 
+
 @njit(cache=True)
 def _tick_physics_batch(
-    p_x: np.ndarray, p_y: np.ndarray,
-    p_vx: np.ndarray, p_vy: np.ndarray,
-    p_age: np.ndarray, p_lifetime: np.ndarray,
+    p_x: np.ndarray,
+    p_y: np.ndarray,
+    p_vx: np.ndarray,
+    p_vy: np.ndarray,
+    p_age: np.ndarray,
+    p_lifetime: np.ndarray,
     p_shape_idx: np.ndarray,
-    n: int, num_ticks: int,
-    width: float, height: float,
-    death_prob: float
+    n: int,
+    num_ticks: int,
+    width: float,
+    height: float,
+    death_prob: float,
 ) -> int:
     """Batch physics update for multiple ticks. Returns new particle count."""
     for _ in range(num_ticks):
@@ -96,12 +104,12 @@ def _tick_physics_batch(
         for i in range(n):
             survives_death = np.random.random() >= death_prob
             alive = (
-                survives_death and
-                p_age[i] < p_lifetime[i] and
-                p_y[i] < height + 1 and
-                p_y[i] > -2 and
-                p_x[i] < width + 1 and
-                p_x[i] > -2
+                survives_death
+                and p_age[i] < p_lifetime[i]
+                and p_y[i] < height + 1
+                and p_y[i] > -2
+                and p_x[i] < width + 1
+                and p_x[i] > -2
             )
             if alive:
                 if write_idx != i:
@@ -119,12 +127,19 @@ def _tick_physics_batch(
 
 @njit(cache=True)
 def _spawn_particles_snow(
-    p_x: np.ndarray, p_y: np.ndarray,
-    p_vx: np.ndarray, p_vy: np.ndarray,
-    p_age: np.ndarray, p_lifetime: np.ndarray,
+    p_x: np.ndarray,
+    p_y: np.ndarray,
+    p_vx: np.ndarray,
+    p_vy: np.ndarray,
+    p_age: np.ndarray,
+    p_lifetime: np.ndarray,
     p_shape_idx: np.ndarray,
-    start: int, count: int,
-    width: float, speed_mult: float, wind_factor: float, num_shapes: int
+    start: int,
+    count: int,
+    width: float,
+    speed_mult: float,
+    wind_factor: float,
+    num_shapes: int,
 ):
     """Spawn snow particles."""
     base_vx = wind_factor * 0.15 * speed_mult
@@ -142,12 +157,18 @@ def _spawn_particles_snow(
 
 @njit(cache=True)
 def _spawn_particles_rain(
-    p_x: np.ndarray, p_y: np.ndarray,
-    p_vx: np.ndarray, p_vy: np.ndarray,
-    p_age: np.ndarray, p_lifetime: np.ndarray,
+    p_x: np.ndarray,
+    p_y: np.ndarray,
+    p_vx: np.ndarray,
+    p_vy: np.ndarray,
+    p_age: np.ndarray,
+    p_lifetime: np.ndarray,
     p_shape_idx: np.ndarray,
-    start: int, count: int,
-    width: float, speed_mult: float, num_shapes: int
+    start: int,
+    count: int,
+    width: float,
+    speed_mult: float,
+    num_shapes: int,
 ):
     """Spawn rain particles."""
     for i in range(count):
@@ -163,12 +184,18 @@ def _spawn_particles_rain(
 
 @njit(cache=True)
 def _spawn_particles_windy(
-    p_x: np.ndarray, p_y: np.ndarray,
-    p_vx: np.ndarray, p_vy: np.ndarray,
-    p_age: np.ndarray, p_lifetime: np.ndarray,
+    p_x: np.ndarray,
+    p_y: np.ndarray,
+    p_vx: np.ndarray,
+    p_vy: np.ndarray,
+    p_age: np.ndarray,
+    p_lifetime: np.ndarray,
     p_shape_idx: np.ndarray,
-    start: int, count: int,
-    height: float, speed_mult: float, num_shapes: int
+    start: int,
+    count: int,
+    height: float,
+    speed_mult: float,
+    num_shapes: int,
 ):
     """Spawn wind particles."""
     for i in range(count):
@@ -184,12 +211,19 @@ def _spawn_particles_windy(
 
 @njit(cache=True)
 def _spawn_particles_fog(
-    p_x: np.ndarray, p_y: np.ndarray,
-    p_vx: np.ndarray, p_vy: np.ndarray,
-    p_age: np.ndarray, p_lifetime: np.ndarray,
+    p_x: np.ndarray,
+    p_y: np.ndarray,
+    p_vx: np.ndarray,
+    p_vy: np.ndarray,
+    p_age: np.ndarray,
+    p_lifetime: np.ndarray,
     p_shape_idx: np.ndarray,
-    start: int, count: int,
-    width: float, height: float, speed_mult: float, num_shapes: int
+    start: int,
+    count: int,
+    width: float,
+    height: float,
+    speed_mult: float,
+    num_shapes: int,
 ):
     """Spawn fog/cloudy particles."""
     for i in range(count):
@@ -205,12 +239,16 @@ def _spawn_particles_fog(
 
 @njit(cache=True)
 def _compute_render_cells(
-    p_x: np.ndarray, p_y: np.ndarray, p_shape_idx: np.ndarray,
+    p_x: np.ndarray,
+    p_y: np.ndarray,
+    p_shape_idx: np.ndarray,
     n: int,
     shape_offsets: np.ndarray,
     shape_cell_counts: np.ndarray,
-    out_x: np.ndarray, out_y: np.ndarray,
-    out_shape_idx: np.ndarray, out_cell_idx: np.ndarray
+    out_x: np.ndarray,
+    out_y: np.ndarray,
+    out_shape_idx: np.ndarray,
+    out_cell_idx: np.ndarray,
 ) -> int:
     """Compute all render cell positions in one pass."""
     idx = 0
@@ -232,6 +270,7 @@ def _compute_render_cells(
 # Weather Archetype
 # =============================================================================
 
+
 class WeatherArchetype(Archetype):
     """
     Manages weather particle spawning and physics.
@@ -244,7 +283,7 @@ class WeatherArchetype(Archetype):
     def __init__(self, registry: ElementRegistry, width: int, height: int):
         self.width = width
         self.height = height
-        super().__init__(registry, 'weather')
+        super().__init__(registry, "weather")
 
         # Physics parameters (loaded from config)
         self._load_physics_params()
@@ -267,17 +306,17 @@ class WeatherArchetype(Archetype):
 
     def _load_physics_params(self) -> None:
         """Load physics parameters from config."""
-        physics = self.config.get('physics', {})
-        self.death_prob = physics.get('death_prob', 0.08)
-        self.max_particles_base = physics.get('max_particles_base', 40)
-        self.speed_multiplier = physics.get('speed_multiplier', 2.0)
-        self.batch_size = physics.get('batch_size', 128)
+        physics = self.config.get("physics", {})
+        self.death_prob = physics.get("death_prob", 0.08)
+        self.max_particles_base = physics.get("max_particles_base", 40)
+        self.speed_multiplier = physics.get("speed_multiplier", 2.0)
+        self.batch_size = physics.get("batch_size", 128)
 
-        ambient = self.config.get('ambient', {})
-        self.ambient_shapes = ambient.get('shapes', ['cloud_small', 'cloud_wisp', 'cloud_puff'])
-        self.ambient_max_clouds = ambient.get('max_clouds', 3)
-        self.ambient_spawn_rate = ambient.get('spawn_rate', 0.03)
-        self.ambient_spawn_zone = ambient.get('spawn_zone', 0.35)
+        ambient = self.config.get("ambient", {})
+        self.ambient_shapes = ambient.get("shapes", ["cloud_small", "cloud_wisp", "cloud_puff"])
+        self.ambient_max_clouds = ambient.get("max_clouds", 3)
+        self.ambient_spawn_rate = ambient.get("spawn_rate", 0.03)
+        self.ambient_spawn_zone = ambient.get("spawn_zone", 0.35)
 
     def _init_particle_arrays(self) -> None:
         """Initialize pre-allocated NumPy arrays for particles."""
@@ -301,13 +340,13 @@ class WeatherArchetype(Archetype):
         old_size = len(self.p_x)
         new_size = old_size * 2
 
-        for attr in ['p_x', 'p_y', 'p_vx', 'p_vy']:
+        for attr in ["p_x", "p_y", "p_vx", "p_vy"]:
             old = getattr(self, attr)
             new = np.zeros(new_size, dtype=np.float64)
             new[:old_size] = old
             setattr(self, attr, new)
 
-        for attr in ['p_age', 'p_lifetime', 'p_shape_idx']:
+        for attr in ["p_age", "p_lifetime", "p_shape_idx"]:
             old = getattr(self, attr)
             new = np.zeros(new_size, dtype=np.int64)
             new[:old_size] = old
@@ -319,20 +358,20 @@ class WeatherArchetype(Archetype):
 
     def _on_element_change(self, kind: str, name: str) -> None:
         """Handle element changes."""
-        if kind == 'archetypes' and name == 'weather':
+        if kind == "archetypes" and name == "weather":
             self._load_physics_params()
-        elif kind == 'weather' and name == self.weather_type:
+        elif kind == "weather" and name == self.weather_type:
             self._rebuild_shape_cache()
-        elif kind == 'particles':
+        elif kind == "particles":
             if self.weather_type:
                 self._rebuild_shape_cache()
 
     def _get_shape(self, name: str) -> Optional[Shape]:
         """Get shape from registry."""
-        elem = self.registry.get('particles', name)
+        elem = self.registry.get("particles", name)
         if not elem:
             return None
-        pattern = elem.get('pattern', '')
+        pattern = elem.get("pattern", "")
         return Shape.parse(pattern)
 
     def _rebuild_shape_cache(self) -> None:
@@ -345,13 +384,13 @@ class WeatherArchetype(Archetype):
             return
 
         # Get weather type definition
-        weather_def = self.registry.get('weather', self.weather_type)
+        weather_def = self.registry.get("weather", self.weather_type)
         if not weather_def:
             self._shape_offsets = None
             return
 
         # Load particle shapes
-        particle_names = weather_def.get('particles', [])
+        particle_names = weather_def.get("particles", [])
         for name in particle_names:
             shape = self._get_shape(name)
             if shape:
@@ -376,7 +415,7 @@ class WeatherArchetype(Archetype):
             cells = []
             for row_idx, row in enumerate(shape.pattern):
                 for col_idx, char in enumerate(row):
-                    if char != ' ':
+                    if char != " ":
                         cells.append((col_idx, row_idx, char))
             shape_cells.append(cells)
             max_cells = max(max_cells, len(cells))
@@ -402,37 +441,37 @@ class WeatherArchetype(Archetype):
 
     def prewarm_shapes(self) -> dict[str, int]:
         """Pre-build shape arrays for all weather types.
-        
+
         Weather particles are dynamic (positions change each tick),
         but shape data can be pre-computed for instant weather switching.
-        
+
         Returns stats dict with weather type -> particle count.
         """
         stats = {}
         original_type = self.weather_type
-        
+
         # Get all weather types
-        weather_names = self.registry.list_names('weather')
-        
+        weather_names = self.registry.list_names("weather")
+
         for name in weather_names:
             self.weather_type = name
             self._rebuild_shape_cache()
             stats[name] = len(self._shape_cache)
-        
+
         # Restore original state
         self.weather_type = original_type
         if original_type:
             self._rebuild_shape_cache()
-        
+
         return stats
 
     def cache_stats(self) -> dict:
         """Return shape cache statistics."""
         return {
-            'current_weather': self.weather_type,
-            'cached_shapes': len(self._shape_cache),
-            'active_particles': self.p_count,
-            'ambient_clouds': len(self.ambient_clouds)
+            "current_weather": self.weather_type,
+            "cached_shapes": len(self._shape_cache),
+            "active_particles": self.p_count,
+            "ambient_clouds": len(self.ambient_clouds),
         }
 
     def set_exclusion_zones(self, zones: list[BoundingBox]) -> None:
@@ -454,28 +493,33 @@ class WeatherArchetype(Archetype):
         for p in self.ambient_clouds:
             p.x += p.vx
             p.y += p.vy
-            if (p.x < self.width + 1 and p.x + p.shape.width > -1 and
-                    p.y < self.height + 1 and p.y + p.shape.height > -1):
+            if (
+                p.x < self.width + 1
+                and p.x + p.shape.width > -1
+                and p.y < self.height + 1
+                and p.y + p.shape.height > -1
+            ):
                 alive.append(p)
         self.ambient_clouds = alive
 
         if self.weather_type and self.weather_type not in ("clear", None):
             return
 
-        if (len(self.ambient_clouds) < self.ambient_max_clouds and
-                random.random() < self.ambient_spawn_rate):
+        if len(self.ambient_clouds) < self.ambient_max_clouds and random.random() < self.ambient_spawn_rate:
             shape_name = random.choice(self.ambient_shapes)
             shape = self._get_shape(shape_name)
             if shape:
                 s = self.speed_multiplier
-                self.ambient_clouds.append(Particle(
-                    x=random.uniform(-shape.width * 2, -shape.width),
-                    y=random.uniform(0, int(self.height * self.ambient_spawn_zone)),
-                    vx=random.uniform(0.25, 0.45) * s,
-                    vy=random.uniform(-0.08, 0.08) * s,
-                    shape=shape,
-                    lifetime=999999,
-                ))
+                self.ambient_clouds.append(
+                    Particle(
+                        x=random.uniform(-shape.width * 2, -shape.width),
+                        y=random.uniform(0, int(self.height * self.ambient_spawn_zone)),
+                        vx=random.uniform(0.25, 0.45) * s,
+                        vy=random.uniform(-0.08, 0.08) * s,
+                        shape=shape,
+                        lifetime=999999,
+                    )
+                )
 
     def tick(self, num_ticks: int = 1) -> None:
         """Advance simulation by num_ticks steps."""
@@ -486,21 +530,23 @@ class WeatherArchetype(Archetype):
 
         if self.p_count > 0:
             self.p_count = _tick_physics_batch(
-                self.p_x, self.p_y,
-                self.p_vx, self.p_vy,
-                self.p_age, self.p_lifetime,
+                self.p_x,
+                self.p_y,
+                self.p_vx,
+                self.p_vy,
+                self.p_age,
+                self.p_lifetime,
                 self.p_shape_idx,
-                self.p_count, num_ticks,
-                float(self.width), float(self.height),
-                self.death_prob
+                self.p_count,
+                num_ticks,
+                float(self.width),
+                float(self.height),
+                self.death_prob,
             )
 
         max_particles = int(self.intensity * self.max_particles_base)
         spawn_rate = self.intensity * 2.0
-        spawn_count = min(
-            np.random.poisson(spawn_rate * 3),
-            max_particles - self.p_count
-        )
+        spawn_count = min(np.random.poisson(spawn_rate * 3), max_particles - self.p_count)
 
         if spawn_count > 0:
             self._spawn_batch(spawn_count)
@@ -517,27 +563,65 @@ class WeatherArchetype(Archetype):
         if self.weather_type == "snow":
             wind_factor = min(self.wind_speed / 30.0, 1.0)
             _spawn_particles_snow(
-                self.p_x, self.p_y, self.p_vx, self.p_vy,
-                self.p_age, self.p_lifetime, self.p_shape_idx,
-                start, count, float(self.width), s, wind_factor, num_shapes
+                self.p_x,
+                self.p_y,
+                self.p_vx,
+                self.p_vy,
+                self.p_age,
+                self.p_lifetime,
+                self.p_shape_idx,
+                start,
+                count,
+                float(self.width),
+                s,
+                wind_factor,
+                num_shapes,
             )
         elif self.weather_type == "rain":
             _spawn_particles_rain(
-                self.p_x, self.p_y, self.p_vx, self.p_vy,
-                self.p_age, self.p_lifetime, self.p_shape_idx,
-                start, count, float(self.width), s, num_shapes
+                self.p_x,
+                self.p_y,
+                self.p_vx,
+                self.p_vy,
+                self.p_age,
+                self.p_lifetime,
+                self.p_shape_idx,
+                start,
+                count,
+                float(self.width),
+                s,
+                num_shapes,
             )
         elif self.weather_type == "windy":
             _spawn_particles_windy(
-                self.p_x, self.p_y, self.p_vx, self.p_vy,
-                self.p_age, self.p_lifetime, self.p_shape_idx,
-                start, count, float(self.height), s, num_shapes
+                self.p_x,
+                self.p_y,
+                self.p_vx,
+                self.p_vy,
+                self.p_age,
+                self.p_lifetime,
+                self.p_shape_idx,
+                start,
+                count,
+                float(self.height),
+                s,
+                num_shapes,
             )
         else:  # cloudy, fog
             _spawn_particles_fog(
-                self.p_x, self.p_y, self.p_vx, self.p_vy,
-                self.p_age, self.p_lifetime, self.p_shape_idx,
-                start, count, float(self.width), float(self.height), s, num_shapes
+                self.p_x,
+                self.p_y,
+                self.p_vx,
+                self.p_vy,
+                self.p_age,
+                self.p_lifetime,
+                self.p_shape_idx,
+                start,
+                count,
+                float(self.width),
+                float(self.height),
+                s,
+                num_shapes,
             )
 
         self.p_count += count
@@ -556,7 +640,7 @@ class WeatherArchetype(Archetype):
         px, py = int(p.x), int(p.y)
         for row_idx, row in enumerate(p.shape.pattern):
             for col_idx, char in enumerate(row):
-                if char == ' ':
+                if char == " ":
                     continue
                 cx, cy = px + col_idx, py + row_idx
                 if (cx, cy) in blocked:
@@ -586,10 +670,16 @@ class WeatherArchetype(Archetype):
             self._render_out_cell = np.zeros(new_size, dtype=np.int32)
 
         num_cells = _compute_render_cells(
-            self.p_x, self.p_y, self.p_shape_idx, n,
-            self._shape_offsets, self._shape_cell_counts,
-            self._render_out_x, self._render_out_y,
-            self._render_out_shape, self._render_out_cell
+            self.p_x,
+            self.p_y,
+            self.p_shape_idx,
+            n,
+            self._shape_offsets,
+            self._shape_cell_counts,
+            self._render_out_x,
+            self._render_out_y,
+            self._render_out_shape,
+            self._render_out_cell,
         )
 
         xs = self._render_out_x[:num_cells].tolist()

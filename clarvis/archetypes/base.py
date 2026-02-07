@@ -3,10 +3,10 @@ Base protocols and classes for archetypes.
 """
 
 from abc import ABC, abstractmethod
-from typing import Protocol, Any, Optional
+from typing import Protocol
 
-from ..widget.pipeline import Layer
 from ..elements.registry import ElementRegistry
+from ..widget.pipeline import Layer
 
 
 class Renderable(Protocol):
@@ -44,11 +44,11 @@ class Archetype(ABC):
 
     def _load_config(self) -> None:
         """Load archetype configuration from registry."""
-        self.config = self.registry.get('archetypes', self.config_name) or {}
+        self.config = self.registry.get("archetypes", self.config_name) or {}
 
     def _handle_change(self, kind: str, name: str) -> None:
         """Handle element change notification."""
-        if kind == 'archetypes' and name == self.config_name:
+        if kind == "archetypes" and name == self.config_name:
             self._load_config()
         self._on_element_change(kind, name)
 
@@ -88,13 +88,13 @@ class SimpleElement:
         - pattern: Multi-line pattern string (alternative to char)
         - position: Optional [l, g, r] for eye positioning
         """
-        self.char = definition.get('char', ' ')
-        self.pattern = definition.get('pattern')
-        self.position = definition.get('position', [0, 0, 0])
+        self.char = definition.get("char", " ")
+        self.pattern = definition.get("pattern")
+        self.position = definition.get("position", [0, 0, 0])
 
         # Parse multi-line pattern if present
-        if self.pattern and '\n' in str(self.pattern):
-            self.lines = [line for line in str(self.pattern).split('\n') if line]
+        if self.pattern and "\n" in str(self.pattern):
+            self.lines = [line for line in str(self.pattern).split("\n") if line]
         else:
             self.lines = [self.pattern] if self.pattern else [self.char]
 
@@ -110,7 +110,7 @@ class SimpleElement:
         """Render element to layer."""
         for dy, line in enumerate(self.lines):
             for dx, char in enumerate(line):
-                if char != ' ':
+                if char != " ":
                     layer.put(x + dx, y + dy, char, color)
 
 
@@ -131,23 +131,23 @@ class Composite:
         - height: Optional composite height
         """
         self.registry = registry
-        self.width = definition.get('width', 0)
-        self.height = definition.get('height', 0)
+        self.width = definition.get("width", 0)
+        self.height = definition.get("height", 0)
         self.children: dict[str, dict] = {}
 
-        for name, child_def in definition.get('children', {}).items():
-            element_path = child_def.get('element', '')
-            if '/' in element_path:
-                kind, elem_name = element_path.split('/', 1)
+        for name, child_def in definition.get("children", {}).items():
+            element_path = child_def.get("element", "")
+            if "/" in element_path:
+                kind, elem_name = element_path.split("/", 1)
                 elem_def = registry.get(kind, elem_name)
                 if elem_def:
                     self.children[name] = {
-                        'element': SimpleElement(elem_def),
-                        'position': child_def.get('position', [0, 0])
+                        "element": SimpleElement(elem_def),
+                        "position": child_def.get("position", [0, 0]),
                     }
 
     def render(self, layer: Layer, x: int, y: int, color: int) -> None:
         """Render all children to layer."""
         for name, child in self.children.items():
-            cx, cy = child['position']
-            child['element'].render(layer, x + cx, y + cy, color)
+            cx, cy = child["position"]
+            child["element"].render(layer, x + cx, y + cy, color)

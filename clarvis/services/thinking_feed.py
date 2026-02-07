@@ -15,7 +15,6 @@ from enum import Enum
 from pathlib import Path
 
 
-
 class SessionStatus(Enum):
     ACTIVE = "active"
     IDLE = "idle"
@@ -25,6 +24,7 @@ class SessionStatus(Enum):
 @dataclass
 class ThinkingBlock:
     """A single thinking block extracted from an assistant message."""
+
     text: str
     timestamp: str
     session_id: str
@@ -34,6 +34,7 @@ class ThinkingBlock:
 @dataclass
 class SessionState:
     """State of a single Claude Code session."""
+
     session_id: str
     project: str
     project_path: str
@@ -100,12 +101,14 @@ def extract_thinking_blocks(entry: dict) -> list[ThinkingBlock]:
         if isinstance(item, dict) and item.get("type") == "thinking":
             thinking_text = item.get("thinking", "")
             if thinking_text:
-                blocks.append(ThinkingBlock(
-                    text=thinking_text,
-                    timestamp=timestamp,
-                    session_id=session_id,
-                    message_id=f"{message_id}:{i}",
-                ))
+                blocks.append(
+                    ThinkingBlock(
+                        text=thinking_text,
+                        timestamp=timestamp,
+                        session_id=session_id,
+                        message_id=f"{message_id}:{i}",
+                    )
+                )
 
     return blocks
 
@@ -280,14 +283,16 @@ class SessionManager:  # pragma: no cover
         with self._lock:
             result = []
             for session in self.sessions.values():
-                result.append({
-                    "session_id": session.session_id,
-                    "project": session.project,
-                    "project_path": session.project_path,
-                    "status": session.status.value,
-                    "last_activity": session.last_activity.isoformat(),
-                    "thought_count": len(session.thoughts),
-                })
+                result.append(
+                    {
+                        "session_id": session.session_id,
+                        "project": session.project,
+                        "project_path": session.project_path,
+                        "status": session.status.value,
+                        "last_activity": session.last_activity.isoformat(),
+                        "thought_count": len(session.thoughts),
+                    }
+                )
             # Sort by last activity (most recent first)
             result.sort(key=lambda x: x["last_activity"], reverse=True)
             return result
@@ -305,10 +310,7 @@ class SessionManager:  # pragma: no cover
                 "project": session.project,
                 "project_path": session.project_path,
                 "status": session.status.value,
-                "thoughts": [
-                    {"text": t.text, "timestamp": t.timestamp}
-                    for t in thoughts
-                ],
+                "thoughts": [{"text": t.text, "timestamp": t.timestamp} for t in thoughts],
             }
 
     def get_latest_thought(self) -> dict | None:

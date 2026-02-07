@@ -3,10 +3,8 @@
     "base": "c64"
   },
   "display": {
-    "grid_width": 45,
-    "grid_height": 24,
-    "window_width": 450,
-    "window_height": 350,
+    "grid_width": 43,
+    "grid_height": 17,
     "corner_radius": 30,
     "bg_alpha": 0.8,
     "font_size": 14,
@@ -14,10 +12,10 @@
     "border_width": 2,
     "pulse_speed": 0.05,
     "fps": 3,
-    "avatar_x_offset": 15,
-    "avatar_y_offset": 0,
+    "avatar_x_offset": 13,
+    "avatar_y_offset": 3,
     "bar_x_offset": 0,
-    "bar_y_offset": 0
+    "bar_y_offset": 3
   },
   "testing": {
     "enabled": false,

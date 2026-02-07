@@ -16,10 +16,9 @@ import time
 from collections.abc import AsyncIterator
 
 import mlx.core as mx
+from genlm.backend.llm.mlx import AsyncMlxLM
 from mlx_lm.generate import generate_step
 from mlx_lm.sample_utils import make_sampler
-
-from genlm.backend.llm.mlx import AsyncMlxLM
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +30,18 @@ Rules:
 - Keep responses to 1-3 sentences unless asked for more.
 - Act on commands directly — don't ask for clarification.
 - Never use markdown formatting — your responses are spoken aloud via TTS.
-- A <context> block may precede the user's message with current situational data (weather, time, music). Use it to inform your responses naturally — don't mention the context block explicitly.
+- A <context> block may precede the user's message with current situational data (weather, time, music). \
+Use it to inform your responses naturally — don't mention the context block explicitly.
 - Be helpful, concise, and friendly.\
 """
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
+
 # Debug print helper — goes to daemon.err.log
 def _dbg(msg: str) -> None:
     import sys
+
     print(f"[MLX-DBG] {msg}", file=sys.stderr, flush=True)
 
 
@@ -94,9 +96,7 @@ class MLXVoiceAgent:
             _dbg(f"ensure_connected: loading model {self._model_name}...")
             t0 = time.monotonic()
             # Model loading is CPU/GPU-bound; run in thread to avoid blocking loop
-            self._llm = await self._loop.run_in_executor(
-                None, AsyncMlxLM.from_name, self._model_name
-            )
+            self._llm = await self._loop.run_in_executor(None, AsyncMlxLM.from_name, self._model_name)
             self._connected = True
             _dbg(f"ensure_connected: model loaded in {time.monotonic() - t0:.1f}s")
 
@@ -142,28 +142,24 @@ class MLXVoiceAgent:
             # Append user turn and trim old history
             self._history.append({"role": "user", "content": text})
             if len(self._history) > self._max_history_turns:
-                self._history = self._history[-self._max_history_turns:]
+                self._history = self._history[-self._max_history_turns :]
 
             # Build full message list: system prompt + conversation history
             messages = [
                 {"role": "system", "content": MLX_SYSTEM_PROMPT},
                 *self._history,
             ]
-            _dbg(f"History: {len(self._history)} messages ({len(self._history)//2} exchanges)")
+            _dbg(f"History: {len(self._history)} messages ({len(self._history) // 2} exchanges)")
 
             # Apply model's chat template
             tokenizer = self._llm.tokenizer
             try:
-                prompt_str = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
+                prompt_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             except Exception as e:
                 _dbg(f"Chat template failed with system role: {e}, using user-only")
                 combined = f"{MLX_SYSTEM_PROMPT}\n\n{text}"
                 messages = [{"role": "user", "content": combined}]
-                prompt_str = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
+                prompt_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
             prompt_ids = tokenizer.encode(prompt_str)
             _dbg(f"Prompt: {len(prompt_ids)} tokens")
@@ -217,6 +213,7 @@ class MLXVoiceAgent:
         except Exception as e:
             _dbg(f"EXCEPTION in send(): {type(e).__name__}: {e}")
             import traceback
+
             _dbg(traceback.format_exc())
             raise
 

@@ -1,12 +1,13 @@
 """Token usage tracking service for Claude API."""
 
-import subprocess
 import json
 import logging
-import requests
+import subprocess
 import threading
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,7 @@ class TokenUsageService:
             return
 
         self._stop_event.clear()
-        self._polling_thread = threading.Thread(
-            target=self._poll_loop, daemon=True
-        )
+        self._polling_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._polling_thread.start()
 
     def stop(self) -> None:
@@ -58,9 +57,7 @@ class TokenUsageService:
                 return {"error": "Usage data not available", "is_stale": True}
 
             staleness = (
-                (datetime.now(timezone.utc) - self._last_updated).total_seconds()
-                if self._last_updated
-                else None
+                (datetime.now(timezone.utc) - self._last_updated).total_seconds() if self._last_updated else None
             )
 
             return {

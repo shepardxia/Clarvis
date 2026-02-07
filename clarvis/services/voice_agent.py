@@ -14,8 +14,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from pathlib import Path
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -36,7 +36,8 @@ Rules:
 - Never use markdown formatting — your responses are spoken aloud via TTS.
 - Use your tools for music control (Sonos/Spotify), weather, time, web search, and shell commands.
 - For music: prefer search_and_play for simple requests, use batch for multi-step operations.
-- A <context> block may precede the user's message with current situational data. Use it to inform your responses naturally — don't mention it explicitly.
+- A <context> block may precede the user's message with current situational data. \
+Use it to inform your responses naturally — don't mention it explicitly.
 - If a music_profile section is provided, use it to inform song/artist recommendations without being asked.
 
 Your response will be structured as JSON with "text" and "expects_reply" fields.
@@ -171,9 +172,7 @@ class VoiceAgent:
     def _start_idle_timer(self) -> None:
         """Schedule an idle-disconnect after IDLE_TIMEOUT seconds."""
         self._cancel_idle_timer()
-        self._idle_handle = self._loop.call_later(
-            IDLE_TIMEOUT, self._on_idle_timeout
-        )
+        self._idle_handle = self._loop.call_later(IDLE_TIMEOUT, self._on_idle_timeout)
 
     def _on_idle_timeout(self) -> None:
         """Timer callback — schedule the async disconnect on the loop."""

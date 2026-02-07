@@ -22,7 +22,7 @@ dependencies = [
 environments = ["sys_platform == 'darwin'"]
 
 [tool.uv.sources]
-clautify = { path = "../SpotAPI", editable = true }
+clautify = { path = "../clautify", editable = true }
 heybuddy = { path = "../hey-buddy", editable = true }
 genlm-backend = { path = "../../genlm/mlx/genlm-backend", editable = true }
 
@@ -59,3 +59,10 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.coverage.run]
 source = ["clarvis"]
 omit = ["*/__pycache__/*", "*/tests/*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]

@@ -6,7 +6,6 @@ category sets and keyword heuristics for MCP tools.
 
 from __future__ import annotations
 
-
 # Explicit tool category sets
 READING_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS", "NotebookRead"}
 WRITING_TOOLS = {"Write", "Edit", "NotebookEdit"}
@@ -15,9 +14,42 @@ THINKING_TOOLS = {"Task", "EnterPlanMode", "ExitPlanMode"}
 AWAITING_TOOLS = {"AskUserQuestion"}
 
 # Keywords for MCP tool heuristic classification
-READING_KEYWORDS = {"read", "get", "list", "find", "search", "fetch", "query", "inspect", "browse", "view"}
-WRITING_KEYWORDS = {"write", "create", "edit", "replace", "insert", "delete", "update", "add", "remove", "set"}
-EXECUTING_KEYWORDS = {"execute", "run", "shell", "browser", "click", "navigate", "type", "press", "play", "pause"}
+READING_KEYWORDS = {
+    "read",
+    "get",
+    "list",
+    "find",
+    "search",
+    "fetch",
+    "query",
+    "inspect",
+    "browse",
+    "view",
+}
+WRITING_KEYWORDS = {
+    "write",
+    "create",
+    "edit",
+    "replace",
+    "insert",
+    "delete",
+    "update",
+    "add",
+    "remove",
+    "set",
+}
+EXECUTING_KEYWORDS = {
+    "execute",
+    "run",
+    "shell",
+    "browser",
+    "click",
+    "navigate",
+    "type",
+    "press",
+    "play",
+    "pause",
+}
 
 
 def classify_tool(tool_name: str) -> str:

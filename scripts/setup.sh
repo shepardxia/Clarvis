@@ -39,12 +39,12 @@ check_sibling_repos() {
 
     local missing=false
 
-    if [ ! -d "$MONOREPO_DIR/SpotAPI" ]; then
-        print_error "SpotAPI not found at $MONOREPO_DIR/SpotAPI"
-        echo "  git clone git@github.com:shepardxia/clautify.git $MONOREPO_DIR/SpotAPI"
+    if [ ! -d "$MONOREPO_DIR/clautify" ]; then
+        print_error "clautify not found at $MONOREPO_DIR/clautify"
+        echo "  git clone git@github.com:shepardxia/clautify.git $MONOREPO_DIR/clautify"
         missing=true
     else
-        print_success "SpotAPI found"
+        print_success "clautify found"
     fi
 
     if [ ! -d "$MONOREPO_DIR/hey-buddy" ]; then

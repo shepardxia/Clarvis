@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from ..core.colors import (
-    load_theme,
+    DEFAULT_THEME,
     get_available_themes,
     get_merged_theme_colors,
-    DEFAULT_THEME,
+    load_theme,
 )
 
 # Project root
@@ -22,6 +22,7 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 @dataclass
 class ThemeConfig:
     """Theme settings with optional color overrides."""
+
     base: str = DEFAULT_THEME
     overrides: dict[str, list[float]] = field(default_factory=dict)
 
@@ -42,13 +43,12 @@ class ThemeConfig:
 @dataclass
 class DisplayConfig:
     """Display settings for the widget window."""
-    # Grid size (Python renderer)
+
+    # Grid size — single source of truth for both Python renderer and Swift widget.
+    # Swift auto-derives window size from grid dims × measured font metrics.
     grid_width: int = 29
     grid_height: int = 12
 
-    # Window size (Swift widget)
-    window_width: int = 280
-    window_height: int = 220
     corner_radius: int = 24
     bg_alpha: float = 0.75
     font_size: int = 14
@@ -68,6 +68,7 @@ class DisplayConfig:
 @dataclass
 class TestingConfig:
     """Testing mode settings for development."""
+
     enabled: bool = False
     status: str = "idle"
     weather: str = "clear"
@@ -80,6 +81,7 @@ class TestingConfig:
 @dataclass
 class TokenUsageConfig:
     """Configuration for token usage tracking."""
+
     enabled: bool = True
     poll_interval: int = 120  # seconds
 
@@ -105,6 +107,7 @@ class TokenUsageConfig:
 @dataclass
 class WakeWordConfig:
     """Configuration for wake word detection."""
+
     enabled: bool = False
     threshold: float = 0.3  # Wake word detection threshold
     vad_threshold: float = 0.2  # Voice activity detection threshold
@@ -144,6 +147,7 @@ class WakeWordConfig:
 @dataclass
 class VoiceConfig:
     """Configuration for voice command pipeline."""
+
     enabled: bool = True
     asr_timeout: float = 10.0
     asr_language: str = "en-US"
@@ -205,6 +209,7 @@ class VoiceConfig:
 @dataclass
 class WidgetConfig:
     """Main configuration combining all sections."""
+
     theme: ThemeConfig
     display: DisplayConfig
     testing: TestingConfig
@@ -255,7 +260,14 @@ class WidgetConfig:
         voice_dict = d.get("voice", {})
         voice = VoiceConfig.from_dict(voice_dict)
 
-        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage, wake_word=wake_word, voice=voice)
+        return cls(
+            theme=theme,
+            display=display,
+            testing=testing,
+            token_usage=token_usage,
+            wake_word=wake_word,
+            voice=voice,
+        )
 
     def save(self, path: Path = CONFIG_PATH):
         temp = path.with_suffix(".tmp")
@@ -281,7 +293,6 @@ class WidgetConfig:
         return get_merged_theme_colors(self.theme.base, self.theme.overrides)
 
 
-
 # Global instance
 _config: Optional[WidgetConfig] = None
 
@@ -292,12 +303,3 @@ def get_config() -> WidgetConfig:
     if _config is None:
         _config = WidgetConfig.load()
     return _config
-
-
-def set_config(config: WidgetConfig):
-    """Set and save config."""
-    global _config
-    _config = config
-    config.save()
-
-
