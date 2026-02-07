@@ -6,22 +6,29 @@ requires-python = ">=3.10"
 readme = "README.md"
 license = { text = "MIT" }
 dependencies = [
-    "mcp",
+    "fastmcp>=2.14,<3",
     "requests",
     "soco",
     "numpy",
     "tinytuya>=1.17.4",
     "dspy",
     "clautify",
+    "spotapi",
     "numba>=0.63.1",
     "litellm>=1.81.1",
     "heybuddy",
     "claude-agent-sdk",
+    "genlm-backend[mlx]",
 ]
+
+[tool.uv]
+environments = ["sys_platform == 'darwin'"]
 
 [tool.uv.sources]
 clautify = { path = "../clautify", editable = true }
 heybuddy = { path = "../hey-buddy", editable = true }
+spotapi = { path = "../SpotAPI", editable = true }
+genlm-backend = { path = "../../genlm/mlx/genlm-backend", editable = true }
 
 [project.scripts]
 clarvis = "clarvis.server:main"

@@ -154,6 +154,10 @@ class VoiceConfig:
     text_linger: float = 3.0
     model: Optional[str] = None  # Claude model alias (e.g. "sonnet", "haiku", "opus")
     max_thinking_tokens: Optional[int] = None  # None = SDK default
+    provider: str = "claude"  # "claude" or "mlx"
+    mlx_model: str = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+    mlx_temperature: float = 0.7
+    mlx_max_tokens: int = 512
 
     def to_dict(self) -> dict:
         d = {
@@ -165,6 +169,10 @@ class VoiceConfig:
             "tts_enabled": self.tts_enabled,
             "tts_speed": self.tts_speed,
             "text_linger": self.text_linger,
+            "provider": self.provider,
+            "mlx_model": self.mlx_model,
+            "mlx_temperature": self.mlx_temperature,
+            "mlx_max_tokens": self.mlx_max_tokens,
         }
         if self.model is not None:
             d["model"] = self.model
@@ -187,7 +195,26 @@ class VoiceConfig:
             text_linger=d.get("text_linger", 3.0),
             model=d.get("model"),
             max_thinking_tokens=d.get("max_thinking_tokens"),
+            provider=d.get("provider", "claude"),
+            mlx_model=d.get("mlx_model", "mlx-community/Qwen2.5-7B-Instruct-4bit"),
+            mlx_temperature=d.get("mlx_temperature", 0.7),
+            mlx_max_tokens=d.get("mlx_max_tokens", 200),
         )
+
+
+@dataclass
+class MusicConfig:
+    """Music backend configuration."""
+    backend: str = "clautify"  # "clautify" or "spotapi"
+
+    def to_dict(self) -> dict:
+        return {"backend": self.backend}
+
+    @staticmethod
+    def from_dict(d: dict) -> "MusicConfig":
+        if not isinstance(d, dict):
+            return MusicConfig()
+        return MusicConfig(backend=d.get("backend", "clautify"))
 
 
 @dataclass
@@ -199,6 +226,7 @@ class WidgetConfig:
     token_usage: TokenUsageConfig = field(default_factory=TokenUsageConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    music: MusicConfig = field(default_factory=MusicConfig)
 
     def to_dict(self) -> dict:
         return {
@@ -208,6 +236,7 @@ class WidgetConfig:
             "token_usage": self.token_usage.to_dict(),
             "wake_word": self.wake_word.to_dict(),
             "voice": self.voice.to_dict(),
+            "music": self.music.to_dict(),
         }
 
     @classmethod
@@ -243,7 +272,11 @@ class WidgetConfig:
         voice_dict = d.get("voice", {})
         voice = VoiceConfig.from_dict(voice_dict)
 
-        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage, wake_word=wake_word, voice=voice)
+        # Handle music
+        music_dict = d.get("music", {})
+        music = MusicConfig.from_dict(music_dict)
+
+        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage, wake_word=wake_word, voice=voice, music=music)
 
     def save(self, path: Path = CONFIG_PATH):
         temp = path.with_suffix(".tmp")
