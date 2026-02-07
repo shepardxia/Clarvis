@@ -73,11 +73,14 @@ class WakeWordService:
         self._on_detected_callback = on_detected
         self._detector: Optional[WakeWordDetector] = None
 
-    def _build_detector_config(self) -> DetectorConfig:
-        """Map Clarvis config to heybuddy DetectorConfig."""
+    def start(self) -> bool:
+        if not self.config.enabled:
+            logger.info("Wake word service disabled in config")
+            return False
+
         cfg = self.config
         vad_path = cfg.model_path.parent / "silero-vad.onnx"
-        return DetectorConfig(
+        detector_config = DetectorConfig(
             model_path=str(cfg.model_path),
             threshold=cfg.threshold,
             vad_threshold=cfg.vad_threshold,
@@ -86,29 +89,14 @@ class WakeWordService:
             vad_model_path=str(vad_path) if vad_path.exists() else None,
         )
 
-    def _handle_detection(self):
-        """Call user callback on wake word detection.
+        def on_detected():
+            if self._on_detected_callback:
+                try:
+                    self._on_detected_callback()
+                except Exception as e:
+                    logger.error(f"Detection callback failed: {e}")
 
-        Note: state_store is NOT updated here — the VoiceCommandOrchestrator
-        handles status via _transition(ACTIVATED).  Writing "activated" here
-        would poison lock_status()'s saved pre-voice state.
-        """
-        if self._on_detected_callback:
-            try:
-                self._on_detected_callback()
-            except Exception as e:
-                logger.error(f"Detection callback failed: {e}")
-
-    def start(self) -> bool:
-        if not self.config.enabled:
-            logger.info("Wake word service disabled in config")
-            return False
-
-        detector_config = self._build_detector_config()
-        self._detector = WakeWordDetector(
-            config=detector_config,
-            on_detected=self._handle_detection,
-        )
+        self._detector = WakeWordDetector(config=detector_config, on_detected=on_detected)
         return self._detector.start()
 
     def stop(self) -> None:

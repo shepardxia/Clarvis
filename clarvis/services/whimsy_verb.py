@@ -33,28 +33,13 @@ _history_lock = threading.Lock()
 HISTORY_SIZE = 10
 
 
-def _add_to_history(verb: str) -> None:
-    """Add verb to history, maintaining max size."""
-    with _history_lock:
-        _verb_history.append(verb)
-        if len(_verb_history) > HISTORY_SIZE:
-            _verb_history.pop(0)
-
-
-def _get_avoid_list() -> str:
-    """Get recent verbs to avoid."""
-    with _history_lock:
-        if _verb_history:
-            return f"\nAvoid: {', '.join(_verb_history[-5:])}"
-        return ""
-
-
 def generate_whimsy_verb(context: str) -> str:
     """Generate a whimsical gerund verb matching what Claude is doing.
 
     Uses ~150-200 tokens, costs ~$0.00015 per call on Haiku 3.5.
     """
-    avoid = _get_avoid_list()
+    with _history_lock:
+        avoid = f"\nAvoid: {', '.join(_verb_history[-5:])}" if _verb_history else ""
     prompt = SYSTEM_PROMPT.format(avoid=avoid)
 
     client = anthropic.Anthropic()
@@ -71,7 +56,10 @@ def generate_whimsy_verb(context: str) -> str:
     verb = response.content[0].text.strip()
     verb = verb.split()[0].rstrip(".,!?:;").title()
 
-    _add_to_history(verb)
+    with _history_lock:
+        _verb_history.append(verb)
+        if len(_verb_history) > HISTORY_SIZE:
+            _verb_history.pop(0)
     return verb
 
 

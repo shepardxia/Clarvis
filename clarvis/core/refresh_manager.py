@@ -96,8 +96,26 @@ class RefreshManager:
             "city": city or "Unknown",
         }
 
-        # Add widget-mapped weather type and intensity
-        widget_type, widget_intensity = self._map_weather_to_widget(weather_dict)
+        # Map weather to widget type
+        description = weather_dict.get("description", "").lower()
+        wind_speed = weather_dict.get("wind_speed", 0)
+        widget_intensity = weather_dict.get("intensity", 0.5)
+
+        widget_type = "clear"
+        if "snow" in description:
+            widget_type = "snow"
+        elif "rain" in description or "shower" in description or "drizzle" in description:
+            widget_type = "rain"
+        elif "thunder" in description:
+            widget_type = "rain"
+        elif "fog" in description:
+            widget_type = "fog"
+        elif "cloud" in description or "overcast" in description:
+            widget_type = "cloudy"
+
+        if widget_type in ("clear", "cloudy") and wind_speed >= 15:
+            widget_type = "windy"
+
         weather_dict["widget_type"] = widget_type
         weather_dict["widget_intensity"] = widget_intensity
 
@@ -134,27 +152,3 @@ class RefreshManager:
             self.refresh_time()
         except Exception:
             pass
-
-    def _map_weather_to_widget(self, weather_dict: dict) -> tuple[str, float]:
-        """Map weather data to widget type and intensity."""
-        description = weather_dict.get("description", "").lower()
-        wind_speed = weather_dict.get("wind_speed", 0)
-        intensity = weather_dict.get("intensity", 0.5)
-
-        weather_type = "clear"
-
-        if "snow" in description:
-            weather_type = "snow"
-        elif "rain" in description or "shower" in description or "drizzle" in description:
-            weather_type = "rain"
-        elif "thunder" in description:
-            weather_type = "rain"
-        elif "fog" in description:
-            weather_type = "fog"
-        elif "cloud" in description or "overcast" in description:
-            weather_type = "cloudy"
-
-        if weather_type in ("clear", "cloudy") and wind_speed >= 15:
-            weather_type = "windy"
-
-        return weather_type, intensity

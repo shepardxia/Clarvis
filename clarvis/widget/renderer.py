@@ -84,7 +84,17 @@ class FrameRenderer:
         self._mic_style = "bracket"  # "bracket" or "dot"
 
         # Calculate layout
-        self._recalculate_layout()
+        w, h = self.width, self.height
+        bar_gap = 1
+        total_content_h = self.AVATAR_HEIGHT + bar_gap + 1
+        content_start_y = (h - total_content_h) // 2
+        avatar_x_centered = (w - self.AVATAR_WIDTH) // 2
+        self.bar_width = max(self.AVATAR_WIDTH, min(int(w * self.BAR_WIDTH_RATIO), w - 4))
+        bar_x_centered = (w - self.bar_width) // 2
+        self.avatar_x = avatar_x_centered + self.avatar_x_offset
+        self.avatar_y = content_start_y + self.avatar_y_offset
+        self.bar_x = bar_x_centered + self.bar_x_offset
+        self.bar_y = content_start_y + self.AVATAR_HEIGHT + bar_gap + self.bar_y_offset
 
         # Initialize archetypes
         self.face = FaceArchetype(self.registry)
@@ -94,53 +104,10 @@ class FrameRenderer:
         # Animation state
         self.current_status = "idle"
 
-        # Pre-warm all caches for instant runtime performance
-        self.prewarm_caches()
-
-    def prewarm_caches(self) -> dict:
-        """Pre-warm all archetype caches for instant runtime performance.
-
-        Call at startup to avoid computation during rendering.
-        Returns combined stats from all archetypes.
-        """
-        stats = {
-            "face": self.face.prewarm_cache(),
-            "progress": self.progress.prewarm_cache(),
-            "weather": self.weather.prewarm_shapes(),
-        }
-        return stats
-
-    def cache_stats(self) -> dict:
-        """Return combined cache statistics from all archetypes."""
-        return {
-            "face": self.face.cache_stats(),
-            "progress": self.progress.cache_stats(),
-            "weather": self.weather.cache_stats(),
-        }
-
-    def _recalculate_layout(self):
-        """Calculate element positions - simple centering."""
-        w, h = self.width, self.height
-
-        # Content dimensions
-        bar_gap = 1
-        total_content_h = self.AVATAR_HEIGHT + bar_gap + 1  # avatar + gap + bar
-
-        # Center vertically in full grid
-        content_start_y = (h - total_content_h) // 2
-
-        # Center horizontally
-        avatar_x_centered = (w - self.AVATAR_WIDTH) // 2
-
-        # Bar width and centering
-        self.bar_width = max(self.AVATAR_WIDTH, min(int(w * self.BAR_WIDTH_RATIO), w - 4))
-        bar_x_centered = (w - self.bar_width) // 2
-
-        # Final positions with offsets
-        self.avatar_x = avatar_x_centered + self.avatar_x_offset
-        self.avatar_y = content_start_y + self.avatar_y_offset
-        self.bar_x = bar_x_centered + self.bar_x_offset
-        self.bar_y = content_start_y + self.AVATAR_HEIGHT + bar_gap + self.bar_y_offset
+        # Pre-warm all caches
+        self.face.prewarm_cache()
+        self.progress.prewarm_cache()
+        self.weather.prewarm_shapes()
 
     def set_status(self, status: str):
         """Set current status."""
