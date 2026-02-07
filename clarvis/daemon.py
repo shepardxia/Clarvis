@@ -401,11 +401,21 @@ class CentralHubDaemon:
         if not needs_voice:
             return
 
-        self.voice_agent = VoiceAgent(
-            event_loop=self._event_loop,
-            model=config.voice.model,
-            max_thinking_tokens=config.voice.max_thinking_tokens,
-        )
+        if config.voice.provider == "mlx":
+            from clarvis.services.mlx_voice_agent import MLXVoiceAgent
+            self.voice_agent = MLXVoiceAgent(
+                event_loop=self._event_loop,
+                model_name=config.voice.mlx_model,
+                temperature=config.voice.mlx_temperature,
+                max_tokens=config.voice.mlx_max_tokens,
+            )
+            print(f"[Daemon] Using MLX provider: {config.voice.mlx_model}", flush=True)
+        else:
+            self.voice_agent = VoiceAgent(
+                event_loop=self._event_loop,
+                model=config.voice.model,
+                max_thinking_tokens=config.voice.max_thinking_tokens,
+            )
         self.voice_orchestrator = VoiceCommandOrchestrator(
             event_loop=self._event_loop,
             socket_server=self.socket_server,

@@ -1,0 +1,2 @@
+- Clarvis music skill can modify / write to memory. Keep a list of history and compile again regularly maybe?
+- Use external profile analyzing API?

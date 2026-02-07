@@ -21,7 +21,13 @@ def _default_get_session():
     """Lazy SpotifySession singleton. No lock needed — asyncio is single-threaded for sync calls."""
     if "instance" not in _session_cache:
         from clautify.dsl import SpotifySession
-        _session_cache["instance"] = SpotifySession.from_config(eager=False)
+        session = SpotifySession.from_config(eager=False)
+        check = session.health_check()
+        if check.get("authenticated"):
+            print("[Spotify] Health check passed", flush=True)
+        else:
+            print(f"[Spotify] Health check FAILED: {check.get('error', 'unknown')}", flush=True)
+        _session_cache["instance"] = session
     return _session_cache["instance"]
 
 

@@ -71,7 +71,7 @@ VOICE_OUTPUT_FORMAT = {
 
 MUSIC_PROFILE_PATH = Path.home() / ".claude/memories/music_profile_compact.md"
 
-DEFAULT_PROJECT_DIR = Path.home() / ".clarvis/voice-project"
+DEFAULT_PROJECT_DIR = Path.home() / "Desktop/directory/clarvis-suite"
 
 # Seconds of inactivity before the agent auto-disconnects to free memory.
 IDLE_TIMEOUT = 30.0
@@ -151,7 +151,7 @@ class VoiceAgent:
             output_format=VOICE_OUTPUT_FORMAT,
             permission_mode="bypassPermissions",
             setting_sources=["project"],
-            continue_conversation=False,
+            continue_conversation=True,
         )
         if mcp_path.exists():
             opts.mcp_servers = str(mcp_path)
