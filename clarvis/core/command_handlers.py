@@ -204,17 +204,6 @@ class CommandHandlers:
         if time_data.get("timestamp"):
             ctx["time"] = time_data["timestamp"]
 
-        try:
-            from clautify import Clautify
-            now = Clautify().now_playing()
-            if now and now.get("state") == "PLAYING":
-                ctx["music"] = {
-                    "title": now.get("title", ""),
-                    "artist": now.get("artist", ""),
-                }
-        except Exception:
-            pass
-
         orchestrator = self._get_voice_orchestrator()
         if orchestrator:
             ctx["formatted"] = orchestrator._build_voice_context()

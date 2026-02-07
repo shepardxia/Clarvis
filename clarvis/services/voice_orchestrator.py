@@ -521,30 +521,12 @@ class VoiceCommandOrchestrator:
     # ------------------------------------------------------------------
 
     def _lower_volume(self, target: int = 10) -> None:
-        """Save current speaker volume and lower it for ASR."""
-        try:
-            from clautify import Clautify
-            result = Clautify().volume()
-            vol = result.get("level")
-            if vol is not None and vol > target:
-                self._saved_volume = vol
-                Clautify().volume(target)
-                logger.info("Lowered speaker volume %d -> %d for ASR", vol, target)
-        except Exception:
-            logger.debug("Could not lower volume (no speaker?)", exc_info=True)
+        """Save current speaker volume and lower it for ASR. (Stub — Sonos removed.)"""
+        pass
 
     def _restore_volume(self) -> None:
-        """Restore speaker volume saved by _lower_volume()."""
-        vol = self._saved_volume
-        self._saved_volume = None
-        if vol is None:
-            return
-        try:
-            from clautify import Clautify
-            Clautify().volume(vol)
-            logger.info("Restored speaker volume to %d", vol)
-        except Exception:
-            logger.debug("Could not restore volume")
+        """Restore speaker volume saved by _lower_volume(). (Stub — Sonos removed.)"""
+        pass
 
     # ------------------------------------------------------------------
     # Context enrichment
@@ -577,21 +559,6 @@ class VoiceCommandOrchestrator:
                 parts.append(f"time: {dt.strftime('%A, %B %-d, %-I:%M%p').lower()}")
             except (ValueError, KeyError):
                 pass
-
-        # Music (best-effort)
-        try:
-            from clautify import Clautify
-            now = Clautify().now_playing()
-            if now and now.get("state") == "PLAYING":
-                title = now.get("title", "")[:30]
-                artist = now.get("artist", "")[:20]
-                if title:
-                    music = f'"{title}"'
-                    if artist:
-                        music += f" by {artist}"
-                    parts.append(f"music: {music}")
-        except Exception:
-            pass
 
         if not parts:
             return ""

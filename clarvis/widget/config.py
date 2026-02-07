@@ -203,21 +203,6 @@ class VoiceConfig:
 
 
 @dataclass
-class MusicConfig:
-    """Music backend configuration."""
-    backend: str = "clautify"  # "clautify" or "spotapi"
-
-    def to_dict(self) -> dict:
-        return {"backend": self.backend}
-
-    @staticmethod
-    def from_dict(d: dict) -> "MusicConfig":
-        if not isinstance(d, dict):
-            return MusicConfig()
-        return MusicConfig(backend=d.get("backend", "clautify"))
-
-
-@dataclass
 class WidgetConfig:
     """Main configuration combining all sections."""
     theme: ThemeConfig
@@ -226,7 +211,6 @@ class WidgetConfig:
     token_usage: TokenUsageConfig = field(default_factory=TokenUsageConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
-    music: MusicConfig = field(default_factory=MusicConfig)
 
     def to_dict(self) -> dict:
         return {
@@ -236,7 +220,6 @@ class WidgetConfig:
             "token_usage": self.token_usage.to_dict(),
             "wake_word": self.wake_word.to_dict(),
             "voice": self.voice.to_dict(),
-            "music": self.music.to_dict(),
         }
 
     @classmethod
@@ -272,11 +255,7 @@ class WidgetConfig:
         voice_dict = d.get("voice", {})
         voice = VoiceConfig.from_dict(voice_dict)
 
-        # Handle music
-        music_dict = d.get("music", {})
-        music = MusicConfig.from_dict(music_dict)
-
-        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage, wake_word=wake_word, voice=voice, music=music)
+        return cls(theme=theme, display=display, testing=testing, token_usage=token_usage, wake_word=wake_word, voice=voice)
 
     def save(self, path: Path = CONFIG_PATH):
         temp = path.with_suffix(".tmp")

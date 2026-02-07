@@ -219,17 +219,6 @@ class HookProcessor:
             except (ValueError, KeyError):
                 pass
 
-        try:
-            from clautify import Clautify
-            now = Clautify().now_playing()
-            if now and now.get("state") == "PLAYING":
-                title = now.get("title", "")[:25]
-                artist = now.get("artist", "")[:15]
-                if title:
-                    ambient.append(f"music: {title}" + (f" by {artist}" if artist else ""))
-        except Exception:
-            pass
-
         if ambient:
             parts.append(f"environment: {', '.join(ambient)}")
 

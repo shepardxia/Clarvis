@@ -17,7 +17,7 @@ from pydantic import Field
 
 from .core.ipc import get_daemon_client, DaemonClient
 from .services import get_session_manager
-from .music_tools import create_music_server
+from .spotify_tools import create_spotify_server
 
 
 # --- Tool implementations (module-level, registered by create_app) ---
@@ -170,14 +170,12 @@ _SESSION_TOOLS = [
 
 # --- App factory ---
 
-def create_app(daemon_client=None, get_player=None, get_session=None):
+def create_app(daemon_client=None, get_session=None):
     """Create the Clarvis MCP server.
 
     Args:
         daemon_client: DaemonClient instance. Defaults to global singleton.
             Pass a mock for testing.
-        get_player: Callable returning Clautify instance. Passed through to
-            music sub-server. Pass a mock factory for testing.
         get_session: Callable returning SpotifySession instance. Passed through
             to spotify sub-server. Pass a mock factory for testing.
     """
@@ -192,15 +190,7 @@ def create_app(daemon_client=None, get_player=None, get_session=None):
     for fn in _DAEMON_TOOLS + _SESSION_TOOLS:
         app.tool()(fn)
 
-    # Mount music sub-server based on config backend
-    from .widget.config import get_config
-    cfg = get_config()
-    if cfg.music.backend == "spotapi":
-        from .spotify_tools import create_spotify_server
-        app.mount(create_spotify_server(get_session=get_session))
-    else:
-        music = create_music_server(get_player=get_player)
-        app.mount(music)
+    app.mount(create_spotify_server(get_session=get_session))
 
     return app
 

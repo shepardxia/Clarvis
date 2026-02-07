@@ -1,7 +1,6 @@
 """Spotify DSL MCP sub-server — mounted onto the main Clarvis server.
 
-Single tool that accepts DSL command strings. Switchable with Clautify
-via config.json: {"music": {"backend": "spotapi"}}.
+Single tool that accepts DSL command strings via the clautify package.
 """
 
 import time
@@ -21,7 +20,7 @@ _session_cache = {}
 def _default_get_session():
     """Lazy SpotifySession singleton. No lock needed — asyncio is single-threaded for sync calls."""
     if "instance" not in _session_cache:
-        from spotapi.dsl import SpotifySession
+        from clautify.dsl import SpotifySession
         _session_cache["instance"] = SpotifySession.from_config(eager=False)
     return _session_cache["instance"]
 
