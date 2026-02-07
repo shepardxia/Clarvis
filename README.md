@@ -34,9 +34,23 @@ I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see 
 
 ## Get Me Running
 
+Clarvis lives in a monorepo with sibling dependencies. Clone all repos into the same parent directory:
+
 ```bash
-./scripts/setup.sh    # Set me up as an MCP server
+mkdir clarvis-suite && cd clarvis-suite
+git clone git@github.com:shepardxia/Clarvis.git
+git clone git@github.com:shepardxia/clautify.git SpotAPI
+git clone git@github.com:shepardxia/hey-buddy.git
 ```
+
+Then run the setup script:
+
+```bash
+cd Clarvis
+./scripts/setup.sh
+```
+
+Requires [uv](https://github.com/astral-sh/uv) and [Claude Code](https://claude.ai/code).
 
 Then restart Claude Code and launch me:
 

@@ -3,6 +3,18 @@ import Foundation
 import Speech
 import AVFoundation
 
+private let debugLogPath = "/tmp/clarvis-widget-debug.log"
+func debugLog(_ message: String) {
+    let line = "\(Date()): \(message)\n"
+    if let fh = FileHandle(forWritingAtPath: debugLogPath) {
+        fh.seekToEndOfFile()
+        fh.write(line.data(using: .utf8)!)
+        fh.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: debugLogPath, contents: line.data(using: .utf8))
+    }
+}
+
 // MARK: - Configuration
 
 // RGB as [r, g, b] array
@@ -191,6 +203,33 @@ struct WidgetData: Codable {
             return NSColor.gray
         }
         return NSColor(red: CGFloat(rgb[0]), green: CGFloat(rgb[1]), blue: CGFloat(rgb[2]), alpha: 1.0)
+    }
+}
+
+// MARK: - Click Regions
+
+struct ClickRegion {
+    let id: String
+    let row: Int
+    let col: Int
+    let width: Int
+    let height: Int
+
+    init?(from dict: [String: Any]) {
+        guard let id = dict["id"] as? String,
+              let row = dict["row"] as? Int,
+              let col = dict["col"] as? Int,
+              let width = dict["width"] as? Int,
+              let height = dict["height"] as? Int else { return nil }
+        self.id = id
+        self.row = row
+        self.col = col
+        self.width = width
+        self.height = height
+    }
+
+    func contains(row r: Int, col c: Int) -> Bool {
+        r >= row && r < row + height && c >= col && c < col + width
     }
 }
 
@@ -480,6 +519,94 @@ class PulsingBorderView: NSView {
         pulsePhase += Config.pulseSpeed
         needsDisplay = true
     }
+
+    // Tracking area ensures mouseMoved events fire even when window is not key
+    // (required for hover cursor feedback on our borderless, non-key widget).
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways],
+            owner: self.window,
+            userInfo: nil
+        ))
+    }
+}
+
+// MARK: - Clickable Window
+
+class ClickableWindow: NSWindow {
+    var clickRegions: [ClickRegion] = []
+    var gridRows = 0
+    var gridCols = 0
+    var charWidth: CGFloat = 8.4  // Courier at default size
+    var lineHeight: CGFloat = 16.8  // fontSize * 1.2
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            // With isMovableByWindowBackground, leftMouseUp is consumed by the
+            // window-dragging machinery and never reaches sendEvent.  Handle
+            // clicks on mouseDown: if the hit lands inside a click region, fire
+            // immediately and skip super (preventing a drag); otherwise fall
+            // through to super so the window remains draggable.
+            let cellResult = gridCell(at: event.locationInWindow)
+            debugLog("mouseDown at window=(\(event.locationInWindow.x),\(event.locationInWindow.y)) -> grid=\(cellResult.map { "(\($0.row),\($0.col))" } ?? "nil"), regions=\(clickRegions.count)")
+            if let (row, col) = cellResult,
+               let region = clickRegions.first(where: { $0.contains(row: row, col: col) }) {
+                debugLog("HIT region '\(region.id)' — sending region_click")
+                let socketClient = (NSApp.delegate as? AppDelegate)?.widgetController?.socketClient
+                socketClient?.send([
+                    "method": "region_click",
+                    "params": ["id": region.id]
+                ])
+                return  // swallow event — no drag
+            }
+            super.sendEvent(event)
+        case .mouseMoved:
+            updateCursorForMousePosition(event.locationInWindow)
+            super.sendEvent(event)
+        default:
+            super.sendEvent(event)
+        }
+    }
+
+    private func updateCursorForMousePosition(_ windowPoint: NSPoint) {
+        guard let (row, col) = gridCell(at: windowPoint) else {
+            NSCursor.arrow.set()
+            return
+        }
+        if clickRegions.contains(where: { $0.contains(row: row, col: col) }) {
+            NSCursor.pointingHand.set()
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
+    private func gridCell(at windowPoint: NSPoint) -> (row: Int, col: Int)? {
+        guard let textField = contentView?.subviews.first(where: { $0 is NSTextField }) as? NSTextField else {
+            return nil
+        }
+        let textPoint = textField.convert(windowPoint, from: nil)
+
+        // TextField uses standard macOS coords (origin bottom-left)
+        let col = Int(textPoint.x / charWidth)
+        let row = gridRows - 1 - Int(textPoint.y / lineHeight)
+
+        guard row >= 0, row < gridRows, col >= 0, col < gridCols else { return nil }
+        return (row, col)
+    }
+
+    func setGridDimensions(rows: Int, cols: Int) {
+        gridRows = rows
+        gridCols = cols
+    }
+
+    func setCharDimensions(width: CGFloat, height: CGFloat) {
+        charWidth = width
+        lineHeight = height
+    }
 }
 
 // MARK: - Widget Window Controller
@@ -496,7 +623,7 @@ class WidgetWindowController: NSWindowController {
     var socketConnected = false
 
     convenience init() {
-        let window = NSWindow(
+        let window = ClickableWindow(
             contentRect: NSRect(origin: .zero, size: Config.windowSize),
             styleMask: [.borderless],
             backing: .buffered,
@@ -656,6 +783,15 @@ class WidgetWindowController: NSWindowController {
                 ?? NSFont.monospacedSystemFont(ofSize: Config.fontSize, weight: .medium)
             textField.attributedStringValue = GridRenderer.build(
                 rows: rows, colors: cellColors, defaultColor: color, font: font)
+
+            // Update grid dimensions for click hit-testing
+            if let clickableWindow = window as? ClickableWindow {
+                clickableWindow.setGridDimensions(rows: rows.count, cols: rows.first?.count ?? 0)
+                clickableWindow.setCharDimensions(
+                    width: font.maximumAdvancement.width,
+                    height: font.pointSize * 1.2
+                )
+            }
         }
     }
 
@@ -692,8 +828,24 @@ class WidgetWindowController: NSWindowController {
             }
         case "clear_response":
             clearResponse()
+        case "set_click_regions":
+            if let regionsArray = params["regions"] as? [[String: Any]] {
+                updateClickRegions(regionsArray)
+            }
         default:
             break
+        }
+    }
+
+    func updateClickRegions(_ regionsData: [[String: Any]]) {
+        guard let clickableWindow = window as? ClickableWindow else {
+            debugLog("updateClickRegions: window is not ClickableWindow")
+            return
+        }
+        clickableWindow.clickRegions = regionsData.compactMap { ClickRegion(from: $0) }
+        debugLog("Updated click regions: \(clickableWindow.clickRegions.count) regions")
+        for r in clickableWindow.clickRegions {
+            debugLog("  region '\(r.id)' at row=\(r.row) col=\(r.col) w=\(r.width) h=\(r.height)")
         }
     }
 

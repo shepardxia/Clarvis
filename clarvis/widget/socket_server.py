@@ -31,10 +31,15 @@ class WidgetSocketServer:
         self._accept_thread: threading.Thread | None = None
         self._read_threads: list[threading.Thread] = []
         self._message_callback: Callable[[dict], None] | None = None
+        self._connect_callback: Callable[[], None] | None = None
 
     def on_message(self, callback: Callable[[dict], None]) -> None:
         """Register callback for messages received from widget."""
         self._message_callback = callback
+
+    def on_connect(self, callback: Callable[[], None]) -> None:
+        """Register callback invoked when a new widget client connects."""
+        self._connect_callback = callback
 
     def start(self) -> None:  # pragma: no cover
         """Start the socket server and begin accepting connections."""
@@ -112,6 +117,11 @@ class WidgetSocketServer:
                 )
                 t.start()
                 self._read_threads.append(t)
+                if self._connect_callback:
+                    try:
+                        self._connect_callback()
+                    except Exception:
+                        logger.exception("Error in connect callback")
             except socket.timeout:
                 continue
             except OSError:

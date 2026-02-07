@@ -110,6 +110,17 @@ class DisplayManager:
 
         self.renderer.set_voice_text(full_text, reveal_chars)
 
+    def _update_mic_state(self) -> None:
+        """Read mic state from state store and pass to renderer."""
+        if not self._state_store:
+            return
+        mic = self._state_store.get("mic") or {}
+        self.renderer.set_mic_state(
+            visible=mic.get("visible", False),
+            enabled=mic.get("enabled", False),
+            style=mic.get("style", "bracket"),
+        )
+
     def _loop(self, get_state: callable) -> None:
         """Display rendering loop.
 
@@ -123,6 +134,7 @@ class DisplayManager:
             self.tick()
             with self._lock:
                 self._update_voice_text()
+                self._update_mic_state()
                 status, context_percent, whimsy_verb = get_state()
                 color_def = StatusColors.get(status)
                 rows, cell_colors = self.renderer.render_grid(context_percent, whimsy_verb)

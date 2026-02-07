@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 from heybuddy import WakeWordDetector, DetectorConfig
 
-MODEL_DIR = Path.home() / ".clarvis/models"
+MODEL_DIR = Path(__file__).resolve().parent / "models"
 
 THRESHOLD = 0.3
 VAD_THRESHOLD = 0.2

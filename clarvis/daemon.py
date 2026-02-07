@@ -41,6 +41,7 @@ from .services.voice_orchestrator import VoiceCommandOrchestrator
 from .services.wake_word import WakeWordService, WakeWordConfig
 from .widget.renderer import FrameRenderer
 from .widget.config import get_config
+from .widget.click_regions import ClickRegion, ClickRegionManager
 from .widget.socket_server import WidgetSocketServer, get_socket_server
 
 
@@ -198,6 +199,7 @@ class CentralHubDaemon:
             bar_y_offset=config.display.bar_y_offset,
         )
         self.socket_server = socket_server or get_socket_server()
+        self.click_manager = ClickRegionManager(self.socket_server)
         self.display = DisplayManager(
             renderer=renderer,
             socket_server=self.socket_server,
@@ -428,10 +430,54 @@ class CentralHubDaemon:
             silence_timeout=config.voice.silence_timeout,
             text_linger=config.voice.text_linger,
         )
-        self.socket_server.on_message(
-            self.voice_orchestrator.handle_widget_message
-        )
+        # Register mic toggle region
+        self._register_mic_region()
         print("[Daemon] Voice command pipeline initialized", flush=True)
+
+    def _handle_widget_message(self, message: dict) -> None:
+        """General dispatcher for messages from the widget.
+
+        Routes ``region_click`` to the click manager (on the event loop
+        for thread safety), everything else to the voice orchestrator.
+        """
+        method = message.get("method")
+        if method == "region_click":
+            region_id = message.get("params", {}).get("id", "")
+            if self._event_loop:
+                self._event_loop.call_soon_threadsafe(
+                    self.click_manager.handle_click, region_id
+                )
+        elif self.voice_orchestrator:
+            self.voice_orchestrator.handle_widget_message(message)
+
+    def _register_mic_region(self) -> None:
+        """Register the mic-toggle click region and update state."""
+        config = get_config()
+        row, col, width = self.display.renderer.mic_icon_position()
+        region = ClickRegion("mic_toggle", row=row, col=col, width=width, height=1)
+        self.click_manager.register(region, self._toggle_voice)
+        self.state.update("mic", {
+            "visible": True,
+            "enabled": self.wake_word_service is not None and self.wake_word_service.is_running,
+            "style": "bracket",
+        })
+
+    def _toggle_voice(self) -> None:
+        """Toggle wake word listening on/off (click handler for mic region).
+
+        Uses pause/resume (not stop/start) so the detector stays alive
+        and the voice orchestrator's reference remains valid.
+        """
+        if not self.wake_word_service:
+            return
+        if self.wake_word_service.is_running:
+            self.wake_word_service.pause()
+            self.state.update("mic", {"visible": True, "enabled": False, "style": "bracket"})
+            print("[Daemon] Voice disabled (mic toggled off)", flush=True)
+        else:
+            self.wake_word_service.resume()
+            self.state.update("mic", {"visible": True, "enabled": True, "style": "bracket"})
+            print("[Daemon] Voice enabled (mic toggled on)", flush=True)
 
     def _on_wake_word_detected(self) -> None:
         """Handle wake word detection -- trigger voice command pipeline.
@@ -475,6 +521,8 @@ class CentralHubDaemon:
 
         # Widget socket server
         self.socket_server.start()
+        self.socket_server.on_message(self._handle_widget_message)
+        self.socket_server.on_connect(self.click_manager.push_regions)
 
         # Token usage service
         config = get_config()

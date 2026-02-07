@@ -6,6 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+MONOREPO_DIR="$(dirname "$REPO_DIR")"
 
 # Colors
 RED='\033[0;31m'
@@ -25,19 +26,37 @@ check_dependencies() {
     if command -v uv &> /dev/null; then
         print_success "uv found"
         USE_UV=true
-    elif command -v python3 &> /dev/null; then
-        PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-        if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"; then
-            print_success "Python $PYTHON_VERSION found"
-            USE_UV=false
-        else
-            print_error "Python 3.10+ required. Found: $PYTHON_VERSION"
-            exit 1
-        fi
     else
-        print_error "Neither uv nor python3 found. Install one:"
-        echo "  brew install uv    # recommended"
-        echo "  brew install python3"
+        print_error "uv is required. Install it:"
+        echo "  brew install uv"
+        echo "  # or: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        exit 1
+    fi
+}
+
+check_sibling_repos() {
+    print_header "Checking sibling repositories..."
+
+    local missing=false
+
+    if [ ! -d "$MONOREPO_DIR/SpotAPI" ]; then
+        print_error "SpotAPI not found at $MONOREPO_DIR/SpotAPI"
+        echo "  git clone git@github.com:shepardxia/clautify.git $MONOREPO_DIR/SpotAPI"
+        missing=true
+    else
+        print_success "SpotAPI found"
+    fi
+
+    if [ ! -d "$MONOREPO_DIR/hey-buddy" ]; then
+        print_error "hey-buddy not found at $MONOREPO_DIR/hey-buddy"
+        echo "  git clone git@github.com:shepardxia/hey-buddy.git $MONOREPO_DIR/hey-buddy"
+        missing=true
+    else
+        print_success "hey-buddy found"
+    fi
+
+    if [ "$missing" = true ]; then
+        print_error "Missing sibling repos. Clone them and re-run."
         exit 1
     fi
 }
@@ -46,18 +65,8 @@ setup_venv() {
     print_header "Setting up Python environment..."
 
     cd "$REPO_DIR"
-
-    if [ "$USE_UV" = true ]; then
-        uv sync
-        print_success "Dependencies installed with uv"
-    else
-        if [ ! -d ".venv" ]; then
-            python3 -m venv .venv
-            print_success "Created virtual environment"
-        fi
-        .venv/bin/pip install -e .
-        print_success "Dependencies installed with pip"
-    fi
+    uv sync
+    print_success "Dependencies installed (including sibling editable deps)"
 }
 
 configure_mcp() {
@@ -67,13 +76,13 @@ configure_mcp() {
         print_warning "claude CLI not found — skipping MCP config"
         echo "  Install Claude Code first: npm install -g @anthropic-ai/claude-code"
         echo "  Then re-run this script or manually run:"
-        echo "    claude mcp add -s user clarvis -- $REPO_DIR/.venv/bin/python -m clarvis.server"
+        echo "    claude mcp add -s user clarvis -- uv run --project $REPO_DIR clarvis"
         return
     fi
 
     # Remove existing entry if present, then add fresh
     claude mcp remove -s user clarvis 2>/dev/null || true
-    claude mcp add -s user clarvis -- "$REPO_DIR/.venv/bin/python" -m clarvis.server
+    claude mcp add -s user clarvis -- uv run --project "$REPO_DIR" clarvis
 
     print_success "MCP server configured (user scope)"
 }
@@ -107,23 +116,36 @@ install_cli() {
 configure_voice() {
     print_header "Configuring voice agent..."
 
-    local voice_dir="$HOME/.clarvis/voice-project"
-    mkdir -p "$voice_dir"
-
-    # Voice project MCP config — points to this repo's server
-    cat > "$voice_dir/.mcp.json" << MCPEOF
+    # Voice agent uses monorepo root as its project dir — write MCP config there
+    cat > "$MONOREPO_DIR/.mcp.json" << MCPEOF
 {
   "mcpServers": {
     "clarvis": {
-      "command": "$REPO_DIR/.venv/bin/python",
-      "args": ["-m", "clarvis.server"],
+      "command": "uv",
+      "args": ["run", "--project", "$REPO_DIR", "clarvis"],
       "cwd": "$REPO_DIR"
     }
   }
 }
 MCPEOF
 
-    print_success "Voice agent MCP config updated"
+    print_success "Voice agent MCP config written to $MONOREPO_DIR/.mcp.json"
+}
+
+check_env() {
+    print_header "Checking environment..."
+
+    local env_file="$REPO_DIR/.env"
+    if [ -f "$env_file" ] && grep -q "ANTHROPIC_API_KEY" "$env_file"; then
+        print_success "ANTHROPIC_API_KEY found in .env"
+    elif [ -n "$ANTHROPIC_API_KEY" ]; then
+        print_success "ANTHROPIC_API_KEY set in environment"
+    else
+        print_warning "ANTHROPIC_API_KEY not set"
+        echo "  Create $REPO_DIR/.env with:"
+        echo "    ANTHROPIC_API_KEY=sk-ant-..."
+        echo "  Or export it in your shell profile."
+    fi
 }
 
 print_next_steps() {
@@ -162,7 +184,9 @@ main() {
     echo ""
 
     check_dependencies
+    check_sibling_repos
     setup_venv
+    check_env
     configure_mcp
     install_cli
     configure_voice

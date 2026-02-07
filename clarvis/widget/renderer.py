@@ -6,6 +6,8 @@ Uses the layered RenderPipeline for compositing:
 - Layer 50: Avatar face (overwrites)
 - Layer 80: Progress bar (transparent)
 - Layer 90: Whimsy verb (transparent)
+- Layer 92: Mic icon (transparent)
+- Layer 95: Voice text overlay (transparent)
 """
 
 from datetime import datetime
@@ -62,12 +64,18 @@ class FrameRenderer:
         self.avatar_layer = self.pipeline.add_layer("avatar", priority=50)
         self.bar_layer = self.pipeline.add_layer("bar", priority=80)
         self.verb_layer = self.pipeline.add_layer("verb", priority=90)
+        self.mic_layer = self.pipeline.add_layer("mic_icon", priority=92, transparent=True)
         self.text_layer = self.pipeline.add_layer("voice_text", priority=95, transparent=True)
 
         # Voice text state
         self._voice_text = ""
         self._voice_reveal_chars = 0
         self._voice_active = False
+
+        # Mic icon state
+        self._mic_visible = False
+        self._mic_enabled = False
+        self._mic_style = "bracket"  # "bracket" or "dot"
 
         # Calculate layout
         self._recalculate_layout()
@@ -155,6 +163,32 @@ class FrameRenderer:
         self._voice_reveal_chars = 0
         self._voice_active = False
 
+    # Mic icon display
+    MIC_ICONS = {
+        "bracket": {"on": "[M]", "off": "[\u00b7]"},
+        "dot":     {"on": "\u25c9",  "off": "\u25cb"},
+    }
+    MIC_COLOR_OFF = 240  # dim gray
+
+    def set_mic_state(self, visible: bool, enabled: bool, style: str = "bracket") -> None:
+        """Update mic icon state for next render."""
+        self._mic_visible = visible
+        self._mic_enabled = enabled
+        self._mic_style = style if style in self.MIC_ICONS else "bracket"
+
+    def mic_icon_position(self) -> tuple[int, int, int]:
+        """Return (row, col, width) for the current mic icon style.
+
+        Positioned on the verb row (bar_y + 2), right-aligned, so it stays
+        within the visible window area regardless of grid height.
+        """
+        icons = self.MIC_ICONS.get(self._mic_style, self.MIC_ICONS["bracket"])
+        icon = icons["on"]
+        icon_w = len(icon)
+        row = self.bar_y + 2
+        col = self.width - icon_w
+        return row, col, icon_w
+
     def tick(self):
         """Advance animation state."""
         self.face.tick()
@@ -225,6 +259,17 @@ class FrameRenderer:
             percent=context_percent,
             color=StatusColors.get("idle").ansi
         )
+
+    def _render_mic_icon(self):
+        """Render mic toggle icon at bottom-right of grid."""
+        self.mic_layer.clear()
+        if not self._mic_visible:
+            return
+        icons = self.MIC_ICONS.get(self._mic_style, self.MIC_ICONS["bracket"])
+        icon = icons["on"] if self._mic_enabled else icons["off"]
+        color = 0 if self._mic_enabled else self.MIC_COLOR_OFF
+        row, col, _ = self.mic_icon_position()
+        self.mic_layer.put_text(col, row, icon, color)
 
     def _render_verb(self, verb: Optional[str]):
         """Render whimsy verb below the progress bar."""
@@ -302,6 +347,7 @@ class FrameRenderer:
         self._render_celestial(hour)
         self._render_avatar()
         self._render_bar(context_percent)
+        self._render_mic_icon()
         if not self._voice_active:
             self._render_verb(whimsy_verb)
         self._render_voice_text()

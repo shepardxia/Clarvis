@@ -4,21 +4,21 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from litellm import completion
+import anthropic
 
-# Load .env
-_env = Path(__file__).parent.parent.parent / ".env"
-if _env.exists():
-    for line in _env.read_text().splitlines():
-        if line.strip() and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+# Load .env from project root if ANTHROPIC_API_KEY not already set
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    _env = Path(__file__).resolve().parents[2] / ".env"
+    if _env.exists():
+        for line in _env.read_text().splitlines():
+            if line.strip() and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
 
 SYSTEM_PROMPT = """Generate ONE whimsical gerund (-ing word) that captures what the assistant is doing. Match the task, mood, and environment. Prefer obscure/delightful words. NEVER use: Terminating, Killing, Deleting, Dying, Crashing.{avoid}
 Output ONLY the word."""
@@ -53,17 +53,18 @@ def generate_whimsy_verb(context: str) -> str:
     avoid = _get_avoid_list()
     prompt = SYSTEM_PROMPT.format(avoid=avoid)
 
-    response = completion(
-        model="anthropic/claude-3-5-haiku-20241022",
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        system=prompt,
         messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": context[:1500]},  # More room for rich context
+            {"role": "user", "content": context[:1500]},
         ],
         max_tokens=10,
         temperature=0.9,
     )
 
-    verb = response.choices[0].message.content.strip()
+    verb = response.content[0].text.strip()
     verb = verb.split()[0].rstrip(".,!?:;").title()
 
     _add_to_history(verb)

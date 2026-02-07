@@ -13,10 +13,9 @@ dependencies = [
     "dspy",
     "clautify",
     "numba>=0.63.1",
-    "litellm>=1.81.1",
+    "anthropic",
     "heybuddy",
     "claude-agent-sdk",
-    "genlm-backend[mlx]",
 ]
 
 [tool.uv]
@@ -32,6 +31,9 @@ clarvis = "clarvis.server:main"
 clarvis-daemon = "clarvis.daemon:main"
 
 [project.optional-dependencies]
+mlx = [
+    "genlm-backend[mlx]",
+]
 dev = [
     "pytest",
     "pytest-cov",

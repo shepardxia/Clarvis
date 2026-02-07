@@ -71,7 +71,8 @@ VOICE_OUTPUT_FORMAT = {
 
 MUSIC_PROFILE_PATH = Path.home() / ".claude/memories/music_profile_compact.md"
 
-DEFAULT_PROJECT_DIR = Path.home() / "Desktop/directory/clarvis-suite"
+# Monorepo root: voice_agent.py → services/ → clarvis/ → Clarvis/ → clarvis-suite/
+DEFAULT_PROJECT_DIR = Path(__file__).resolve().parents[3]
 
 # Seconds of inactivity before the agent auto-disconnects to free memory.
 IDLE_TIMEOUT = 30.0

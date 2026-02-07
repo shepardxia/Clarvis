@@ -74,7 +74,7 @@ case "${1:-status}" in
     logs)    do_logs ;;
     debug)
         echo "Attaching to voice agent session..."
-        cd "$HOME/.clarvis/voice-project"
+        cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")/.."
         exec claude --continue
         ;;
     help|-h|--help)

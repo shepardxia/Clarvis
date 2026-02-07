@@ -24,6 +24,7 @@ class StateStore:
             "location": {},
             "time": {},
             "voice_text": {},
+            "mic": {},
         }
         self._observers: list[Callable[[str, dict], None]] = []
         self._lock = threading.RLock()  # Reentrant for nested calls
