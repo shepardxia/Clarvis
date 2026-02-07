@@ -267,6 +267,23 @@ class VoiceCommandOrchestrator:
         color_def = StatusColors.get(status)
         self.socket.push_frame({"theme_color": list(color_def.rgb)})
 
+    def _set_voice_text(self, text: str, *, streaming: bool = True, tts_started_at: float = 0) -> None:
+        """Update voice_text state for display."""
+        self.state.update(
+            "voice_text",
+            {
+                "full_text": text,
+                "tts_started_at": tts_started_at,
+                "tts_speed": self.tts_speed,
+                "active": True,
+                "streaming": streaming,
+            },
+        )
+
+    def _clear_voice_text(self) -> None:
+        """Clear voice text from display."""
+        self.state.update("voice_text", {"active": False})
+
     # ------------------------------------------------------------------
     # Widget message handler (called from socket read thread)
     # ------------------------------------------------------------------
@@ -341,7 +358,7 @@ class VoiceCommandOrchestrator:
                 # --- Per-iteration cleanup ---
                 if self._state is not VoicePipelineState.COOLDOWN:
                     self._state = VoicePipelineState.COOLDOWN
-                self.state.update("voice_text", {"active": False})
+                self._clear_voice_text()
 
                 if was_interrupted:
                     # Skip cooldown — pause wake word and restart pipeline
@@ -358,7 +375,7 @@ class VoiceCommandOrchestrator:
                 break
         finally:
             self._interrupt.clear()
-            self.state.update("voice_text", {"active": False})
+            self._clear_voice_text()
             self._state = VoicePipelineState.IDLE
             # Unlock status and restore pre-voice state
             self.state.unlock_status()
@@ -565,16 +582,7 @@ class VoiceCommandOrchestrator:
         # Show "Still thinking..." if TTFT exceeds 20s
         async def _thinking_hint() -> None:
             await asyncio.sleep(20.0)
-            self.state.update(
-                "voice_text",
-                {
-                    "full_text": "Still thinking...",
-                    "tts_started_at": 0,
-                    "tts_speed": self.tts_speed,
-                    "active": True,
-                    "streaming": True,
-                },
-            )
+            self._set_voice_text("Still thinking...")
 
         hint_task = self._loop.create_task(_thinking_hint())
         try:
@@ -592,16 +600,7 @@ class VoiceCommandOrchestrator:
                         response_chunks.append(chunk)
                         partial = "".join(response_chunks)
                         display_text = _extract_display_text(partial)
-                        self.state.update(
-                            "voice_text",
-                            {
-                                "full_text": display_text,
-                                "tts_started_at": 0,
-                                "tts_speed": self.tts_speed,
-                                "active": True,
-                                "streaming": True,
-                            },
-                        )
+                        self._set_voice_text(display_text)
         except TimeoutError:
             logger.warning("Agent query timed out after %ss", AGENT_QUERY_TIMEOUT)
             await self._safe_interrupt()
@@ -622,22 +621,13 @@ class VoiceCommandOrchestrator:
         if clean_response:
             self._transition(VoicePipelineState.RESPONDING)
             # TTS-synced reveal: display_manager reveals at word boundaries
-            self.state.update(
-                "voice_text",
-                {
-                    "full_text": clean_response,
-                    "tts_started_at": time.time(),
-                    "tts_speed": self.tts_speed,
-                    "active": True,
-                    "streaming": False,
-                },
-            )
+            self._set_voice_text(clean_response, streaming=False, tts_started_at=time.time())
             await self._speak(clean_response)
             # Hold text on screen, then clear
             if not self._interrupt.is_set() and self.text_linger > 0:
                 await asyncio.sleep(self.text_linger)
 
-        self.state.update("voice_text", {"active": False})
+        self._clear_voice_text()
 
         t_done = time.monotonic()
         ttft = (t_first_token - t_query) if t_first_token else 0
@@ -675,18 +665,9 @@ class VoiceCommandOrchestrator:
         Shows "..." on the grid for 1 second (no TTS) so the user knows the
         system heard the wake word but didn't get speech.
         """
-        self.state.update(
-            "voice_text",
-            {
-                "full_text": "...",
-                "tts_started_at": 0,
-                "tts_speed": self.tts_speed,
-                "active": True,
-                "streaming": True,
-            },
-        )
+        self._set_voice_text("...")
         await asyncio.sleep(1.0)
-        self.state.update("voice_text", {"active": False})
+        self._clear_voice_text()
         self._transition(VoicePipelineState.COOLDOWN)
 
     async def _safe_interrupt(self) -> None:

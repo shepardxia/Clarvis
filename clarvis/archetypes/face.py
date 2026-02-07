@@ -68,30 +68,10 @@ class FaceArchetype(Archetype):
 
     def _cache_elements(self) -> None:
         """Cache all element definitions for fast lookup."""
-        self._eyes = {}
-        self._mouths = {}
-        self._borders = {}
-        self._substrates = {}
-
-        for name in self.registry.list_names("eyes"):
-            elem = self.registry.get("eyes", name)
-            if elem:
-                self._eyes[name] = elem
-
-        for name in self.registry.list_names("mouths"):
-            elem = self.registry.get("mouths", name)
-            if elem:
-                self._mouths[name] = elem
-
-        for name in self.registry.list_names("borders"):
-            elem = self.registry.get("borders", name)
-            if elem:
-                self._borders[name] = elem
-
-        for name in self.registry.list_names("substrates"):
-            elem = self.registry.get("substrates", name)
-            if elem:
-                self._substrates[name] = elem
+        self._eyes = self.registry.get_all("eyes")
+        self._mouths = self.registry.get_all("mouths")
+        self._borders = self.registry.get_all("borders")
+        self._substrates = self.registry.get_all("substrates")
 
     def _cache_animation(self) -> None:
         """Cache current animation frames and pre-compute matrices.

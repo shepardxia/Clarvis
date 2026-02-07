@@ -36,6 +36,15 @@ class SessionTracker:
             self.state.update("sessions", sessions)
         return sessions[session_id]
 
+    @staticmethod
+    def _append_capped(session: dict, key: str, value, max_size: int) -> None:
+        """Append value to a capped history list in session dict."""
+        lst = session.get(key, [])
+        lst.append(value)
+        if len(lst) > max_size:
+            lst.pop(0)
+        session[key] = lst
+
     def update(
         self,
         session_id: str,
@@ -62,40 +71,27 @@ class SessionTracker:
         if self.displayed_id is None:
             self.displayed_id = session_id
 
-        # Add status if changed
+        # Add status if changed (dedup: skip if same as last)
         history = session.get("status_history", [])
         if not history or history[-1] != status:
-            history.append(status)
-            if len(history) > self.HISTORY_SIZE:
-                history.pop(0)
-        session["status_history"] = history
+            self._append_capped(session, "status_history", status, self.HISTORY_SIZE)
         session["last_status"] = status
 
         # Add context if valid
         if context > 0:
-            ctx_history = session.get("context_history", [])
-            ctx_history.append(context)
-            if len(ctx_history) > self.HISTORY_SIZE:
-                ctx_history.pop(0)
-            session["context_history"] = ctx_history
+            self._append_capped(session, "context_history", context, self.HISTORY_SIZE)
             session["last_context"] = context
 
         # Add tool if provided
         if tool_name:
-            tool_history = session.get("tool_history", [])
-            tool_history.append(tool_name)
-            if len(tool_history) > self.HISTORY_SIZE:
-                tool_history.pop(0)
-            session["tool_history"] = tool_history
+            self._append_capped(session, "tool_history", tool_name, self.HISTORY_SIZE)
             session["last_tool"] = tool_name
 
         # Track tool outcome (success/failure) when known
         if tool_succeeded is not None and tool_name:
-            outcomes = session.get("tool_outcomes", [])
-            outcomes.append({"tool": tool_name, "succeeded": tool_succeeded})
-            if len(outcomes) > self.HISTORY_SIZE:
-                outcomes.pop(0)
-            session["tool_outcomes"] = outcomes
+            self._append_capped(
+                session, "tool_outcomes", {"tool": tool_name, "succeeded": tool_succeeded}, self.HISTORY_SIZE
+            )
 
         sessions[session_id] = session
         self.state.update("sessions", sessions)
