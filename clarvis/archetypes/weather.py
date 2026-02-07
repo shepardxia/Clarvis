@@ -126,7 +126,7 @@ def _tick_physics_batch(
 
 
 @njit(cache=True)
-def _spawn_particles_snow(
+def _spawn_particles(
     p_x: np.ndarray,
     p_y: np.ndarray,
     p_vx: np.ndarray,
@@ -136,104 +136,30 @@ def _spawn_particles_snow(
     p_shape_idx: np.ndarray,
     start: int,
     count: int,
-    width: float,
-    speed_mult: float,
-    wind_factor: float,
     num_shapes: int,
+    x_off: float,
+    x_range: float,
+    y_off: float,
+    y_range: float,
+    vx_off: float,
+    vx_range: float,
+    vy_off: float,
+    vy_range: float,
+    life_base: int,
+    life_range: int,
 ):
-    """Spawn snow particles."""
-    base_vx = wind_factor * 0.15 * speed_mult
-    vx_var = (0.02 + wind_factor * 0.03) * speed_mult
+    """Spawn particles with parameterized position, velocity, and lifetime.
+
+    Each value is computed as: offset + random() * range.
+    """
     for i in range(count):
         idx = start + i
-        p_x[idx] = np.random.random() * width
-        p_y[idx] = np.random.random() * 2 - 2
-        p_vx[idx] = base_vx + (np.random.random() * 2 - 1) * vx_var
-        p_vy[idx] = (0.15 + np.random.random() * 0.2) * speed_mult
+        p_x[idx] = x_off + np.random.random() * x_range
+        p_y[idx] = y_off + np.random.random() * y_range
+        p_vx[idx] = vx_off + np.random.random() * vx_range
+        p_vy[idx] = vy_off + np.random.random() * vy_range
         p_age[idx] = 0
-        p_lifetime[idx] = 40 + int(np.random.random() * 60)
-        p_shape_idx[idx] = int(np.random.random() * num_shapes)
-
-
-@njit(cache=True)
-def _spawn_particles_rain(
-    p_x: np.ndarray,
-    p_y: np.ndarray,
-    p_vx: np.ndarray,
-    p_vy: np.ndarray,
-    p_age: np.ndarray,
-    p_lifetime: np.ndarray,
-    p_shape_idx: np.ndarray,
-    start: int,
-    count: int,
-    width: float,
-    speed_mult: float,
-    num_shapes: int,
-):
-    """Spawn rain particles."""
-    for i in range(count):
-        idx = start + i
-        p_x[idx] = np.random.random() * width
-        p_y[idx] = np.random.random() * 2 - 2
-        p_vx[idx] = (np.random.random() * 0.06 - 0.03) * speed_mult
-        p_vy[idx] = (0.5 + np.random.random() * 0.4) * speed_mult
-        p_age[idx] = 0
-        p_lifetime[idx] = 20 + int(np.random.random() * 30)
-        p_shape_idx[idx] = int(np.random.random() * num_shapes)
-
-
-@njit(cache=True)
-def _spawn_particles_windy(
-    p_x: np.ndarray,
-    p_y: np.ndarray,
-    p_vx: np.ndarray,
-    p_vy: np.ndarray,
-    p_age: np.ndarray,
-    p_lifetime: np.ndarray,
-    p_shape_idx: np.ndarray,
-    start: int,
-    count: int,
-    height: float,
-    speed_mult: float,
-    num_shapes: int,
-):
-    """Spawn wind particles."""
-    for i in range(count):
-        idx = start + i
-        p_x[idx] = np.random.random() * 2 - 2
-        p_y[idx] = np.random.random() * height
-        p_vx[idx] = (0.4 + np.random.random() * 0.4) * speed_mult
-        p_vy[idx] = (np.random.random() * 0.2 - 0.1) * speed_mult
-        p_age[idx] = 0
-        p_lifetime[idx] = 30 + int(np.random.random() * 30)
-        p_shape_idx[idx] = int(np.random.random() * num_shapes)
-
-
-@njit(cache=True)
-def _spawn_particles_fog(
-    p_x: np.ndarray,
-    p_y: np.ndarray,
-    p_vx: np.ndarray,
-    p_vy: np.ndarray,
-    p_age: np.ndarray,
-    p_lifetime: np.ndarray,
-    p_shape_idx: np.ndarray,
-    start: int,
-    count: int,
-    width: float,
-    height: float,
-    speed_mult: float,
-    num_shapes: int,
-):
-    """Spawn fog/cloudy particles."""
-    for i in range(count):
-        idx = start + i
-        p_x[idx] = np.random.random() * width
-        p_y[idx] = np.random.random() * height
-        p_vx[idx] = (np.random.random() * 0.1 - 0.05) * speed_mult
-        p_vy[idx] = (np.random.random() * 0.06 - 0.03) * speed_mult
-        p_age[idx] = 0
-        p_lifetime[idx] = 60 + int(np.random.random() * 90)
+        p_lifetime[idx] = life_base + int(np.random.random() * life_range)
         p_shape_idx[idx] = int(np.random.random() * num_shapes)
 
 
@@ -552,78 +478,38 @@ class WeatherArchetype(Archetype):
             self._spawn_batch(spawn_count)
 
     def _spawn_batch(self, count: int) -> None:
-        """Spawn particles using Numba JIT functions."""
+        """Spawn particles using Numba JIT function."""
         while self.p_count + count > len(self.p_x):
             self._grow_arrays()
 
-        start = self.p_count
         s = self.speed_multiplier
-        num_shapes = len(self._shape_cache)
+        w, h = float(self.width), float(self.height)
 
+        # Compute spawn params per weather type: (x, y, vx, vy) as offset+range
         if self.weather_type == "snow":
-            wind_factor = min(self.wind_speed / 30.0, 1.0)
-            _spawn_particles_snow(
-                self.p_x,
-                self.p_y,
-                self.p_vx,
-                self.p_vy,
-                self.p_age,
-                self.p_lifetime,
-                self.p_shape_idx,
-                start,
-                count,
-                float(self.width),
-                s,
-                wind_factor,
-                num_shapes,
-            )
+            wf = min(self.wind_speed / 30.0, 1.0)
+            vx_var = (0.02 + wf * 0.03) * s
+            params = (0, w, -2, 2, wf * 0.15 * s - vx_var, 2 * vx_var, 0.15 * s, 0.2 * s, 40, 60)
         elif self.weather_type == "rain":
-            _spawn_particles_rain(
-                self.p_x,
-                self.p_y,
-                self.p_vx,
-                self.p_vy,
-                self.p_age,
-                self.p_lifetime,
-                self.p_shape_idx,
-                start,
-                count,
-                float(self.width),
-                s,
-                num_shapes,
-            )
+            params = (0, w, -2, 2, -0.03 * s, 0.06 * s, 0.5 * s, 0.4 * s, 20, 30)
         elif self.weather_type == "windy":
-            _spawn_particles_windy(
-                self.p_x,
-                self.p_y,
-                self.p_vx,
-                self.p_vy,
-                self.p_age,
-                self.p_lifetime,
-                self.p_shape_idx,
-                start,
-                count,
-                float(self.height),
-                s,
-                num_shapes,
-            )
+            params = (-2, 2, 0, h, 0.4 * s, 0.4 * s, -0.1 * s, 0.2 * s, 30, 30)
         else:  # cloudy, fog
-            _spawn_particles_fog(
-                self.p_x,
-                self.p_y,
-                self.p_vx,
-                self.p_vy,
-                self.p_age,
-                self.p_lifetime,
-                self.p_shape_idx,
-                start,
-                count,
-                float(self.width),
-                float(self.height),
-                s,
-                num_shapes,
-            )
+            params = (0, w, 0, h, -0.05 * s, 0.1 * s, -0.03 * s, 0.06 * s, 60, 90)
 
+        _spawn_particles(
+            self.p_x,
+            self.p_y,
+            self.p_vx,
+            self.p_vy,
+            self.p_age,
+            self.p_lifetime,
+            self.p_shape_idx,
+            self.p_count,
+            count,
+            len(self._shape_cache),
+            *params,
+        )
         self.p_count += count
 
     def _build_exclusion_set(self) -> set:
