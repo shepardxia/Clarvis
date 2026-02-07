@@ -275,11 +275,6 @@ class ElementRegistry:
         with self._lock:
             return dict(self._elements.get(kind, {}))
 
-    def list_kinds(self) -> list[str]:
-        """List all available element kinds."""
-        with self._lock:
-            return list(self._elements.keys())
-
     def list_names(self, kind: str) -> list[str]:
         """List all element names for a given kind."""
         with self._lock:
@@ -317,8 +312,3 @@ class ElementRegistry:
                 listener(kind, name)
             except Exception as e:
                 print(f"Warning: Listener error on {kind}/{name}: {e}")
-
-    def __contains__(self, key: tuple[str, str]) -> bool:
-        """Check if an element exists: ('eyes', 'normal') in registry"""
-        kind, name = key
-        return self.get(kind, name) is not None

@@ -11,7 +11,6 @@ from .colors import (
     STATUS_MAP,
     ColorDef,
     StatusColors,
-    get_status_colors_for_config,
 )
 from .session_tracker import SessionTracker
 from .display_manager import DisplayManager
@@ -35,7 +34,6 @@ __all__ = [
     "ColorDef",
     "StatusColors",
     "STATUS_MAP",
-    "get_status_colors_for_config",
     # Managers
     "SessionTracker",
     "DisplayManager",

@@ -130,10 +130,3 @@ class WakeWordService:
         if not self._detector.is_running:
             self._detector.start()
             logger.info("Wake word detection resumed")
-
-    def update_config(self, config: WakeWordConfig) -> None:
-        self.config = config
-
-    def reset_cooldown(self) -> None:
-        if self._detector:
-            self._detector.reset_cooldown()

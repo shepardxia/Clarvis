@@ -10,7 +10,6 @@ from typing import Optional
 from ..core.colors import (
     DEFAULT_THEME,
     get_available_themes,
-    get_merged_theme_colors,
     load_theme,
 )
 
@@ -287,10 +286,6 @@ class WidgetConfig:
             display=DisplayConfig(),
             testing=TestingConfig(),
         )
-
-    def get_colors_for_swift(self) -> dict[str, list[float]]:
-        """Get merged theme colors as RGB arrays for Swift widget."""
-        return get_merged_theme_colors(self.theme.base, self.theme.overrides)
 
 
 # Global instance

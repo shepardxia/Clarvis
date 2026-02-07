@@ -16,31 +16,6 @@ import numpy as np
 SPACE = ord(" ")
 
 
-def str_to_matrix(template: str) -> np.ndarray:
-    """
-    Convert a multi-line string template to a 2D char matrix.
-
-    Example:
-        template = '''
-        ╭===╮
-        │ o │
-        ╰===╯
-        '''
-        matrix = str_to_matrix(template)  # shape (3, 5)
-    """
-    lines = template.strip("\n").split("\n")
-    if not lines:
-        return np.array([[]], dtype=np.uint32)
-
-    # Pad all lines to same width
-    max_width = max(len(line) for line in lines)
-    padded = [line.ljust(max_width) for line in lines]
-
-    # Convert to char codes
-    matrix = np.array([[ord(c) for c in line] for line in padded], dtype=np.uint32)
-    return matrix
-
-
 class Layer:
     """A single rendering layer with char and color arrays and bounding box tracking."""
 
@@ -192,10 +167,6 @@ class RenderPipeline:
         """Get a layer by name."""
         return self.layers.get(name)
 
-    def remove_layer(self, name: str):
-        """Remove a layer."""
-        self.layers.pop(name, None)
-
     def render(self) -> tuple[np.ndarray, np.ndarray]:
         """
         Render all layers and flatten.
@@ -236,11 +207,6 @@ class RenderPipeline:
                     self.out_colors[y1:y2, x1:x2] = layer.colors[y1:y2, x1:x2]
 
         return self.out_chars, self.out_colors
-
-    def to_string(self) -> str:
-        """Render and return plain text."""
-        self.render()
-        return "\n".join("".join(chr(c) for c in row) for row in self.out_chars)
 
     def to_grid(self) -> tuple[list[str], list[list[int]]]:
         """Render and return structured grid data.

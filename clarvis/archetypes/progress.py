@@ -64,15 +64,6 @@ class ProgressArchetype(Archetype):
         self._percent_cache[percent] = (chars, colors)
         return chars, colors
 
-    def cache_stats(self) -> dict:
-        """Return cache statistics."""
-        total_bytes = sum(c.nbytes + col.nbytes for c, col in self._percent_cache.values())
-        return {
-            "cached_percentages": len(self._percent_cache),
-            "memory_bytes": total_bytes,
-            "memory_kb": total_bytes / 1024,
-        }
-
     def render(self, layer: Layer, x: int = 0, y: int = 0, percent: float = 0.0, color: int = 8, **kwargs) -> None:
         """
         Render progress bar to layer using cached matrices when possible.

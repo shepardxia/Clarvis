@@ -391,15 +391,6 @@ class WeatherArchetype(Archetype):
 
         return stats
 
-    def cache_stats(self) -> dict:
-        """Return shape cache statistics."""
-        return {
-            "current_weather": self.weather_type,
-            "cached_shapes": len(self._shape_cache),
-            "active_particles": self.p_count,
-            "ambient_clouds": len(self.ambient_clouds),
-        }
-
     def set_exclusion_zones(self, zones: list[BoundingBox]) -> None:
         """Set areas where particles should not render."""
         self.exclusion_zones = zones

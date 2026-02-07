@@ -127,18 +127,6 @@ class FaceArchetype(Archetype):
 
         return stats
 
-    def cache_stats(self) -> dict:
-        """Return cache statistics for debugging."""
-        total_frames = sum(len(frames) for frames in self._state_cache.values())
-        total_bytes = sum(sum(m.nbytes for m in frames) for frames in self._state_cache.values())
-        return {
-            "cached_states": len(self._state_cache),
-            "total_frames": total_frames,
-            "memory_bytes": total_bytes,
-            "memory_kb": total_bytes / 1024,
-            "states": {k: len(v) for k, v in self._state_cache.items()},
-        }
-
     def _on_element_change(self, kind: str, name: str) -> None:
         """Rebuild caches when relevant elements change."""
         if kind in ("eyes", "mouths", "borders", "substrates"):

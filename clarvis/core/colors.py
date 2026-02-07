@@ -23,20 +23,6 @@ class ColorDef:
     ansi: int  # ANSI 256 color code
     rgb: Tuple[float, float, float]  # RGB values 0.0-1.0 for Swift
 
-    @property
-    def hex(self) -> str:
-        """Get hex color string."""
-        r, g, b = self.rgb
-        return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
-
-    def ansi_fg(self) -> str:
-        """Get ANSI foreground escape code."""
-        return f"\033[38;5;{self.ansi}m"
-
-    def ansi_bg(self) -> str:
-        """Get ANSI background escape code."""
-        return f"\033[48;5;{self.ansi}m"
-
 
 # =============================================================================
 # Theme Definitions
@@ -230,43 +216,3 @@ STATUS_MAP: dict[str, ColorDef] = THEMES[DEFAULT_THEME].copy()
 # =============================================================================
 # Config Export - For Swift/JSON
 # =============================================================================
-
-
-def get_status_colors_for_config() -> Dict[str, Dict]:
-    """Get status colors in format suitable for config.json (uses current theme)."""
-    return {
-        status: {
-            "r": color.rgb[0],
-            "g": color.rgb[1],
-            "b": color.rgb[2],
-        }
-        for status, color in STATUS_MAP.items()
-    }
-
-
-def get_merged_theme_colors(
-    theme_name: str, overrides: Optional[Dict[str, List[float]]] = None
-) -> Dict[str, List[float]]:
-    """
-    Get theme colors merged with overrides as RGB arrays.
-
-    Args:
-        theme_name: Name of the base theme
-        overrides: Optional dict mapping status names to [r, g, b] arrays
-
-    Returns:
-        Dict mapping status names to [r, g, b] arrays
-    """
-    if theme_name not in THEMES:
-        theme_name = DEFAULT_THEME
-
-    overrides = overrides or {}
-    result = {}
-
-    for status, color in THEMES[theme_name].items():
-        if status in overrides and len(overrides[status]) == 3:
-            result[status] = overrides[status]
-        else:
-            result[status] = list(color.rgb)
-
-    return result

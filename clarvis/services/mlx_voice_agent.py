@@ -116,11 +116,6 @@ class MLXVoiceAgent:
     def connected(self) -> bool:
         return self._connected
 
-    def clear_history(self) -> None:
-        """Clear conversation history (e.g. between voice sessions)."""
-        self._history.clear()
-        _dbg("Chat history cleared")
-
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
