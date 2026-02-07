@@ -12,7 +12,8 @@ from heybuddy import WakeWordDetector, DetectorConfig
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_DIR = Path.home() / ".clarvis/models"
+# Clarvis/models/ — two levels up from clarvis/services/
+DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 
 
 @dataclass
