@@ -30,7 +30,9 @@ I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see 
 - **Show my mood** — I look different when idle, thinking, running tools, or waiting for you
 - **Live on your desktop** — I'm a tiny macOS widget that stays out of your way
 - **Know the weather** — Rain and snow particles fall based on actual conditions outside
-- **Control your Sonos** — Ask Claude to play music, and I'll make it happen
+- **Control your music** — Spotify playback via [clautify](https://github.com/shepardxia/clautify) DSL (`play "jazz" volume 70 mode shuffle`)
+- **Listen for you** — Wake word detection via [hey-buddy](https://github.com/shepardxia/hey-buddy), speech-to-text, and voice responses via TTS
+- **Track token usage** — Monitor Claude API consumption (5-hour and 7-day limits)
 
 ## Get Me Running
 
@@ -65,9 +67,19 @@ Want me to know your exact location? `brew install corelocationcli`
 
 ## Architecture
 
-### Rendering Pipeline
+Three processes connected via Unix sockets:
 
-My face is rendered using a high-performance ASCII engine with aggressive caching:
+```
+Claude Code hooks → nc -U /tmp/clarvis-daemon.sock → Daemon → Widget
+                                                        ↑
+                                             MCP Server (tools)
+```
+
+- **MCP Server** — Thin client registered with Claude Code. Exposes tools for weather, status, music control, thinking feed, and token usage. Communicates with daemon via JSON-RPC.
+- **Daemon** — Long-running singleton. Receives hook events, classifies tools into semantic statuses, manages background services (weather, location, voice, Spotify), drives the rendering loop, and pushes structured grid frames to the widget.
+- **Widget** — Native Cocoa app. Receives grid data (rows, cell colors, theme color) via Unix socket, renders colored monospace text. Supports click regions for interactive elements like the mic toggle.
+
+### Rendering Pipeline
 
 ```
 Status Change
@@ -83,7 +95,7 @@ Status Change
 ```
 
 - **State-based caching** — All 358 animation frames pre-computed at startup (~77KB)
-- **Instant status switches** — Cached matrices mean 0.2μs state transitions
+- **Instant status switches** — Cached matrices mean 0.2us state transitions
 - **Layer compositing** — Weather, face, and progress bar on separate NumPy layers
 - **Structured grid output** — Rows + per-cell color codes sent as JSON, no ANSI encoding
 - **Socket streaming** — Frames push to widget via Unix socket, no polling
@@ -100,11 +112,11 @@ sequences:
     - { eyes: "closed", mouth: "smile" }
     - { eyes: "half", mouth: "smile" }
   rest:
-    - happy    # ← preset expands to full frame
+    - happy    # preset expands to full frame
     - happy
 
 frames:
-  - $rest      # ← sequence reference
+  - $rest      # sequence reference
   - $blink
   - $rest
 ```
@@ -124,23 +136,16 @@ def _tick_physics_batch(p_x, p_y, p_vx, p_vy, ...):
         p_y[i] += p_vy[i]
 ```
 
-| Particles | Physics | Render |
-|-----------|---------|--------|
-| 50 | 0.002ms | 0.02ms |
-| 100 | 0.002ms | 0.03ms |
+### Resource Usage
 
-### Performance Summary
-
-| Component | Time | Notes |
-|-----------|------|-------|
-| Status switch | 0.2μs | Cached matrix swap |
-| Python render + grid | 0.084ms | NumPy compositing + `.tolist()` |
-| JSON serialize | 0.027ms | 3-field wire format |
-| Swift GridRenderer | ~0.1ms | Run-length color batching |
-| Weather tick | 0.002ms | JIT-compiled batch |
-| **Total frame** | **~0.21ms** | vs 333ms budget @ 3 FPS |
-
-**CPU usage: ~1.2 CPU sec/hour** at 3 FPS. The daemon spends most time sleeping.
+| Metric | Value |
+|--------|-------|
+| CPU | ~1.2 CPU sec/hour |
+| Memory | ~45 MB resident |
+| Frame budget | <0.3ms of 200ms (5 FPS) |
+| Grid size | 29×12 cells |
+| Staleness timeout | 30s |
+| Startup | ~2s |
 
 ### Tool-Aware Animations
 
@@ -154,29 +159,45 @@ The daemon maps Claude's tool calls to semantic states:
 | Task | `thinking` | Eyes drift, pondering |
 | AskUserQuestion | `awaiting` | Curious, watching |
 
+MCP tools use heuristic keyword matching on the tool name suffix.
+
 ## Project Structure
 
 ```
 clarvis/
-├── server.py              # MCP server entry point
+├── server.py              # MCP server (FastMCP 2.x)
 ├── daemon.py              # Central hub daemon
-├── core/                  # State management, display loop, IPC
-├── services/              # Weather, location, voice pipeline, Sonos
+├── spotify_tools.py       # Spotify DSL tool (mounted sub-server)
+├── core/                  # State management, display loop, IPC, scheduler
+├── services/              # Weather, location, voice pipeline, Spotify, token usage
 ├── archetypes/            # Face, weather, progress renderers
 │   ├── face.py            # State-cached face animations
 │   ├── weather.py         # JIT-compiled particle system
 │   └── progress.py        # Percentage-cached progress bar
 ├── elements/              # Declarative YAML definitions
 │   └── animations/        # Status animations + shorthands
-├── widget/                # Render pipeline, socket server
+├── widget/                # Render pipeline, socket server, click regions
 └── ClarvisWidget/         # Native Cocoa widget (Swift)
     └── main.swift         # GridRenderer, socket client, ASR
 ```
+
+## Development
+
+```bash
+uv sync --extra dev                    # Install all dependencies
+uv run pytest                          # Run tests (69 tests, ~3s)
+uv run pytest --cov=clarvis            # With coverage
+uv run ruff check . && uv run ruff format .  # Lint + format
+```
+
+Pre-commit hooks run ruff lint and ruff-format on every commit.
 
 ## Credits
 
 - Thinking feed adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
 - Token usage API discovery via [codelynx.dev](https://codelynx.dev/posts/claude-code-usage-limits-statusline)
+- Music control via [clautify](https://github.com/shepardxia/clautify) (Spotify DSL)
+- Wake word detection via [hey-buddy](https://github.com/shepardxia/hey-buddy)
 
 ## License
 
