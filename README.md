@@ -196,8 +196,8 @@ Pre-commit hooks run ruff lint and ruff-format on every commit.
 
 - Thinking feed adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
 - Token usage API discovery via [codelynx.dev](https://codelynx.dev/posts/claude-code-usage-limits-statusline)
-- Music control via [clautify](https://github.com/shepardxia/clautify) (Spotify DSL)
-- Wake word detection via [hey-buddy](https://github.com/shepardxia/hey-buddy)
+- Spotify Connect client via [SpotAPI](https://github.com/Aran404/SpotAPI) by [@Aran404](https://github.com/Aran404)
+- Wake word detection via [hey-buddy](https://github.com/painebenjamin/hey-buddy) by [@painebenjamin](https://github.com/painebenjamin)
 
 ## License
 
