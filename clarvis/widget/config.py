@@ -157,10 +157,6 @@ class VoiceConfig:
     text_linger: float = 3.0
     model: Optional[str] = None  # Claude model alias (e.g. "sonnet", "haiku", "opus")
     max_thinking_tokens: Optional[int] = None  # None = SDK default
-    provider: str = "claude"  # "claude" or "mlx"
-    mlx_model: str = "mlx-community/Qwen2.5-7B-Instruct-4bit"
-    mlx_temperature: float = 0.7
-    mlx_max_tokens: int = 512
 
     def to_dict(self) -> dict:
         d = {
@@ -172,10 +168,6 @@ class VoiceConfig:
             "tts_enabled": self.tts_enabled,
             "tts_speed": self.tts_speed,
             "text_linger": self.text_linger,
-            "provider": self.provider,
-            "mlx_model": self.mlx_model,
-            "mlx_temperature": self.mlx_temperature,
-            "mlx_max_tokens": self.mlx_max_tokens,
         }
         if self.model is not None:
             d["model"] = self.model
@@ -198,10 +190,6 @@ class VoiceConfig:
             text_linger=d.get("text_linger", 3.0),
             model=d.get("model"),
             max_thinking_tokens=d.get("max_thinking_tokens"),
-            provider=d.get("provider", "claude"),
-            mlx_model=d.get("mlx_model", "mlx-community/Qwen2.5-7B-Instruct-4bit"),
-            mlx_temperature=d.get("mlx_temperature", 0.7),
-            mlx_max_tokens=d.get("mlx_max_tokens", 200),
         )
 
 

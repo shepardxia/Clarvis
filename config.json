@@ -35,6 +35,11 @@
     "input_device": null,
     "use_int8": false
   },
+  "memory": {
+    "enabled": true,
+    "data_dir": "~/.clarvis/memory",
+    "default_dataset": "clarvis"
+  },
   "voice": {
     "enabled": true,
     "provider": "claude",

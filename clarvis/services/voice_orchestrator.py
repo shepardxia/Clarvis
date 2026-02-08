@@ -22,9 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
-import json
 import logging
-import re
 import time
 import uuid
 from contextlib import aclosing
@@ -140,48 +138,6 @@ class ASRResult:
             text=params.get("text"),
             error=params.get("error"),
         )
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Structured response parsing (output_format: JSON with text + expects_reply)
-# ──────────────────────────────────────────────────────────────────────
-
-# Regex to extract the "text" field value from partial/complete JSON.
-# Handles escaped characters within the string value.
-_TEXT_FIELD_RE = re.compile(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"?')
-
-
-def _extract_display_text(partial_json: str) -> str:
-    """Extract the 'text' field value from partial JSON for streaming display.
-
-    During streaming, chunks are partial JSON like '{"text": "Playing some t'.
-    This extracts just the text content for display on the widget.
-    """
-    match = _TEXT_FIELD_RE.search(partial_json)
-    if not match:
-        return ""
-    raw = match.group(1)
-    # Unescape JSON string escapes
-    try:
-        return json.loads(f'"{raw}"')
-    except (json.JSONDecodeError, ValueError):
-        return raw
-
-
-def _parse_structured_response(text: str) -> tuple[str, bool]:
-    """Parse the full structured JSON response.
-
-    Returns (response_text, expects_reply).
-    Falls back to (raw_text, False) if JSON parsing fails.
-    """
-    try:
-        data = json.loads(text)
-        return data.get("text", ""), data.get("expects_reply", False)
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("Failed to parse structured response, falling back to raw text")
-        # Fallback: try to extract text field via regex
-        display = _extract_display_text(text)
-        return display or text, False
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -605,9 +561,7 @@ class VoiceCommandOrchestrator:
                             t_first_token = time.monotonic()
                             hint_task.cancel()
                         response_chunks.append(chunk)
-                        partial = "".join(response_chunks)
-                        display_text = _extract_display_text(partial)
-                        self._set_voice_text(display_text)
+                        self._set_voice_text("".join(response_chunks))
         except TimeoutError:
             logger.warning("Agent query timed out after %ss", AGENT_QUERY_TIMEOUT)
             await self._safe_interrupt()
@@ -622,8 +576,8 @@ class VoiceCommandOrchestrator:
             self._transition(VoicePipelineState.COOLDOWN)
             return None
 
-        full_response = "".join(response_chunks).strip()
-        clean_response, expects_reply = _parse_structured_response(full_response)
+        clean_response = "".join(response_chunks).strip()
+        expects_reply = self.agent.expects_reply
 
         if clean_response:
             self._transition(VoicePipelineState.RESPONDING)

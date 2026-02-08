@@ -31,6 +31,8 @@ from .core.refresh_manager import RefreshManager
 from .core.scheduler import Scheduler
 from .core.session_tracker import SessionTracker
 from .core.state import StateStore, get_state_store
+from .services.cognee_memory import CogneeMemoryService
+from .services.context_accumulator import ContextAccumulator
 from .services.token_usage import TokenUsageService
 from .services.voice_agent import VoiceAgent
 from .services.voice_orchestrator import VoiceCommandOrchestrator
@@ -178,6 +180,8 @@ class CentralHubDaemon:
         self.wake_word_service: Optional[WakeWordService] = None
         self.voice_agent: Optional[VoiceAgent] = None
         self.voice_orchestrator: Optional[VoiceCommandOrchestrator] = None
+        self.memory_service: CogneeMemoryService = CogneeMemoryService()
+        self.context_accumulator = ContextAccumulator()
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         self.scheduler: Optional[Scheduler] = None
 
@@ -226,6 +230,9 @@ class CentralHubDaemon:
             command_server=self.command_server,
             token_usage_service_provider=lambda: self.token_usage_service,
             voice_orchestrator_provider=lambda: self.voice_orchestrator,
+            memory_service_provider=lambda: self.memory_service,
+            context_accumulator_provider=lambda: self.context_accumulator,
+            event_loop=None,  # Set in run() once the loop exists
         )
 
     # --- Hook event processing (delegated to HookProcessor) ---
@@ -321,22 +328,11 @@ class CentralHubDaemon:
         if not needs_voice:
             return
 
-        if config.voice.provider == "mlx":
-            from clarvis.services.mlx_voice_agent import MLXVoiceAgent
-
-            self.voice_agent = MLXVoiceAgent(
-                event_loop=self._event_loop,
-                model_name=config.voice.mlx_model,
-                temperature=config.voice.mlx_temperature,
-                max_tokens=config.voice.mlx_max_tokens,
-            )
-            print(f"[Daemon] Using MLX provider: {config.voice.mlx_model}", flush=True)
-        else:
-            self.voice_agent = VoiceAgent(
-                event_loop=self._event_loop,
-                model=config.voice.model,
-                max_thinking_tokens=config.voice.max_thinking_tokens,
-            )
+        self.voice_agent = VoiceAgent(
+            event_loop=self._event_loop,
+            model=config.voice.model,
+            max_thinking_tokens=config.voice.max_thinking_tokens,
+        )
         self.voice_orchestrator = VoiceCommandOrchestrator(
             event_loop=self._event_loop,
             socket_server=self.socket_server,
@@ -520,6 +516,16 @@ class CentralHubDaemon:
             blocking=True,
         )
 
+        # Context accumulation — scan for new session summaries
+        if self.context_accumulator:
+            self.scheduler.register(
+                "context_accumulation",
+                self.context_accumulator.accumulate,
+                active_interval=60,
+                idle_interval=300,
+                blocking=True,
+            )
+
         # FPS adjustment on mode change
         self.scheduler.on_mode_change(self._on_mode_change)
 
@@ -552,12 +558,43 @@ class CentralHubDaemon:
         if self.wake_word_service:
             self.wake_word_service.stop()
 
+        # Stop memory service
+        if self.memory_service and self.memory_service._ready and self._event_loop:
+            try:
+                future = asyncio.run_coroutine_threadsafe(self.memory_service.stop(), self._event_loop)
+                future.result(timeout=5.0)
+            except Exception:
+                pass  # Best-effort — daemon is exiting anyway
+
     async def run(self) -> None:
         """Run the daemon until interrupted."""
         self._event_loop = asyncio.get_running_loop()
+        self.commands._event_loop = self._event_loop
         self.start()
         self._start_scheduler()
         self._init_voice_pipeline()
+
+        # Start memory service (fire-and-forget)
+        config = get_config()
+        memory_config = getattr(config, "memory", None)
+        if memory_config is None:
+            # Fall back to raw config dict if WidgetConfig doesn't have a memory attr
+            import json
+
+            from .widget.config import CONFIG_PATH
+
+            raw = {}
+            try:
+                if CONFIG_PATH.exists():
+                    raw = json.loads(CONFIG_PATH.read_text())
+            except Exception:
+                pass
+            memory_config = raw.get("memory", {})
+        else:
+            memory_config = memory_config if isinstance(memory_config, dict) else {}
+
+        if memory_config.get("enabled", True):
+            asyncio.create_task(self.memory_service._safe_start(memory_config))
         try:
             # Event-driven — sleep indefinitely, all work happens via
             # callbacks (scheduler timers, IPC handlers).

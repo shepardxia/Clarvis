@@ -24,6 +24,7 @@ from claude_agent_sdk import (
     ClaudeSDKClient,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,9 +41,8 @@ Rules:
 - A <context> block may precede the user's message with current situational data. \
 Use it to inform your responses naturally — don't mention it explicitly.
 - If a music_profile section is provided, use it to inform song/artist recommendations without being asked.
-
-Your response will be structured as JSON with "text" and "expects_reply" fields.
-Set expects_reply to true ONLY when you ask a direct question and need the answer to proceed.\
+- If you need the user to answer a question before you can proceed, call the continue_listening tool. \
+Do not generate additional text after calling continue_listening.\
 """
 
 VOICE_ALLOWED_TOOLS = [
@@ -51,25 +51,6 @@ VOICE_ALLOWED_TOOLS = [
     "WebSearch",
     "WebFetch",
 ]
-
-VOICE_OUTPUT_FORMAT = {
-    "type": "json_schema",
-    "schema": {
-        "type": "object",
-        "properties": {
-            "text": {
-                "type": "string",
-                "description": "The response text to speak aloud",
-            },
-            "expects_reply": {
-                "type": "boolean",
-                "description": "True only when asking a direct question that needs an answer",
-            },
-        },
-        "required": ["text", "expects_reply"],
-        "additionalProperties": False,
-    },
-}
 
 MUSIC_PROFILE_PATH = Path.home() / ".claude/memories/music_profile_compact.md"
 
@@ -109,6 +90,7 @@ class VoiceAgent:
         self._lock = asyncio.Lock()
         self._idle_handle: asyncio.TimerHandle | None = None
         self._sending = False  # True while send() is active (guards idle timer)
+        self.expects_reply = False  # Set by send() when continue_listening tool detected
 
     # ------------------------------------------------------------------
     # Project directory setup
@@ -151,7 +133,6 @@ class VoiceAgent:
             model=self._model,
             max_thinking_tokens=self._max_thinking_tokens,
             allowed_tools=VOICE_ALLOWED_TOOLS,
-            output_format=VOICE_OUTPUT_FORMAT,
             permission_mode="bypassPermissions",
             setting_sources=["project"],
             continue_conversation=not os.environ.get("CLARVIS_NEW_CONVERSATION"),
@@ -246,10 +227,16 @@ class VoiceAgent:
         """Send a voice command and yield response text chunks.
 
         Manages the idle timer: cancels on entry, restarts in finally.
+        Also detects continue_listening tool calls and sets
+        self.expects_reply accordingly.  Text after the tool call
+        is suppressed to prevent TTS from speaking it.
         """
         self._cancel_idle_timer()
         await self.ensure_connected()
         assert self._client is not None  # guaranteed by ensure_connected()
+
+        self.expects_reply = False
+        saw_signal = False
 
         self._sending = True
         try:
@@ -257,7 +244,11 @@ class VoiceAgent:
             async for message in self._client.receive_response():
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
-                        if isinstance(block, TextBlock):
+                        if isinstance(block, ToolUseBlock) and "continue_listening" in block.name:
+                            self.expects_reply = True
+                            saw_signal = True
+                            logger.debug("continue_listening tool detected")
+                        elif isinstance(block, TextBlock) and not saw_signal:
                             yield block.text
                 elif isinstance(message, ResultMessage):
                     return

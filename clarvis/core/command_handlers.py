@@ -6,7 +6,8 @@ the appropriate service (refresh, whimsy, session_tracker, etc.).
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import asyncio
+from typing import Any, Dict, Optional
 
 from ..services.thinking_feed import get_session_manager
 from ..services.whimsy_verb import WhimsyManager
@@ -32,6 +33,9 @@ class CommandHandlers:
         command_server: DaemonServer,
         token_usage_service_provider: callable,
         voice_orchestrator_provider: callable,
+        memory_service_provider: callable = None,
+        context_accumulator_provider: callable = None,
+        event_loop: Optional[asyncio.AbstractEventLoop] = None,
     ):
         self.state = state
         self.session_tracker = session_tracker
@@ -40,6 +44,9 @@ class CommandHandlers:
         self.command_server = command_server
         self._get_token_usage_service = token_usage_service_provider
         self._get_voice_orchestrator = voice_orchestrator_provider
+        self._memory_service_provider = memory_service_provider or (lambda: None)
+        self._context_accumulator_provider = context_accumulator_provider or (lambda: None)
+        self._event_loop = event_loop
 
     def register_all(self) -> None:
         """Register all command handlers with the IPC server."""
@@ -66,6 +73,13 @@ class CommandHandlers:
 
         # Voice context
         reg("get_voice_context", self.get_voice_context)
+
+        # Memory (cognee)
+        reg("memory_add", self.memory_add)
+        reg("memory_search", self.memory_search)
+        reg("memory_cognify", self.memory_cognify)
+        reg("memory_status", self.memory_status)
+        reg("check_in", self.check_in)
 
         # Utility
         reg("ping", lambda: "pong")
@@ -210,3 +224,88 @@ class CommandHandlers:
             ctx["formatted"] = ""
 
         return ctx
+
+    # --- Memory (cognee) ---
+
+    def _check_memory_prereqs(self) -> tuple:
+        """Check that memory service and event loop are available.
+
+        Returns:
+            (service, None) on success, or (None, error_dict) on failure.
+        """
+        if not self._event_loop:
+            return None, {"error": "Event loop not available"}
+        svc = self._memory_service_provider()
+        if not svc or not svc._ready:
+            return None, {"error": "Memory service not available"}
+        return svc, None
+
+    def _run_memory_coro(self, coro, timeout: float = 120.0) -> Any:
+        """Bridge async cognee calls into the synchronous IPC handler thread.
+
+        Uses ``asyncio.run_coroutine_threadsafe`` to schedule the coroutine
+        on the daemon's event loop, then blocks until completion.
+
+        Callers MUST check ``_check_memory_prereqs`` before calling this
+        to avoid creating unawaited coroutines.
+        """
+        future = asyncio.run_coroutine_threadsafe(coro, self._event_loop)
+        return future.result(timeout=timeout)
+
+    def memory_add(self, data: str, dataset: str = "clarvis") -> Dict[str, Any]:
+        """Add text data to the knowledge graph."""
+        svc, err = self._check_memory_prereqs()
+        if err:
+            return err
+        return self._run_memory_coro(svc.add(data, dataset))
+
+    def memory_search(self, query: str, search_type: str = "GRAPH_COMPLETION", top_k: int = 10) -> Any:
+        """Search the knowledge graph."""
+        svc, err = self._check_memory_prereqs()
+        if err:
+            return err
+        return self._run_memory_coro(svc.search(query, search_type, top_k))
+
+    def memory_cognify(self, dataset: str = "clarvis") -> Dict[str, Any]:
+        """Build/update the knowledge graph for a dataset."""
+        svc, err = self._check_memory_prereqs()
+        if err:
+            return err
+        return self._run_memory_coro(svc.cognify(dataset), timeout=180.0)
+
+    def memory_status(self) -> Dict[str, Any]:
+        """Return memory service status."""
+        if not self._event_loop:
+            return {"ready": False, "error": "Event loop not available"}
+        svc = self._memory_service_provider()
+        if not svc:
+            return {"ready": False, "error": "Memory service not initialized"}
+        return self._run_memory_coro(svc.status())
+
+    def check_in(self, **kwargs) -> Dict[str, Any]:
+        """Return accumulated context since the last check-in.
+
+        Pulls session summaries and staged items from the ContextAccumulator,
+        plus any relevant existing memories from the knowledge graph.
+        """
+        accumulator = self._context_accumulator_provider()
+        if not accumulator:
+            return {"error": "Context accumulator not available"}
+
+        pending = accumulator.get_pending()
+
+        # Optionally enrich with relevant existing memories
+        svc = self._memory_service_provider()
+        if svc and svc._ready and pending.get("sessions"):
+            try:
+                # Search graph using project names from recent sessions
+                projects = {s.get("project", "") for s in pending["sessions"] if s.get("project")}
+                query = " ".join(projects) if projects else "recent work"
+                memories = self._run_memory_coro(svc.search(query, "GRAPH_COMPLETION", 5), timeout=30.0)
+                pending["relevant_memories"] = memories
+            except Exception:
+                pending["relevant_memories"] = []
+        else:
+            pending["relevant_memories"] = []
+
+        return pending

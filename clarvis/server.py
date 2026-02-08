@@ -15,6 +15,7 @@ from fastmcp import Context, FastMCP
 from pydantic import Field
 
 from .core.ipc import DaemonClient, get_daemon_client
+from .memory_tools import create_memory_server
 from .services import get_session_manager
 from .spotify_tools import create_spotify_server
 
@@ -159,11 +160,19 @@ _DAEMON_TOOLS = [
     get_music_context,
 ]
 
+
+# Voice pipeline signal
+async def continue_listening() -> str:
+    """Signal that you need the user to respond before proceeding. Call this after asking a question."""
+    return "Listening."
+
+
 # Tools that are self-contained (no ctx needed)
 _SESSION_TOOLS = [
     list_active_sessions,
     get_session_thoughts,
     get_latest_thought,
+    continue_listening,
 ]
 
 
@@ -191,6 +200,7 @@ def create_app(daemon_client=None, get_session=None):
         app.tool()(fn)
 
     app.mount(create_spotify_server(get_session=get_session))
+    app.mount(create_memory_server(daemon_client=client))
 
     return app
 

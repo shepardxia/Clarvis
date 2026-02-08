@@ -88,7 +88,7 @@ class DaemonServer:
     def _handle_client(self, client: socket.socket) -> None:
         """Handle a single client connection."""
         try:
-            client.settimeout(30.0)
+            client.settimeout(180.0)
             buffer = b""
 
             while True:
