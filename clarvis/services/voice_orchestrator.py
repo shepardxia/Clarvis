@@ -284,6 +284,13 @@ class VoiceCommandOrchestrator:
         """Clear voice text from display."""
         self.state.update("voice_text", {"active": False})
 
+    async def _interruptible_sleep(self, seconds: float) -> None:
+        """Sleep that returns early if wake word interrupt fires."""
+        try:
+            await asyncio.wait_for(self._interrupt.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+
     # ------------------------------------------------------------------
     # Widget message handler (called from socket read thread)
     # ------------------------------------------------------------------
@@ -371,7 +378,7 @@ class VoiceCommandOrchestrator:
                 # Normal exit: cooldown with visual indicator
                 self.wake.resume()
                 self._push_status_now("resting")
-                await asyncio.sleep(3.0)
+                await self._interruptible_sleep(3.0)
                 break
         finally:
             self._interrupt.clear()
@@ -625,7 +632,7 @@ class VoiceCommandOrchestrator:
             await self._speak(clean_response)
             # Hold text on screen, then clear
             if not self._interrupt.is_set() and self.text_linger > 0:
-                await asyncio.sleep(self.text_linger)
+                await self._interruptible_sleep(self.text_linger)
 
         self._clear_voice_text()
 
