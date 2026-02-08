@@ -67,26 +67,38 @@ do_logs() {
 }
 
 case "${1:-status}" in
-    start)   do_start ;;
+    start)
+        [ "$2" = "--new" ] && export CLARVIS_NEW_CONVERSATION=1
+        do_start
+        ;;
     stop)    do_stop ;;
-    restart) do_stop; pkill -f 'clarvis\.server' 2>/dev/null; do_start ;;
+    restart)
+        do_stop; pkill -f 'clarvis\.server' 2>/dev/null
+        [ "$2" = "--new" ] && export CLARVIS_NEW_CONVERSATION=1
+        do_start
+        ;;
     status)  do_status ;;
     logs)    do_logs ;;
     debug)
-        echo "Attaching to voice agent session..."
         cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")/.."
-        exec claude --continue
+        if [ "$2" = "--new" ]; then
+            echo "Starting new voice agent session..."
+            exec claude
+        else
+            echo "Attaching to voice agent session..."
+            exec claude --continue
+        fi
         ;;
     help|-h|--help)
         echo "Usage: clarvis <command>"
         echo ""
         echo "Commands:"
-        echo "  start     Start daemon and widget"
+        echo "  start     Start daemon and widget (--new for fresh voice session)"
         echo "  stop      Stop all processes"
-        echo "  restart   Stop then start"
+        echo "  restart   Stop then start (--new for fresh voice session)"
         echo "  status    Show running processes (default)"
         echo "  logs      Tail daemon logs"
-        echo "  debug     Attach to voice agent's Claude session"
+        echo "  debug     Attach to voice agent's Claude session (--new for fresh)"
         ;;
     *)  echo "Unknown command: $1 (try 'clarvis help')" ;;
 esac

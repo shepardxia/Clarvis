@@ -355,10 +355,8 @@ class ASRManager {
         silenceTimer?.invalidate()
         silenceTimer = nil
 
-        if audioEngine.isRunning {
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-        }
+        audioEngine.stop()
+        audioEngine.inputNode.removeTap(onBus: 0)
 
         recognitionRequest?.endAudio()
         recognitionRequest = nil

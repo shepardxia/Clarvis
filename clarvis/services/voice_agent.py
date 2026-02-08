@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -153,7 +154,7 @@ class VoiceAgent:
             output_format=VOICE_OUTPUT_FORMAT,
             permission_mode="bypassPermissions",
             setting_sources=["project"],
-            continue_conversation=True,
+            continue_conversation=not os.environ.get("CLARVIS_NEW_CONVERSATION"),
         )
         if mcp_path.exists():
             opts.mcp_servers = str(mcp_path)
