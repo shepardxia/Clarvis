@@ -217,7 +217,7 @@ class SessionManager:  # pragma: no cover
 
             # Read new content from file
             try:
-                with open(file_path, "r") as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     f.seek(session.file_position)
                     new_content = f.read()
                     session.file_position = f.tell()

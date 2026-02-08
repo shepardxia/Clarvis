@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import fcntl
+import logging
 import os
 import signal
 import sys
@@ -402,10 +403,20 @@ class CentralHubDaemon:
         print("[Daemon] Wake word detected", flush=True)
 
         if self.voice_orchestrator and self._event_loop:
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 self.voice_orchestrator.on_wake_word(),
                 self._event_loop,
             )
+
+            def _on_done(f):
+                exc = f.exception()
+                if exc:
+                    import traceback
+
+                    print(f"[Daemon] on_wake_word failed: {exc}", flush=True)
+                    traceback.print_exception(type(exc), exc, exc.__traceback__)
+
+            future.add_done_callback(_on_done)
             return
 
         # Fallback when voice pipeline is not initialized: brief activation flash.
@@ -608,6 +619,7 @@ class CentralHubDaemon:
 
 def main():
     """Entry point for daemon mode."""
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(name)s %(levelname)s: %(message)s")
     global _daemon_lock
 
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":

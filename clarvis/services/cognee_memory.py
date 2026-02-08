@@ -118,8 +118,7 @@ class CogneeMemoryService:
         # Disable multi-user access control for local use
         os.environ.setdefault("ENABLE_BACKEND_ACCESS_CONTROL", "false")
 
-        # Initialize storage (creates SQLite tables, vector store, etc.)
-        await cognee.prune.prune_system(metadata=True)
+        # No explicit init needed — cognee creates tables on first add/cognify
 
         self._ready = True
 
