@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +13,11 @@ from fastmcp import Client
 from clarvis.memory_tools import create_memory_server
 from clarvis.server import create_app
 from clarvis.services.cognee_memory import CogneeMemoryService
-from clarvis.services.context_accumulator import ContextAccumulator, extract_project_from_slug
+from clarvis.services.context_accumulator import (
+    ContextAccumulator,
+    _extract_preview,
+    extract_project_from_slug,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -292,133 +294,6 @@ class TestGetApiKey:
 # ---------------------------------------------------------------------------
 
 
-class TestCommandHandlerMemory:
-    """Test memory IPC command handlers bridging sync -> async."""
-
-    @pytest.fixture
-    def handler_setup(self):
-        """Create CommandHandlers wired to a mock memory service + event loop."""
-        from clarvis.core.command_handlers import CommandHandlers
-        from clarvis.core.ipc import DaemonServer
-        from clarvis.core.refresh_manager import RefreshManager
-        from clarvis.core.session_tracker import SessionTracker
-        from clarvis.core.state import StateStore
-        from clarvis.services.whimsy_verb import WhimsyManager
-
-        loop = asyncio.new_event_loop()
-
-        # Start loop in a background thread
-        import threading
-
-        t = threading.Thread(target=loop.run_forever, daemon=True)
-        t.start()
-
-        state = StateStore()
-        svc = CogneeMemoryService()
-        svc._ready = True
-
-        handlers = CommandHandlers(
-            state=state,
-            session_tracker=SessionTracker(state),
-            refresh=MagicMock(spec=RefreshManager),
-            whimsy=MagicMock(spec=WhimsyManager),
-            command_server=MagicMock(spec=DaemonServer),
-            token_usage_service_provider=lambda: None,
-            voice_orchestrator_provider=lambda: None,
-            memory_service_provider=lambda: svc,
-            context_accumulator_provider=lambda: None,
-            event_loop=loop,
-        )
-
-        yield handlers, svc, loop
-
-        loop.call_soon_threadsafe(loop.stop)
-        t.join(timeout=2)
-        loop.close()
-
-    def test_memory_add_via_handler(self, handler_setup):
-        handlers, svc, loop = handler_setup
-        mock_cognee = MagicMock()
-        mock_cognee.add = AsyncMock()
-
-        with patch.dict("sys.modules", {"cognee": mock_cognee}):
-            result = handlers.memory_add("hello world", "test")
-
-        assert result["status"] == "ok"
-        assert result["bytes"] == len("hello world")
-
-    def test_memory_status_via_handler(self, handler_setup):
-        handlers, svc, loop = handler_setup
-        mock_cognee = MagicMock()
-        mock_cognee.__version__ = "0.5.0"
-
-        with patch.dict("sys.modules", {"cognee": mock_cognee}):
-            result = handlers.memory_status()
-
-        assert result["ready"] is True
-
-    def test_memory_add_not_ready(self, handler_setup):
-        handlers, svc, loop = handler_setup
-        svc._ready = False
-        result = handlers.memory_add("data")
-        assert result == {"error": "Memory service not available"}
-
-    def test_memory_search_not_ready(self, handler_setup):
-        handlers, svc, loop = handler_setup
-        svc._ready = False
-        result = handlers.memory_search("query")
-        assert result == {"error": "Memory service not available"}
-
-    def test_memory_cognify_not_ready(self, handler_setup):
-        handlers, svc, loop = handler_setup
-        svc._ready = False
-        result = handlers.memory_cognify()
-        assert result == {"error": "Memory service not available"}
-
-    def test_check_in_via_handler(self, handler_setup):
-        handlers, svc, loop = handler_setup
-
-        # Wire up a mock accumulator
-        mock_accumulator = MagicMock()
-        mock_accumulator.get_pending.return_value = {
-            "sessions": [{"project": "test-project", "session_id": "abc"}],
-            "staged_items": [],
-            "last_check_in": "2026-01-01T00:00:00",
-        }
-        handlers._context_accumulator_provider = lambda: mock_accumulator
-
-        result = handlers.check_in()
-
-        assert "sessions" in result
-        assert result["sessions"][0]["project"] == "test-project"
-        assert "relevant_memories" in result
-        mock_accumulator.get_pending.assert_called_once()
-
-    def test_handler_no_event_loop(self):
-        """If event loop is None, memory handlers return an error."""
-        from clarvis.core.command_handlers import CommandHandlers
-        from clarvis.core.ipc import DaemonServer
-        from clarvis.core.session_tracker import SessionTracker
-        from clarvis.core.state import StateStore
-
-        svc = CogneeMemoryService()
-        svc._ready = True
-
-        handlers = CommandHandlers(
-            state=StateStore(),
-            session_tracker=MagicMock(spec=SessionTracker),
-            refresh=MagicMock(),
-            whimsy=MagicMock(),
-            command_server=MagicMock(spec=DaemonServer),
-            token_usage_service_provider=lambda: None,
-            voice_orchestrator_provider=lambda: None,
-            memory_service_provider=lambda: svc,
-            event_loop=None,
-        )
-        result = handlers.memory_add("data")
-        assert result == {"error": "Event loop not available"}
-
-
 # ===========================================================================
 # MCP Memory Tools — in-memory Client tests
 # ===========================================================================
@@ -426,44 +301,61 @@ class TestCommandHandlerMemory:
 
 @pytest.fixture
 def mock_daemon_for_mcp():
-    """Mock DaemonClient that routes memory IPC commands."""
-    client = MagicMock()
-    client.is_daemon_running.return_value = True
+    """Mock daemon object with memory_service, context_accumulator, and standard services."""
+    daemon = MagicMock()
 
-    def route_call(method, **kwargs):
-        routes = {
-            "ping": "pong",
-            "memory_add": {
-                "status": "ok",
-                "dataset": kwargs.get("dataset", "clarvis"),
-                "bytes": len(kwargs.get("data", "")),
-            },
-            "memory_search": [{"result": "test fact", "score": 0.95}],
-            "memory_cognify": {"status": "ok", "dataset": kwargs.get("dataset", "clarvis")},
-            "memory_status": {"ready": True, "cognee_version": "0.5.0"},
-            "check_in": {
-                "sessions_since_last": [
-                    {"session_id": "abc123", "project": "clarvis", "summary": "Worked on memory tools"}
-                ],
-                "staged_items": [],
-                "last_check_in": "2026-02-06T12:00:00+00:00",
-            },
-            # Standard routes needed by create_app
-            "refresh_time": {"timestamp": "2026-02-06T12:00:00", "timezone": "America/New_York"},
-            "get_weather": {"temperature": 32, "description": "clear", "wind_speed": 10, "city": "Boston"},
-            "refresh_weather": {"temperature": 32, "description": "clear", "wind_speed": 10, "city": "Boston"},
-            "get_token_usage": {"5h": {"used": 1000, "limit": 5000}},
-        }
-        return routes.get(method)
+    # Standard daemon attributes needed by create_app tools
+    daemon.state.get.side_effect = lambda key, default=None: {
+        "weather": {"temperature": 32, "description": "clear", "wind_speed": 10, "city": "Boston"},
+    }.get(key, default)
+    daemon.refresh.refresh_weather.return_value = {
+        "temperature": 32,
+        "description": "clear",
+        "wind_speed": 10,
+        "city": "Boston",
+    }
+    daemon.refresh.refresh_time.return_value = {
+        "timestamp": "2026-02-06T12:00:00",
+        "timezone": "America/New_York",
+    }
+    daemon.token_usage_service = MagicMock()
+    daemon.token_usage_service.get_usage.return_value = {"5h": {"used": 1000, "limit": 5000}}
 
-    client.call.side_effect = route_call
-    return client
+    # Memory service (async methods)
+    daemon.memory_service = MagicMock()
+    daemon.memory_service._ready = True
+    daemon.memory_service.add = AsyncMock(
+        side_effect=lambda data, dataset="clarvis": {"status": "ok", "dataset": dataset, "bytes": len(data)}
+    )
+    daemon.memory_service.search = AsyncMock(return_value=[{"result": "test fact", "score": 0.95}])
+    daemon.memory_service.cognify = AsyncMock(
+        side_effect=lambda dataset="clarvis": {"status": "ok", "dataset": dataset}
+    )
+    daemon.memory_service.status = AsyncMock(return_value={"ready": True, "cognee_version": "0.5.0"})
+
+    # Context accumulator
+    daemon.context_accumulator = MagicMock()
+    daemon.context_accumulator.get_pending.return_value = {
+        "sessions_since_last": [
+            {
+                "session_id": "abc123",
+                "project": "clarvis",
+                "project_path": "/Users/test/clarvis",
+                "timestamp": "2026-02-06T14:00:00+00:00",
+                "preview": "U: fix the auth bug\nA: I'll look into the auth module.",
+            }
+        ],
+        "staged_items": [],
+        "last_check_in": "2026-02-06T12:00:00+00:00",
+    }
+
+    return daemon
 
 
 @pytest_asyncio.fixture
 async def memory_mcp_client(mock_daemon_for_mcp):
     """In-memory MCP client for the memory sub-server only."""
-    srv = create_memory_server(daemon_client=mock_daemon_for_mcp)
+    srv = create_memory_server(daemon=mock_daemon_for_mcp)
     async with Client(srv) as c:
         yield c
 
@@ -476,7 +368,7 @@ async def full_mcp_client(mock_daemon_for_mcp):
     st._device_cache.update({"names": None, "ts": 0})
     mock_session = MagicMock()
     mock_session.run.return_value = {"status": "ok"}
-    app = create_app(daemon_client=mock_daemon_for_mcp, get_session=lambda: mock_session)
+    app = create_app(daemon=mock_daemon_for_mcp, get_session=lambda: mock_session)
     async with Client(app) as c:
         yield c
 
@@ -520,34 +412,37 @@ class TestMCPMemoryAdd:
     @pytest.mark.asyncio
     async def test_add_basic(self, memory_mcp_client, mock_daemon_for_mcp):
         result = await memory_mcp_client.call_tool("memory_add", {"data": "Test fact"})
-        assert result.data["status"] == "ok"
-        assert result.data["bytes"] == 9
-        mock_daemon_for_mcp.call.assert_any_call("memory_add", data="Test fact", dataset="clarvis")
+        data = json.loads(result.content[0].text)
+        assert data["status"] == "ok"
+        assert data["bytes"] == 9
+        mock_daemon_for_mcp.memory_service.add.assert_awaited_with("Test fact", "shepard")
 
     @pytest.mark.asyncio
     async def test_add_custom_dataset(self, memory_mcp_client, mock_daemon_for_mcp):
         result = await memory_mcp_client.call_tool("memory_add", {"data": "Fact", "dataset": "custom"})
-        assert result.data["status"] == "ok"
-        mock_daemon_for_mcp.call.assert_any_call("memory_add", data="Fact", dataset="custom")
+        data = json.loads(result.content[0].text)
+        assert data["status"] == "ok"
+        mock_daemon_for_mcp.memory_service.add.assert_awaited_with("Fact", "custom")
 
     @pytest.mark.asyncio
-    async def test_add_daemon_error(self, mock_daemon_for_mcp):
-        mock_daemon_for_mcp.call.side_effect = RuntimeError("cognee.add failed")
-        srv = create_memory_server(daemon_client=mock_daemon_for_mcp)
+    async def test_add_service_error(self, mock_daemon_for_mcp):
+        daemon = mock_daemon_for_mcp
+        daemon.memory_service.add = AsyncMock(return_value={"error": "cognee.add failed"})
+        srv = create_memory_server(daemon=daemon)
         async with Client(srv) as c:
             result = await c.call_tool("memory_add", {"data": "test"})
-            assert "error" in result.data
+            data = json.loads(result.content[0].text)
+            assert "error" in data
 
 
 class TestMCPMemorySearch:
     @pytest.mark.asyncio
     async def test_search_basic(self, memory_mcp_client, mock_daemon_for_mcp):
         result = await memory_mcp_client.call_tool("memory_search", {"query": "auth fix"})
-        assert isinstance(result.data, list)
-        assert result.data[0]["result"] == "test fact"
-        mock_daemon_for_mcp.call.assert_any_call(
-            "memory_search", query="auth fix", search_type="GRAPH_COMPLETION", top_k=10
-        )
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, list)
+        assert data[0]["result"] == "test fact"
+        mock_daemon_for_mcp.memory_service.search.assert_awaited_with("auth fix", "GRAPH_COMPLETION", 10, datasets=None)
 
     @pytest.mark.asyncio
     async def test_search_custom_params(self, memory_mcp_client, mock_daemon_for_mcp):
@@ -555,28 +450,29 @@ class TestMCPMemorySearch:
             "memory_search",
             {"query": "test", "search_type": "SUMMARIES", "top_k": 5},
         )
-        mock_daemon_for_mcp.call.assert_any_call("memory_search", query="test", search_type="SUMMARIES", top_k=5)
+        mock_daemon_for_mcp.memory_service.search.assert_awaited_with("test", "SUMMARIES", 5, datasets=None)
 
 
 class TestMCPMemoryCognify:
     @pytest.mark.asyncio
     async def test_cognify_basic(self, memory_mcp_client, mock_daemon_for_mcp):
         result = await memory_mcp_client.call_tool("memory_cognify", {})
-        assert result.data["status"] == "ok"
-        mock_daemon_for_mcp.call.assert_any_call("memory_cognify", dataset="clarvis")
+        data = json.loads(result.content[0].text)
+        assert data["status"] == "ok"
+        mock_daemon_for_mcp.memory_service.cognify.assert_awaited_with("shepard")
 
     @pytest.mark.asyncio
     async def test_cognify_custom_dataset(self, memory_mcp_client, mock_daemon_for_mcp):
         await memory_mcp_client.call_tool("memory_cognify", {"dataset": "music"})
-        mock_daemon_for_mcp.call.assert_any_call("memory_cognify", dataset="music")
+        mock_daemon_for_mcp.memory_service.cognify.assert_awaited_with("music")
 
 
 class TestMCPMemoryStatus:
     @pytest.mark.asyncio
     async def test_status(self, memory_mcp_client, mock_daemon_for_mcp):
         result = await memory_mcp_client.call_tool("memory_status", {})
-        assert result.data["ready"] is True
-        mock_daemon_for_mcp.call.assert_any_call("memory_status")
+        data = json.loads(result.content[0].text)
+        assert data["ready"] is True
 
 
 class TestMCPCheckIn:
@@ -586,18 +482,18 @@ class TestMCPCheckIn:
         parsed = json.loads(result.data)
         assert "sessions_since_last" in parsed
         assert parsed["sessions_since_last"][0]["project"] == "clarvis"
-        mock_daemon_for_mcp.call.assert_any_call("check_in")
 
     @pytest.mark.asyncio
-    async def test_check_in_daemon_down(self):
-        dead = MagicMock()
-        dead.is_daemon_running.return_value = False
-        srv = create_memory_server(daemon_client=dead)
+    async def test_check_in_no_accumulator(self):
+        daemon = MagicMock()
+        daemon.memory_service = MagicMock()
+        daemon.context_accumulator = None
+        srv = create_memory_server(daemon=daemon)
         async with Client(srv) as c:
             result = await c.call_tool("check_in", {})
             parsed = json.loads(result.data)
             assert "error" in parsed
-            assert "not running" in parsed["error"]
+            assert "accumulator" in parsed["error"]
 
 
 # ===========================================================================
@@ -651,137 +547,152 @@ class TestContextAccumulatorInit:
         assert acc._staged_items == []
 
 
-class TestContextAccumulatorAccumulate:
-    def _make_session(self, tmp_path, project_slug, session_id, summary_text, mtime=None):
-        """Helper to create a fake session directory structure."""
-        session_dir = tmp_path / "projects" / project_slug / session_id / "session-memory"
-        session_dir.mkdir(parents=True)
-        summary = session_dir / "summary.md"
-        summary.write_text(summary_text)
-        if mtime is not None:
-            os.utime(summary, (mtime, mtime))
-        return summary
+class TestExtractPreview:
+    """Tests for _extract_preview JSONL transcript parsing."""
 
-    def test_discovers_new_sessions(self, tmp_path):
-        """Sessions with summary.md newer than watermark are discovered."""
-        self._make_session(tmp_path, "-Users-test-myproject", "session-abc", "Fixed a bug in auth.")
+    def _make_transcript(self, tmp_path, lines):
+        """Write JSONL lines to a transcript file."""
+        tp = tmp_path / "-Users-test-proj" / "sess-1.jsonl"
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        tp.write_text("\n".join(json.dumps(entry) for entry in lines))
+        return str(tp)
 
+    def test_extracts_user_and_assistant(self, tmp_path):
+        path = self._make_transcript(
+            tmp_path,
+            [
+                {"type": "user", "message": {"content": "fix the bug"}},
+                {"type": "assistant", "message": {"content": "Looking into it."}},
+            ],
+        )
+        preview = _extract_preview(path)
+        assert "U: fix the bug" in preview
+        assert "A: Looking into it." in preview
+
+    def test_skips_system_reminders(self, tmp_path):
+        path = self._make_transcript(
+            tmp_path,
+            [
+                {"type": "user", "message": {"content": "hello"}},
+                {"type": "assistant", "message": {"content": "<system-reminder>ignore</system-reminder>"}},
+                {"type": "assistant", "message": {"content": "Hi there!"}},
+            ],
+        )
+        preview = _extract_preview(path)
+        assert "<system" not in preview
+        assert "Hi there!" in preview
+
+    def test_flattens_content_arrays(self, tmp_path):
+        path = self._make_transcript(
+            tmp_path,
+            [
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "Here is the fix."},
+                            {"type": "tool_use", "name": "Edit"},
+                            {"type": "text", "text": "<system-reminder>skip</system-reminder>"},
+                        ]
+                    },
+                },
+            ],
+        )
+        preview = _extract_preview(path)
+        assert "Here is the fix." in preview
+        assert "Edit" not in preview
+        assert "<system" not in preview
+
+    def test_missing_file(self):
+        assert _extract_preview("/nonexistent/path.jsonl") == "(transcript not found)"
+
+    def test_empty_transcript(self, tmp_path):
+        path = self._make_transcript(
+            tmp_path,
+            [
+                {"type": "summary", "content": "compacted"},
+            ],
+        )
+        preview = _extract_preview(path)
+        assert preview == "(empty session)"
+
+    def test_limits_messages(self, tmp_path):
+        """Only last N messages are extracted."""
+        lines = [{"type": "user", "message": {"content": f"msg {i}"}} for i in range(20)]
+        path = self._make_transcript(tmp_path, lines)
+        preview = _extract_preview(path)
+        # Should have at most _PREVIEW_MESSAGES lines
+        assert preview.count("\n") <= 7  # 8 messages = 7 newlines
+
+    def test_truncates_long_messages(self, tmp_path):
+        path = self._make_transcript(
+            tmp_path,
+            [
+                {"type": "user", "message": {"content": "x" * 500}},
+            ],
+        )
+        preview = _extract_preview(path)
+        assert len(preview.split(": ", 1)[1]) <= 300
+
+
+class TestContextAccumulatorStageSession:
+    def test_stages_session(self, tmp_path):
         state_dir = tmp_path / "staging"
         acc = ContextAccumulator(state_dir=str(state_dir))
-        acc._last_check_in = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
-        import clarvis.services.context_accumulator as mod
+        tp = tmp_path / "-Users-test-myproject" / "sess-abc.jsonl"
+        tp.parent.mkdir(parents=True)
+        tp.write_text("")
 
-        original = mod.CLAUDE_PROJECTS_DIR
-        mod.CLAUDE_PROJECTS_DIR = tmp_path / "projects"
-        try:
-            acc.accumulate()
-        finally:
-            mod.CLAUDE_PROJECTS_DIR = original
+        acc.stage_session("sess-abc", str(tp))
 
         assert len(acc._session_refs) == 1
         ref = acc._session_refs[0]
-        assert ref["session_id"] == "session-abc"
+        assert ref["session_id"] == "sess-abc"
         assert ref["project_name"] == "myproject"
+        assert ref["transcript_path"] == str(tp)
 
-    def test_skips_sessions_before_watermark(self, tmp_path):
-        """Sessions older than watermark are not picked up."""
-        old_ts = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
-        self._make_session(tmp_path, "-Users-test-old", "sess-old", "Old session", mtime=old_ts)
-
+    def test_deduplicates(self, tmp_path):
         state_dir = tmp_path / "staging"
         acc = ContextAccumulator(state_dir=str(state_dir))
-        acc._last_check_in = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
-        import clarvis.services.context_accumulator as mod
+        tp = tmp_path / "-Users-test-proj" / "sess-1.jsonl"
+        tp.parent.mkdir(parents=True)
+        tp.write_text("")
 
-        original = mod.CLAUDE_PROJECTS_DIR
-        mod.CLAUDE_PROJECTS_DIR = tmp_path / "projects"
-        try:
-            acc.accumulate()
-        finally:
-            mod.CLAUDE_PROJECTS_DIR = original
-
-        assert len(acc._session_refs) == 0
-
-    def test_no_duplicate_sessions(self, tmp_path):
-        """Calling accumulate twice does not duplicate session refs."""
-        self._make_session(tmp_path, "-Users-test-proj", "sess-1", "Summary")
-
-        state_dir = tmp_path / "staging"
-        acc = ContextAccumulator(state_dir=str(state_dir))
-        acc._last_check_in = datetime(2020, 1, 1, tzinfo=timezone.utc)
-
-        import clarvis.services.context_accumulator as mod
-
-        original = mod.CLAUDE_PROJECTS_DIR
-        mod.CLAUDE_PROJECTS_DIR = tmp_path / "projects"
-        try:
-            acc.accumulate()
-            acc.accumulate()
-        finally:
-            mod.CLAUDE_PROJECTS_DIR = original
+        acc.stage_session("sess-1", str(tp))
+        acc.stage_session("sess-1", str(tp))
 
         assert len(acc._session_refs) == 1
 
-    def test_discovers_multiple_projects(self, tmp_path):
-        """Sessions across multiple projects are all discovered."""
-        self._make_session(tmp_path, "-Users-test-alpha", "sess-a", "Alpha work")
-        self._make_session(tmp_path, "-Users-test-beta", "sess-b", "Beta work")
-
+    def test_persists_session_refs(self, tmp_path):
         state_dir = tmp_path / "staging"
         acc = ContextAccumulator(state_dir=str(state_dir))
-        acc._last_check_in = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
-        import clarvis.services.context_accumulator as mod
+        tp = tmp_path / "-Users-test-proj" / "sess-x.jsonl"
+        tp.parent.mkdir(parents=True)
+        tp.write_text("")
 
-        original = mod.CLAUDE_PROJECTS_DIR
-        mod.CLAUDE_PROJECTS_DIR = tmp_path / "projects"
-        try:
-            acc.accumulate()
-        finally:
-            mod.CLAUDE_PROJECTS_DIR = original
+        acc.stage_session("sess-x", str(tp))
+
+        # Reload from disk
+        acc2 = ContextAccumulator(state_dir=str(state_dir))
+        assert len(acc2._session_refs) == 1
+        assert acc2._session_refs[0]["session_id"] == "sess-x"
+
+    def test_multiple_projects(self, tmp_path):
+        state_dir = tmp_path / "staging"
+        acc = ContextAccumulator(state_dir=str(state_dir))
+
+        for slug, sid in [("-Users-test-alpha", "s1"), ("-Users-test-beta", "s2")]:
+            tp = tmp_path / slug / f"{sid}.jsonl"
+            tp.parent.mkdir(parents=True, exist_ok=True)
+            tp.write_text("")
+            acc.stage_session(sid, str(tp))
 
         assert len(acc._session_refs) == 2
         projects = {ref["project_name"] for ref in acc._session_refs}
         assert projects == {"alpha", "beta"}
-
-    def test_handles_missing_projects_dir(self, tmp_path):
-        """No error when ~/.claude/projects doesn't exist."""
-        state_dir = tmp_path / "staging"
-        acc = ContextAccumulator(state_dir=str(state_dir))
-
-        import clarvis.services.context_accumulator as mod
-
-        original = mod.CLAUDE_PROJECTS_DIR
-        mod.CLAUDE_PROJECTS_DIR = tmp_path / "nonexistent"
-        try:
-            acc.accumulate()  # Should not raise
-        finally:
-            mod.CLAUDE_PROJECTS_DIR = original
-
-        assert acc._session_refs == []
-
-    def test_skips_sessions_without_summary(self, tmp_path):
-        """Sessions without a summary.md file are ignored."""
-        session_dir = tmp_path / "projects" / "-Users-test-proj" / "sess-no-summary"
-        session_dir.mkdir(parents=True)
-        # No summary.md created
-
-        state_dir = tmp_path / "staging"
-        acc = ContextAccumulator(state_dir=str(state_dir))
-        acc._last_check_in = datetime(2020, 1, 1, tzinfo=timezone.utc)
-
-        import clarvis.services.context_accumulator as mod
-
-        original = mod.CLAUDE_PROJECTS_DIR
-        mod.CLAUDE_PROJECTS_DIR = tmp_path / "projects"
-        try:
-            acc.accumulate()
-        finally:
-            mod.CLAUDE_PROJECTS_DIR = original
-
-        assert acc._session_refs == []
 
 
 class TestContextAccumulatorGetPending:
@@ -796,47 +707,40 @@ class TestContextAccumulatorGetPending:
         assert isinstance(result["sessions_since_last"], list)
         assert isinstance(result["staged_items"], list)
 
-    def test_lazy_loads_summaries(self, tmp_path):
-        """Summaries are read on get_pending, not during accumulate."""
-        project_dir = tmp_path / "projects" / "-Users-test-proj"
-        session_dir = project_dir / "sess-1" / "session-memory"
-        session_dir.mkdir(parents=True)
-        summary = session_dir / "summary.md"
-        summary.write_text("# Bug fix\nFixed auth module.")
+    def test_extracts_preview_from_transcript(self, tmp_path):
+        """Previews are extracted lazily from JSONL transcripts."""
+        tp = tmp_path / "-Users-test-proj" / "sess-1.jsonl"
+        tp.parent.mkdir(parents=True)
+        tp.write_text(
+            json.dumps({"type": "user", "message": {"content": "fix auth bug"}})
+            + "\n"
+            + json.dumps({"type": "assistant", "message": {"content": "On it."}})
+        )
 
         state_dir = tmp_path / "staging"
         acc = ContextAccumulator(state_dir=str(state_dir))
-        acc._last_check_in = datetime(2020, 1, 1, tzinfo=timezone.utc)
-
-        import clarvis.services.context_accumulator as mod
-
-        original = mod.CLAUDE_PROJECTS_DIR
-        mod.CLAUDE_PROJECTS_DIR = tmp_path / "projects"
-        try:
-            acc.accumulate()
-        finally:
-            mod.CLAUDE_PROJECTS_DIR = original
+        acc.stage_session("sess-1", str(tp))
 
         result = acc.get_pending()
-        assert "Fixed auth module" in result["sessions_since_last"][0]["summary"]
+        preview = result["sessions_since_last"][0]["preview"]
+        assert "fix auth bug" in preview
+        assert "On it." in preview
 
-    def test_handles_deleted_summary(self, tmp_path):
-        """If summary file is deleted between accumulate and get_pending, gracefully handle."""
+    def test_handles_missing_transcript(self, tmp_path):
         state_dir = tmp_path / "staging"
         acc = ContextAccumulator(state_dir=str(state_dir))
-        # Manually add a ref pointing to a non-existent file
         acc._session_refs.append(
             {
                 "session_id": "gone",
                 "project_name": "test",
                 "project_path": "/test",
-                "summary_path": str(tmp_path / "nonexistent.md"),
-                "mtime": 0,
+                "transcript_path": str(tmp_path / "nonexistent.jsonl"),
+                "timestamp": "2026-01-01T00:00:00+00:00",
             }
         )
 
         result = acc.get_pending()
-        assert result["sessions_since_last"][0]["summary"] == "(summary file not found)"
+        assert result["sessions_since_last"][0]["preview"] == "(transcript not found)"
 
 
 class TestContextAccumulatorStageItem:
@@ -884,8 +788,8 @@ class TestContextAccumulatorMarkCheckedIn:
                 "session_id": "x",
                 "project_name": "test",
                 "project_path": "/test",
-                "summary_path": "/tmp/s.md",
-                "mtime": 0,
+                "transcript_path": "/tmp/s.jsonl",
+                "timestamp": "2026-01-01T00:00:00+00:00",
             }
         )
 

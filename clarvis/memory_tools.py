@@ -1,15 +1,23 @@
 """Memory MCP sub-server — mounted onto the main Clarvis server.
 
-Exposes memory tools (add, search, cognify, status, check_in) that route
-through DaemonClient IPC to the daemon's CogneeMemoryService and ContextAccumulator.
+Exposes memory tools (add, search, cognify, status, check_in) that call
+the daemon's CogneeMemoryService and ContextAccumulator directly (in-process).
 """
 
 import json
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastmcp import Context, FastMCP
 from pydantic import Field
+
+if TYPE_CHECKING:
+    from .daemon import CentralHubDaemon
+
+
+def _daemon(ctx: Context) -> "CentralHubDaemon":
+    return ctx.fastmcp._lifespan_result["daemon"]
+
 
 # --- Tool implementations ---
 
@@ -21,8 +29,14 @@ async def memory_add(
     ],
     dataset: Annotated[
         str,
-        Field(description="Dataset namespace for organizing memories."),
-    ] = "clarvis",
+        Field(
+            description=(
+                "Dataset to store in. Two domains: 'shepard' (personal — preferences,"
+                " taste, project decisions) or 'academic' (intellectual — AI/cog sci,"
+                " philosophy, papers, research)."
+            )
+        ),
+    ] = "shepard",
     ctx: Context = None,
 ) -> dict:
     """Add content to the Clarvis knowledge graph.
@@ -34,13 +48,10 @@ async def memory_add(
 
     After adding items, call memory_cognify to process them into the graph.
     """
-    client = ctx.fastmcp._lifespan_result["client"]
-    if not client.is_daemon_running():
-        return {"error": "Clarvis daemon is not running. Start it with: clarvis start"}
-    try:
-        return client.call("memory_add", data=data, dataset=dataset)
-    except Exception as e:
-        return {"error": str(e)}
+    d = _daemon(ctx)
+    if not d.memory_service:
+        return {"error": "Memory service not initialized"}
+    return await d.memory_service.add(data, dataset)
 
 
 async def memory_search(
@@ -50,33 +61,44 @@ async def memory_search(
     ],
     search_type: Annotated[
         str,
-        Field(description="Cognee search type. GRAPH_COMPLETION uses graph context for richer answers."),
+        Field(
+            description=(
+                "Search type: GRAPH_COMPLETION (rich, ~3s),"
+                " SUMMARIES (cheap overviews, ~300ms), CHUNKS (raw text, ~300ms)."
+            )
+        ),
     ] = "GRAPH_COMPLETION",
     top_k: Annotated[
         int,
         Field(description="Maximum number of results to return."),
     ] = 10,
+    datasets: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Restrict search to specific datasets. Omit to search all. Use memory_status to see available datasets."
+            )
+        ),
+    ] = None,
     ctx: Context = None,
 ) -> list:
     """Search the Clarvis knowledge graph.
 
     Returns a list of matching results from the graph. Use GRAPH_COMPLETION
-    for contextual answers that leverage entity relationships.
+    for contextual answers that leverage entity relationships, SUMMARIES for
+    cheap overviews, or CHUNKS for raw text retrieval.
     """
-    client = ctx.fastmcp._lifespan_result["client"]
-    if not client.is_daemon_running():
-        return [{"error": "Clarvis daemon is not running. Start it with: clarvis start"}]
-    try:
-        return client.call("memory_search", query=query, search_type=search_type, top_k=top_k)
-    except Exception as e:
-        return [{"error": str(e)}]
+    d = _daemon(ctx)
+    if not d.memory_service:
+        return [{"error": "Memory service not initialized"}]
+    return await d.memory_service.search(query, search_type, top_k, datasets=datasets)
 
 
 async def memory_cognify(
     dataset: Annotated[
         str,
         Field(description="Dataset to process into the knowledge graph."),
-    ] = "clarvis",
+    ] = "shepard",
     ctx: Context = None,
 ) -> dict:
     """Trigger entity extraction and graph building for pending memory items.
@@ -84,26 +106,20 @@ async def memory_cognify(
     Call this after adding content with memory_add to process raw text
     into structured entities and relationships in the knowledge graph.
     """
-    client = ctx.fastmcp._lifespan_result["client"]
-    if not client.is_daemon_running():
-        return {"error": "Clarvis daemon is not running. Start it with: clarvis start"}
-    try:
-        return client.call("memory_cognify", dataset=dataset)
-    except Exception as e:
-        return {"error": str(e)}
+    d = _daemon(ctx)
+    if not d.memory_service:
+        return {"error": "Memory service not initialized"}
+    return await d.memory_service.cognify(dataset)
 
 
 async def memory_status(
     ctx: Context = None,
 ) -> dict:
     """Get memory service status — graph stats, readiness, and pending items."""
-    client = ctx.fastmcp._lifespan_result["client"]
-    if not client.is_daemon_running():
-        return {"error": "Clarvis daemon is not running. Start it with: clarvis start"}
-    try:
-        return client.call("memory_status")
-    except Exception as e:
-        return {"error": str(e)}
+    d = _daemon(ctx)
+    if not d.memory_service:
+        return {"error": "Memory service not initialized"}
+    return await d.memory_service.status()
 
 
 async def check_in(
@@ -118,14 +134,26 @@ async def check_in(
     After reviewing, use memory_add with curated facts worth keeping,
     then memory_cognify to process them into the graph.
     """
-    client = ctx.fastmcp._lifespan_result["client"]
-    if not client.is_daemon_running():
-        return json.dumps({"error": "Clarvis daemon is not running. Start it with: clarvis start"})
-    try:
-        result = client.call("check_in")
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    d = _daemon(ctx)
+    if not d.context_accumulator:
+        return json.dumps({"error": "Context accumulator not available"})
+
+    pending = d.context_accumulator.get_pending()
+
+    # Optionally enrich with relevant existing memories
+    svc = d.memory_service
+    if svc and svc._ready and pending.get("sessions_since_last"):
+        try:
+            projects = {s.get("project", "") for s in pending["sessions_since_last"] if s.get("project")}
+            query = " ".join(projects) if projects else "recent work"
+            memories = await svc.search(query, "GRAPH_COMPLETION", 5)
+            pending["relevant_memories"] = memories
+        except Exception:
+            pending["relevant_memories"] = []
+    else:
+        pending["relevant_memories"] = []
+
+    return json.dumps(pending, indent=2)
 
 
 # --- Sub-server factory ---
@@ -133,22 +161,17 @@ async def check_in(
 _TOOLS = [memory_add, memory_search, memory_cognify, memory_status, check_in]
 
 
-def create_memory_server(daemon_client=None):
+def create_memory_server(daemon):
     """Create the memory MCP sub-server.
 
     Args:
-        daemon_client: DaemonClient instance. If None, the parent server's
-            lifespan client is used (tools access via ctx.fastmcp._lifespan_result).
-            Pass a mock for testing.
+        daemon: CentralHubDaemon instance (or mock with .memory_service,
+            .context_accumulator). Injected into lifespan for tool access.
     """
-    from .core.ipc import DaemonClient
-
-    # Memory operations (cognify, add on cold start) can take minutes.
-    client = daemon_client if daemon_client is not None else DaemonClient(timeout=180.0)
 
     @asynccontextmanager
     async def memory_lifespan(server):
-        yield {"client": client}
+        yield {"daemon": daemon}
 
     srv = FastMCP("memory", lifespan=memory_lifespan)
     for fn in _TOOLS:

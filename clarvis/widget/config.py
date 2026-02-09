@@ -157,6 +157,7 @@ class VoiceConfig:
     text_linger: float = 3.0
     model: Optional[str] = None  # Claude model alias (e.g. "sonnet", "haiku", "opus")
     max_thinking_tokens: Optional[int] = None  # None = SDK default
+    idle_timeout: float = 3600.0  # seconds before voice agent disconnects
 
     def to_dict(self) -> dict:
         d = {
@@ -173,6 +174,7 @@ class VoiceConfig:
             d["model"] = self.model
         if self.max_thinking_tokens is not None:
             d["max_thinking_tokens"] = self.max_thinking_tokens
+        d["idle_timeout"] = self.idle_timeout
         return d
 
     @staticmethod
@@ -190,6 +192,7 @@ class VoiceConfig:
             text_linger=d.get("text_linger", 3.0),
             model=d.get("model"),
             max_thinking_tokens=d.get("max_thinking_tokens"),
+            idle_timeout=d.get("idle_timeout", 3600.0),
         )
 
 

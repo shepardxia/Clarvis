@@ -51,7 +51,8 @@
     "tts_speed": 150,
     "text_linger": 3.0,
     "model": "haiku",
-    "max_thinking_tokens": 2000,
+    "max_thinking_tokens": 0,
+    "idle_timeout": 3600,
     "mlx_model": "mlx-community/Qwen2.5-7B-Instruct-4bit",
     "mlx_temperature": 0.7,
     "mlx_max_tokens": 512

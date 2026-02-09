@@ -20,11 +20,10 @@ dependencies = [
 [tool.uv]
 
 [tool.uv.sources]
-clautify = { git = "https://github.com/shepardxia/clautify.git" }
+clautify = { path = "../clautify", editable = true }
 heybuddy = { git = "https://github.com/shepardxia/hey-buddy.git" }
 
 [project.scripts]
-clarvis = "clarvis.server:main"
 clarvis-daemon = "clarvis.daemon:main"
 
 [project.optional-dependencies]

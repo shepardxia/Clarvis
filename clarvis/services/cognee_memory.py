@@ -197,6 +197,7 @@ class CogneeMemoryService:
         query: str,
         search_type: str = "GRAPH_COMPLETION",
         top_k: int = 10,
+        datasets: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search the knowledge graph.
 
@@ -204,6 +205,7 @@ class CogneeMemoryService:
             query: Natural language query.
             search_type: Cognee search type (default ``"GRAPH_COMPLETION"``).
             top_k: Maximum results to return.
+            datasets: Optional list of dataset names to scope the search.
 
         Returns:
             List of result dicts on success, or a single-element list
@@ -217,7 +219,12 @@ class CogneeMemoryService:
             from cognee.api.v1.search import SearchType
 
             st = SearchType[search_type]
-            results = await cognee.search(query_text=query, query_type=st, top_k=top_k)
+            results = await cognee.search(
+                query_text=query,
+                query_type=st,
+                top_k=top_k,
+                datasets=datasets,
+            )
             # Normalize results to list of dicts
             normalized: List[Dict[str, Any]] = []
             for item in results:
@@ -231,10 +238,12 @@ class CogneeMemoryService:
             return [{"error": str(exc)}]
 
     async def status(self) -> Dict[str, Any]:
-        """Return service status information.
+        """Return service status and dataset index.
 
         Returns:
-            Dict with ``ready`` flag and optional details.
+            Dict with ``ready`` flag, cognee version, and ``datasets`` list
+            containing per-dataset metadata (name, item_count, total_tokens,
+            timestamps).
         """
         info: Dict[str, Any] = {"ready": self._ready}
         if self._ready:
@@ -244,4 +253,25 @@ class CogneeMemoryService:
                 info["cognee_version"] = getattr(cognee, "__version__", "unknown")
             except Exception:
                 pass
+            try:
+                import cognee
+
+                ds_list = await cognee.datasets.list_datasets()
+                datasets = []
+                for ds in ds_list:
+                    items = await cognee.datasets.list_data(ds.id)
+                    datasets.append(
+                        {
+                            "name": ds.name,
+                            "item_count": len(items),
+                            "total_bytes": sum(getattr(d, "data_size", 0) or 0 for d in items),
+                            "total_tokens": sum(getattr(d, "token_count", 0) or 0 for d in items),
+                            "created_at": ds.created_at.isoformat() if ds.created_at else None,
+                            "updated_at": ds.updated_at.isoformat() if ds.updated_at else None,
+                        }
+                    )
+                info["datasets"] = datasets
+            except Exception as exc:
+                logger.debug("Failed to list datasets: %s", exc)
+                info["datasets"] = []
         return info

@@ -184,6 +184,7 @@ class CentralHubDaemon:
         self.memory_service: CogneeMemoryService = CogneeMemoryService()
         self.context_accumulator = ContextAccumulator()
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._mcp_task: Optional[asyncio.Task] = None
         self.scheduler: Optional[Scheduler] = None
 
         self.running = False
@@ -231,9 +232,6 @@ class CentralHubDaemon:
             command_server=self.command_server,
             token_usage_service_provider=lambda: self.token_usage_service,
             voice_orchestrator_provider=lambda: self.voice_orchestrator,
-            memory_service_provider=lambda: self.memory_service,
-            context_accumulator_provider=lambda: self.context_accumulator,
-            event_loop=None,  # Set in run() once the loop exists
         )
 
     # --- Hook event processing (delegated to HookProcessor) ---
@@ -260,7 +258,12 @@ class CentralHubDaemon:
             self.whimsy.maybe_generate(event)
         self.session_tracker.cleanup_stale()
 
-        if raw_data.get("hook_event_name", "") != "Stop" and self.scheduler:
+        # Stage completed sessions for memory check-in
+        if event == "Stop" and tp and self.context_accumulator:
+            session_id = raw_data.get("session_id", "unknown")
+            self.context_accumulator.stage_session(session_id, tp)
+
+        if event != "Stop" and self.scheduler:
             self.scheduler.set_mode("active")
 
     # --- Staleness check (called by Scheduler) ---
@@ -333,6 +336,7 @@ class CentralHubDaemon:
             event_loop=self._event_loop,
             model=config.voice.model,
             max_thinking_tokens=config.voice.max_thinking_tokens,
+            idle_timeout=config.voice.idle_timeout,
         )
         self.voice_orchestrator = VoiceCommandOrchestrator(
             event_loop=self._event_loop,
@@ -527,16 +531,6 @@ class CentralHubDaemon:
             blocking=True,
         )
 
-        # Context accumulation — scan for new session summaries
-        if self.context_accumulator:
-            self.scheduler.register(
-                "context_accumulation",
-                self.context_accumulator.accumulate,
-                active_interval=60,
-                idle_interval=300,
-                blocking=True,
-            )
-
         # FPS adjustment on mode change
         self.scheduler.on_mode_change(self._on_mode_change)
 
@@ -569,6 +563,10 @@ class CentralHubDaemon:
         if self.wake_word_service:
             self.wake_word_service.stop()
 
+        # Stop embedded MCP server
+        if self._mcp_task:
+            self._mcp_task.cancel()
+
         # Stop memory service
         if self.memory_service and self.memory_service._ready and self._event_loop:
             try:
@@ -580,7 +578,6 @@ class CentralHubDaemon:
     async def run(self) -> None:
         """Run the daemon until interrupted."""
         self._event_loop = asyncio.get_running_loop()
-        self.commands._event_loop = self._event_loop
         self.start()
         self._start_scheduler()
         self._init_voice_pipeline()
@@ -606,6 +603,14 @@ class CentralHubDaemon:
 
         if memory_config.get("enabled", True):
             asyncio.create_task(self.memory_service._safe_start(memory_config))
+
+        # Start embedded MCP server (SSE on localhost)
+        from .server import run_embedded
+
+        mcp_port = 7777
+        self._mcp_task = asyncio.create_task(run_embedded(self, port=mcp_port))
+        print(f"[Daemon] MCP server listening on 127.0.0.1:{mcp_port}", flush=True)
+
         try:
             # Event-driven — sleep indefinitely, all work happens via
             # callbacks (scheduler timers, IPC handlers).

@@ -57,8 +57,8 @@ MUSIC_PROFILE_PATH = Path.home() / ".claude/memories/music_profile_compact.md"
 # Monorepo root: voice_agent.py → services/ → clarvis/ → Clarvis/ → clarvis-suite/
 DEFAULT_PROJECT_DIR = Path(__file__).resolve().parents[3]
 
-# Seconds of inactivity before the agent auto-disconnects to free memory.
-IDLE_TIMEOUT = 30.0
+# Default seconds of inactivity before the agent auto-disconnects to free memory.
+DEFAULT_IDLE_TIMEOUT = 3600.0
 
 
 class VoiceAgent:
@@ -80,11 +80,13 @@ class VoiceAgent:
         project_dir: Path = DEFAULT_PROJECT_DIR,
         model: str | None = None,
         max_thinking_tokens: int | None = None,
+        idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
     ):
         self._loop = event_loop
         self.project_dir = project_dir
         self._model = model
         self._max_thinking_tokens = max_thinking_tokens
+        self._idle_timeout = idle_timeout
         self._client: ClaudeSDKClient | None = None
         self._connected = False
         self._lock = asyncio.Lock()
@@ -154,7 +156,7 @@ class VoiceAgent:
     def _start_idle_timer(self) -> None:
         """Schedule an idle-disconnect after IDLE_TIMEOUT seconds."""
         self._cancel_idle_timer()
-        self._idle_handle = self._loop.call_later(IDLE_TIMEOUT, self._on_idle_timeout)
+        self._idle_handle = self._loop.call_later(self._idle_timeout, self._on_idle_timeout)
 
     def _on_idle_timeout(self) -> None:
         """Timer callback — schedule the async disconnect on the loop."""

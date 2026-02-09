@@ -1,11 +1,11 @@
 """In-memory MCP server tests using FastMCP 2.x Client.
 
 Tests the full tool surface through the MCP protocol without subprocess or network.
-Dependencies (daemon client, SpotifySession) are mocked via create_app() factory.
+Dependencies (daemon, SpotifySession) are mocked via create_app() factory.
 """
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -18,22 +18,50 @@ from clarvis.server import create_app
 
 @pytest.fixture
 def mock_daemon():
-    """Mock DaemonClient that routes by method name."""
-    client = MagicMock()
-    client.is_daemon_running.return_value = True
+    """Mock daemon object with state, refresh, and services."""
+    daemon = MagicMock()
 
-    def route_call(method, **kwargs):
-        routes = {
-            "ping": "pong",
-            "refresh_time": {"timestamp": "2026-02-06T12:00:00", "timezone": "America/New_York"},
-            "get_weather": {"temperature": 32, "description": "clear", "wind_speed": 10, "city": "Boston"},
-            "refresh_weather": {"temperature": 32, "description": "clear", "wind_speed": 10, "city": "Boston"},
-            "get_token_usage": {"5h": {"used": 1000, "limit": 5000}, "7d": {"used": 3000, "limit": 25000}},
-        }
-        return routes.get(method)
+    # state.get() returns weather dict
+    daemon.state.get.side_effect = lambda key, default=None: {
+        "weather": {"temperature": 32, "description": "clear", "wind_speed": 10, "city": "Boston"},
+    }.get(key, default)
 
-    client.call.side_effect = route_call
-    return client
+    # refresh manager
+    daemon.refresh.refresh_weather.return_value = {
+        "temperature": 32,
+        "description": "clear",
+        "wind_speed": 10,
+        "city": "Boston",
+    }
+    daemon.refresh.refresh_time.return_value = {
+        "timestamp": "2026-02-06T12:00:00",
+        "timezone": "America/New_York",
+    }
+
+    # token usage
+    daemon.token_usage_service = MagicMock()
+    daemon.token_usage_service.get_usage.return_value = {
+        "5h": {"used": 1000, "limit": 5000},
+        "7d": {"used": 3000, "limit": 25000},
+    }
+
+    # memory service (async methods)
+    daemon.memory_service = MagicMock()
+    daemon.memory_service._ready = True
+    daemon.memory_service.add = AsyncMock(return_value={"status": "ok", "dataset": "shepard", "bytes": 10})
+    daemon.memory_service.search = AsyncMock(return_value=[{"result": "test"}])
+    daemon.memory_service.cognify = AsyncMock(return_value={"status": "ok", "dataset": "shepard"})
+    daemon.memory_service.status = AsyncMock(return_value={"ready": True})
+
+    # context accumulator
+    daemon.context_accumulator = MagicMock()
+    daemon.context_accumulator.get_pending.return_value = {
+        "sessions_since_last": [],
+        "staged_items": [],
+        "last_check_in": "2026-02-06T12:00:00+00:00",
+    }
+
+    return daemon
 
 
 @pytest.fixture
@@ -60,7 +88,7 @@ async def mcp_client(mock_daemon, mock_spotify_session):
     import clarvis.spotify_tools as st
 
     st._device_cache.update({"names": None, "ts": 0})
-    app = create_app(daemon_client=mock_daemon, get_session=lambda: mock_spotify_session)
+    app = create_app(daemon=mock_daemon, get_session=lambda: mock_spotify_session)
     async with Client(app) as c:
         yield c
 
@@ -75,9 +103,22 @@ async def test_tool_surface(mcp_client):
     names = {t.name for t in tools}
 
     # Core tools present
-    assert {"ping", "get_weather", "get_time", "get_token_usage", "get_music_context"} <= names
-    assert {"list_active_sessions", "get_session_thoughts", "get_latest_thought"} <= names
+    assert {"ping", "get_context", "continue_listening"} <= names
     assert "spotify" in names
+
+    # Memory tools present
+    assert {"memory_add", "memory_search", "memory_cognify", "memory_status", "check_in"} <= names
+
+    # Unregistered tools not exposed
+    for unregistered in (
+        "get_weather",
+        "get_time",
+        "get_token_usage",
+        "list_active_sessions",
+        "get_session_thoughts",
+        "get_latest_thought",
+    ):
+        assert unregistered not in names
 
     # Legacy tools gone
     for legacy in ("now_playing", "play", "search_and_play"):
@@ -92,32 +133,51 @@ async def test_tool_surface(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_ping(mcp_client, mock_daemon):
+async def test_ping(mcp_client):
     result = await mcp_client.call_tool("ping", {})
     assert result.data == "pong"
-    mock_daemon.call.assert_any_call("ping")
+
+
+# --- Memory tools ---
 
 
 @pytest.mark.asyncio
-async def test_get_weather(mcp_client):
-    result = await mcp_client.call_tool("get_weather", {})
-    assert "32" in result.data and "Boston" in result.data
+async def test_memory_add(mcp_client, mock_daemon):
+    result = await mcp_client.call_tool("memory_add", {"data": "test fact"})
+    data = json.loads(result.content[0].text)
+    assert data["status"] == "ok"
+    mock_daemon.memory_service.add.assert_awaited_once_with("test fact", "shepard")
 
 
 @pytest.mark.asyncio
-async def test_get_time(mcp_client, mock_daemon):
-    result = await mcp_client.call_tool("get_time", {})
-    assert "2026" in result.data and "New_York" in result.data
-
-    # With explicit timezone
-    await mcp_client.call_tool("get_time", {"timezone": "US/Pacific"})
-    mock_daemon.call.assert_any_call("refresh_time", timezone="US/Pacific")
+async def test_memory_search(mcp_client, mock_daemon):
+    result = await mcp_client.call_tool("memory_search", {"query": "test query"})
+    data = json.loads(result.content[0].text)
+    assert data[0]["result"] == "test"
+    mock_daemon.memory_service.search.assert_awaited_once_with("test query", "GRAPH_COMPLETION", 10, datasets=None)
 
 
 @pytest.mark.asyncio
-async def test_get_token_usage(mcp_client):
-    result = await mcp_client.call_tool("get_token_usage", {})
-    assert json.loads(result.data)["5h"]["used"] == 1000
+async def test_memory_cognify(mcp_client, mock_daemon):
+    result = await mcp_client.call_tool("memory_cognify", {})
+    data = json.loads(result.content[0].text)
+    assert data["status"] == "ok"
+    mock_daemon.memory_service.cognify.assert_awaited_once_with("shepard")
+
+
+@pytest.mark.asyncio
+async def test_memory_status(mcp_client, mock_daemon):
+    result = await mcp_client.call_tool("memory_status", {})
+    data = json.loads(result.content[0].text)
+    assert data["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_check_in(mcp_client, mock_daemon):
+    result = await mcp_client.call_tool("check_in", {})
+    data = json.loads(result.content[0].text)
+    assert "sessions_since_last" in data
+    assert "relevant_memories" in data
 
 
 # --- Spotify ---
@@ -127,8 +187,7 @@ async def test_get_token_usage(mcp_client):
 async def test_spotify_play_and_device_cache(mcp_client, mock_spotify_session):
     """Spotify executes commands, includes device list, and caches devices."""
     result = await mcp_client.call_tool("spotify", {"command": 'play "jazz"'})
-    assert result.data["status"] == "ok"
-    assert result.data["available_devices"] == ["Den", "Kitchen"]
+    assert "Den" in result.data and "Kitchen" in result.data
 
     # Second call should use cached devices
     await mcp_client.call_tool("spotify", {"command": "pause"})
@@ -140,20 +199,6 @@ async def test_spotify_play_and_device_cache(mcp_client, mock_spotify_session):
 
 
 @pytest.mark.asyncio
-async def test_daemon_not_running(mock_spotify_session):
-    dead_daemon = MagicMock()
-    dead_daemon.is_daemon_running.return_value = False
-
-    import clarvis.spotify_tools as st
-
-    st._device_cache.update({"names": None, "ts": 0})
-    app = create_app(daemon_client=dead_daemon, get_session=lambda: mock_spotify_session)
-    async with Client(app) as c:
-        result = await c.call_tool("ping", {})
-        assert "not running" in result.data
-
-
-@pytest.mark.asyncio
 async def test_spotify_session_error(mock_daemon):
     broken = MagicMock()
     broken.run.side_effect = Exception("Connection failed")
@@ -161,7 +206,7 @@ async def test_spotify_session_error(mock_daemon):
     import clarvis.spotify_tools as st
 
     st._device_cache.update({"names": None, "ts": 0})
-    app = create_app(daemon_client=mock_daemon, get_session=lambda: broken)
+    app = create_app(daemon=mock_daemon, get_session=lambda: broken)
     async with Client(app) as c:
         result = await c.call_tool("spotify", {"command": "now playing"})
-        assert "Connection failed" in result.data["error"]
+        assert "Connection failed" in result.data

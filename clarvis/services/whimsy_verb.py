@@ -20,6 +20,8 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
+_client = anthropic.Anthropic()
+
 SYSTEM_PROMPT = (
     "Generate ONE whimsical gerund (-ing word) that captures what the assistant is doing. "
     "Match the task, mood, and environment. Prefer obscure/delightful words. "
@@ -42,8 +44,7 @@ def generate_whimsy_verb(context: str) -> str:
         avoid = f"\nAvoid: {', '.join(_verb_history[-5:])}" if _verb_history else ""
     prompt = SYSTEM_PROMPT.format(avoid=avoid)
 
-    client = anthropic.Anthropic()
-    response = client.messages.create(
+    response = _client.messages.create(
         model="claude-haiku-4-5-20251001",
         system=prompt,
         messages=[

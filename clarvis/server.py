@@ -1,59 +1,52 @@
 #!/usr/bin/env python3
-"""Clarvis MCP Server — thin client that communicates with daemon.
+"""Clarvis MCP Server — embedded in the daemon, served over SSE.
 
-Uses FastMCP 2.x composition: main server (daemon tools) + mounted music sub-server.
-Dependencies injected via lifespan context for testability.
+Uses FastMCP 2.x composition: main server (daemon tools) + mounted sub-servers.
+Tool handlers access daemon state and services directly (no IPC).
 """
 
 import json
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import TYPE_CHECKING, Annotated, Optional
 
 from fastmcp import Context, FastMCP
 from pydantic import Field
 
-from .core.ipc import DaemonClient, get_daemon_client
 from .memory_tools import create_memory_server
 from .services import get_session_manager
 from .spotify_tools import create_spotify_server
 
-# --- Tool implementations (module-level, registered by create_app) ---
+if TYPE_CHECKING:
+    from .daemon import CentralHubDaemon
+
+# --- Helpers ---
 
 
-# Helper to get daemon client from context, with connectivity check.
-def _client(ctx: Context) -> DaemonClient:
-    client = ctx.fastmcp._lifespan_result["client"]
-    if not client.is_daemon_running():
-        raise ConnectionError("Clarvis daemon is not running. Start it with: clarvis start")
-    return client
+def _daemon(ctx: Context) -> "CentralHubDaemon":
+    return ctx.fastmcp._lifespan_result["daemon"]
 
 
-# -- Widget Tools --
+# --- Tool implementations ---
 
 
 async def ping(ctx: Context = None) -> str:
-    """Test that the server is running and daemon is connected."""
-    try:
-        return _client(ctx).call("ping")
-    except ConnectionError as e:
-        return str(e)
+    """Health check."""
+    _daemon(ctx)
+    return "pong"
 
 
 async def get_weather(ctx: Context = None) -> str:
     """Fetch current weather. Auto-detects location from IP if coordinates not provided."""
     try:
-        client = _client(ctx)
-        weather = client.call("get_weather")
+        d = _daemon(ctx)
+        weather = d.state.get("weather")
         if not weather or not weather.get("temperature"):
-            weather = client.call("refresh_weather")
+            weather = d.refresh.refresh_weather()
         return (
             f"{weather.get('temperature', '?')}°F, {weather.get('description', 'unknown')}, "
             f"Wind: {weather.get('wind_speed', 0)} mph ({weather.get('city', 'Unknown')})"
         )
-    except ConnectionError as e:
-        return str(e)
     except Exception as e:
         return f"Error fetching weather: {e}"
 
@@ -64,12 +57,10 @@ async def get_time(
 ) -> str:
     """Get current time. Auto-detects timezone if not provided."""
     try:
-        client = _client(ctx)
-        time_dict = client.call("refresh_time", timezone=timezone)
+        d = _daemon(ctx)
+        time_dict = d.refresh.refresh_time(timezone)
         dt = datetime.fromisoformat(time_dict["timestamp"])
         return f"{dt.strftime('%A, %B %d, %Y %H:%M')} ({time_dict['timezone']})"
-    except ConnectionError as e:
-        return str(e)
     except Exception as e:
         return f"Error getting time: {e}"
 
@@ -77,33 +68,33 @@ async def get_time(
 async def get_token_usage(ctx: Context = None) -> str:
     """Get Claude API token usage with 5-hour and 7-day limits."""
     try:
-        result = _client(ctx).call("get_token_usage")
+        d = _daemon(ctx)
+        if not d.token_usage_service:
+            return json.dumps({"error": "Token usage service not initialized", "is_stale": True})
+        result = d.token_usage_service.get_usage()
         return json.dumps(result, indent=2)
-    except ConnectionError as e:
-        return str(e)
     except Exception as e:
         return f"Error getting token usage: {e}"
 
 
-async def get_music_context(ctx: Context = None) -> str:
-    """Get the user's music taste profile, current time, weather, and location.
-    Call this before making music selection decisions to personalize choices."""
-    sections = []
+async def get_context(ctx: Context = None) -> str:
+    """Get current time, weather, and location."""
+    d = _daemon(ctx)
+    parts = []
 
     try:
-        client = _client(ctx)
-        time_dict = client.call("refresh_time")
+        time_dict = d.refresh.refresh_time()
         dt = datetime.fromisoformat(time_dict["timestamp"])
-        sections.append(f"## Current Time\n{dt.strftime('%A, %B %d, %Y %H:%M')} ({time_dict['timezone']})")
+        parts.append(f"{dt.strftime('%A, %B %d, %Y %H:%M')} ({time_dict['timezone']})")
     except Exception:
-        sections.append("## Current Time\nUnavailable")
+        parts.append("Time: unavailable")
 
     try:
-        client = _client(ctx)
-        weather = client.call("get_weather") or client.call("refresh_weather")
+        weather = d.state.get("weather")
+        if not weather or not weather.get("temperature"):
+            weather = d.refresh.refresh_weather()
         if weather and weather.get("temperature"):
-            sections.append(
-                f"## Weather & Location\n"
+            parts.append(
                 f"{weather.get('city', 'Unknown')}: "
                 f"{weather.get('temperature', '?')}°F, "
                 f"{weather.get('description', 'unknown')}, "
@@ -112,17 +103,10 @@ async def get_music_context(ctx: Context = None) -> str:
     except Exception:
         pass
 
-    profile_path = os.path.expanduser("~/.claude/memories/music_profile_compact.md")
-    try:
-        with open(profile_path) as f:
-            sections.append(f.read().strip())
-    except FileNotFoundError:
-        sections.append("## Music Profile\nNo profile found at ~/.claude/memories/music_profile_compact.md")
-
-    return "\n\n".join(sections)
+    return " | ".join(parts)
 
 
-# -- Thinking Feed Tools (no daemon client needed) --
+# -- Thinking Feed Tools (no daemon needed, self-contained) --
 
 
 async def list_active_sessions() -> list[dict]:
@@ -149,29 +133,17 @@ async def get_latest_thought() -> dict:
     return result
 
 
-# --- Tool lists ---
-
-# Tools that need daemon client (get ctx injected)
-_DAEMON_TOOLS = [
-    ping,
-    get_weather,
-    get_time,
-    get_token_usage,
-    get_music_context,
-]
-
-
 # Voice pipeline signal
 async def continue_listening() -> str:
-    """Signal that you need the user to respond before proceeding. Call this after asking a question."""
+    """Ask a question and wait for the user's spoken reply."""
     return "Listening."
 
 
-# Tools that are self-contained (no ctx needed)
-_SESSION_TOOLS = [
-    list_active_sessions,
-    get_session_thoughts,
-    get_latest_thought,
+# --- Tool lists ---
+
+_TOOLS = [
+    ping,
+    get_context,
     continue_listening,
 ]
 
@@ -179,40 +151,43 @@ _SESSION_TOOLS = [
 # --- App factory ---
 
 
-def create_app(daemon_client=None, get_session=None):
+def create_app(daemon, get_session=None):
     """Create the Clarvis MCP server.
 
     Args:
-        daemon_client: DaemonClient instance. Defaults to global singleton.
-            Pass a mock for testing.
+        daemon: CentralHubDaemon instance (or mock with .state, .refresh, etc.).
         get_session: Callable returning SpotifySession instance. Passed through
             to spotify sub-server. Pass a mock factory for testing.
     """
-    client = daemon_client if daemon_client is not None else get_daemon_client()
 
     @asynccontextmanager
     async def daemon_lifespan(server):
-        yield {"client": client}
+        yield {"daemon": daemon}
 
     app = FastMCP("clarvis", lifespan=daemon_lifespan)
 
-    for fn in _DAEMON_TOOLS + _SESSION_TOOLS:
+    for fn in _TOOLS:
         app.tool()(fn)
 
     app.mount(create_spotify_server(get_session=get_session))
-    app.mount(create_memory_server(daemon_client=client))
+    app.mount(create_memory_server(daemon))
 
     return app
 
 
-# Production instance
-mcp = create_app()
+# --- Embedded server ---
 
 
-def main():
-    """Entry point for MCP server."""
-    mcp.run()
+async def run_embedded(daemon, host="127.0.0.1", port=7777):
+    """Run MCP server embedded in daemon's event loop via streamable HTTP.
 
+    Uses uvicorn to serve the FastMCP Starlette app. Intended to be
+    launched as an asyncio task from daemon.run().
+    """
+    import uvicorn
 
-if __name__ == "__main__":
-    main()
+    app = create_app(daemon)
+    asgi = app.http_app(transport="streamable-http")
+    config = uvicorn.Config(asgi, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
