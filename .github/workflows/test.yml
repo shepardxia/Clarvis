@@ -21,6 +21,11 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Clone sibling repos
+        run: |
+          git clone --depth 1 https://github.com/shepardxia/clautify.git ../clautify
+          git clone --depth 1 https://github.com/shepardxia/nanobuddy.git ../nanobuddy
+
       - name: Install dependencies
         run: uv sync --extra test
 
