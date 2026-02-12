@@ -27,13 +27,15 @@ music = ["clautify"]
 ai = ["anthropic"]
 particles = ["numba>=0.63.1"]
 all = ["clarvis[voice,memory,music,ai,particles]"]
-dev = [
-    "clarvis[all]",
+test = [
     "pytest",
     "pytest-cov",
     "pytest-asyncio",
     "hypothesis",
     "responses",
+]
+dev = [
+    "clarvis[all,test]",
 ]
 
 [build-system]
