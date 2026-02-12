@@ -31,18 +31,16 @@ from .core.ipc import DaemonServer
 from .core.refresh_manager import RefreshManager
 from .core.scheduler import Scheduler
 from .core.session_tracker import SessionTracker
+from .core.signals import SignalBus
 from .core.state import StateStore, get_state_store
-from .services.cognee_memory import CogneeMemoryService
-from .services.context_accumulator import ContextAccumulator
-from .services.token_usage import TokenUsageService
-from .services.voice_agent import VoiceAgent
-from .services.voice_orchestrator import VoiceCommandOrchestrator
-from .services.wake_word import WakeWordConfig, WakeWordService
-from .services.whimsy_verb import WhimsyManager
+from .services.context_accumulator import ContextAccumulator, extract_project_from_slug
+from .services.timer_service import TimerService
 from .widget.click_regions import ClickRegion, ClickRegionManager
 from .widget.config import get_config
 from .widget.renderer import FrameRenderer
 from .widget.socket_server import WidgetSocketServer, get_socket_server
+
+logger = logging.getLogger(__name__)
 
 
 class PidLock:
@@ -177,15 +175,28 @@ class CentralHubDaemon:
         self.state = state_store or get_state_store()
         self.session_tracker = SessionTracker(self.state)
         self.command_server = DaemonServer()
-        self.token_usage_service: Optional[TokenUsageService] = None
-        self.wake_word_service: Optional[WakeWordService] = None
-        self.voice_agent: Optional[VoiceAgent] = None
-        self.voice_orchestrator: Optional[VoiceCommandOrchestrator] = None
-        self.memory_service: CogneeMemoryService = CogneeMemoryService()
+        self.token_usage_service = None
+        self.wake_word_service = None
+        self.voice_agent = None
+        self.voice_orchestrator = None
         self.context_accumulator = ContextAccumulator()
+
+        # Memory service (optional — requires cognee)
+        self.memory_service = None
+        if config.memory.enabled:
+            try:
+                from .services.cognee_memory import CogneeMemoryService
+
+                self.memory_service = CogneeMemoryService()
+            except ImportError:
+                logger.info("cognee not installed — memory disabled")
+        # Home project path — only stage sessions from this project
+        self._home_project = Path(__file__).resolve().parents[2]
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         self._mcp_task: Optional[asyncio.Task] = None
         self.scheduler: Optional[Scheduler] = None
+        self.timer_service: Optional[TimerService] = None
+        self.bus: Optional[SignalBus] = None
 
         self.running = False
 
@@ -206,10 +217,16 @@ class CentralHubDaemon:
             fps=self.display_fps,
         )
 
-        # Whimsy verb manager
-        self.whimsy = WhimsyManager(
-            context_provider=lambda: self.hook_processor.get_rich_context(),
-        )
+        # Whimsy verb manager (optional — requires anthropic)
+        self.whimsy = None
+        try:
+            from .services.whimsy_verb import WhimsyManager
+
+            self.whimsy = WhimsyManager(
+                context_provider=lambda: self.hook_processor.get_rich_context(),
+            )
+        except ImportError:
+            logger.info("anthropic not installed — whimsy verbs disabled")
 
         # Refresh manager (passive — Scheduler drives it)
         self.refresh = RefreshManager(
@@ -258,10 +275,13 @@ class CentralHubDaemon:
             self.whimsy.maybe_generate(event)
         self.session_tracker.cleanup_stale()
 
-        # Stage completed sessions for memory check-in
+        # Stage completed sessions for memory check-in (home project only)
         if event == "Stop" and tp and self.context_accumulator:
-            session_id = raw_data.get("session_id", "unknown")
-            self.context_accumulator.stage_session(session_id, tp)
+            slug = Path(tp).parent.name
+            _, project_path = extract_project_from_slug(slug)
+            if Path(project_path).resolve() == self._home_project:
+                session_id = raw_data.get("session_id", "unknown")
+                self.context_accumulator.stage_session(session_id, tp)
 
         if event != "Stop" and self.scheduler:
             self.scheduler.set_mode("active")
@@ -332,6 +352,9 @@ class CentralHubDaemon:
         if not needs_voice:
             return
 
+        from .services.voice_agent import VoiceAgent
+        from .services.voice_orchestrator import VoiceCommandOrchestrator
+
         self.voice_agent = VoiceAgent(
             event_loop=self._event_loop,
             model=config.voice.model,
@@ -346,7 +369,9 @@ class CentralHubDaemon:
             wake_word_service=self.wake_word_service,
             tts_voice=config.voice.tts_voice,
             tts_speed=config.voice.tts_speed,
+            tts_enabled=config.voice.tts_enabled,
             asr_timeout=config.voice.asr_timeout,
+            asr_language=config.voice.asr_language,
             silence_timeout=config.voice.silence_timeout,
             text_linger=config.voice.text_linger,
         )
@@ -387,10 +412,14 @@ class CentralHubDaemon:
 
         Uses pause/resume (not stop/start) so the detector stays alive
         and the voice orchestrator's reference remains valid.
+        When toggling off, also cancels any active voice pipeline.
         """
         if not self.wake_word_service:
             return
         if self.wake_word_service.is_running:
+            # Cancel active voice pipeline before pausing detection
+            if self.voice_orchestrator:
+                self.voice_orchestrator.cancel()
             self.wake_word_service.pause()
             self.state.update("mic", {"visible": True, "enabled": False, "style": "bracket"})
             print("[Daemon] Voice disabled (mic toggled off)", flush=True)
@@ -402,7 +431,7 @@ class CentralHubDaemon:
     def _on_wake_word_detected(self) -> None:
         """Handle wake word detection -- trigger voice command pipeline.
 
-        Called from hey-buddy's detector thread, NOT the asyncio event loop.
+        Called from nanobuddy's detector thread, NOT the asyncio event loop.
         """
         print("[Daemon] Wake word detected", flush=True)
 
@@ -435,6 +464,53 @@ class CentralHubDaemon:
 
         threading.Thread(target=revert_after_delay, daemon=True).start()
 
+    # --- Timer notifications ---
+
+    def _on_timer_fired(self, signal: str, *, name: str, label: str, trigger: str, **kw) -> None:
+        """Handle timer:fired signal — dispatch based on trigger type."""
+        if trigger == "voice":
+            self._timer_voice(name, label)
+        else:
+            self._timer_simple(name, label)
+
+    def _timer_simple(self, name: str, label: str) -> None:
+        """Flash the widget to 'activated' and play a notification sound."""
+        self.display.set_status("activated")
+
+        def _revert() -> None:
+            current = self.state.get("status")
+            current_status = current.get("status", "idle") if current else "idle"
+            if current_status == "activated":
+                self.display.set_status("idle")
+
+        self._event_loop.call_later(2.0, _revert)
+
+        async def _play_sound() -> None:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "afplay",
+                    "/System/Library/Sounds/Glass.aiff",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+            except Exception:
+                pass
+
+        self._event_loop.create_task(_play_sound())
+
+    def _timer_voice(self, name: str, label: str) -> None:
+        """Wake the voice assistant to announce a fired timer."""
+        if not self.voice_orchestrator:
+            self._timer_simple(name, label)
+            return
+
+        display_name = label or name
+        prompt = f"Timer '{display_name}' just fired."
+        if label and label != name:
+            prompt = f"Timer '{name}' just fired. Label: {label}"
+        self._event_loop.create_task(self.voice_orchestrator.notify(prompt))
+
     # --- Lifecycle ---
 
     def start(self) -> None:
@@ -454,32 +530,32 @@ class CentralHubDaemon:
         self.socket_server.on_message(self._handle_widget_message)
         self.socket_server.on_connect(self.click_manager.push_regions)
 
-        # Token usage service
+        # Token usage service (optional — requires anthropic)
         config = get_config()
         if config.token_usage.enabled:
-            self.token_usage_service = TokenUsageService(poll_interval=config.token_usage.poll_interval)
-            self.token_usage_service.start()
+            try:
+                from .services.token_usage import TokenUsageService
 
-        # Wake word service
+                self.token_usage_service = TokenUsageService(poll_interval=config.token_usage.poll_interval)
+                self.token_usage_service.start()
+            except ImportError:
+                logger.info("requests not installed — token usage disabled")
+
+        # Wake word service (optional — requires nanobuddy)
         if config.wake_word.enabled:
-            wake_config = WakeWordConfig(
-                enabled=config.wake_word.enabled,
-                threshold=config.wake_word.threshold,
-                vad_threshold=config.wake_word.vad_threshold,
-                cooldown=config.wake_word.cooldown,
-                input_device=config.wake_word.input_device,
-                use_int8=config.wake_word.use_int8,
-            )
-            self.wake_word_service = WakeWordService(
-                state_store=self.state,
-                config=wake_config,
-                on_detected=self._on_wake_word_detected,
-            )
-            print(
-                f"[Daemon] Starting wake word service with threshold={wake_config.threshold}",
-                flush=True,
-            )
-            self.wake_word_service.start()
+            try:
+                from .services.wake_word import WakeWordService
+
+                self.wake_word_service = WakeWordService(
+                    state_store=self.state,
+                    config=config.wake_word,
+                    on_detected=self._on_wake_word_detected,
+                )
+                ww = config.wake_word
+                print(f"[Daemon] Starting wake word: model={ww.model} threshold={ww.threshold}", flush=True)
+                self.wake_word_service.start()
+            except ImportError:
+                logger.info("nanobuddy not installed — wake word disabled")
 
         # Display rendering
         self.display.start(self._get_display_state, state_store=self.state)
@@ -534,6 +610,15 @@ class CentralHubDaemon:
         # FPS adjustment on mode change
         self.scheduler.on_mode_change(self._on_mode_change)
 
+        # Timer service
+        self.bus = SignalBus(self._event_loop)
+        self.timer_service = TimerService(
+            bus=self.bus,
+            loop=self._event_loop,
+        )
+        self.timer_service.start()
+        self.bus.on("timer:fired", self._on_timer_fired)
+
         self.scheduler.start()
 
     def stop(self) -> None:
@@ -542,13 +627,19 @@ class CentralHubDaemon:
             return
 
         self.running = False
-        # Shut down voice agent first — needs the event loop still running
+        # Kill any in-flight TTS immediately
+        if self.voice_orchestrator:
+            self.voice_orchestrator._kill_tts()
+        # Shut down voice agent — needs the event loop still running
         if self.voice_agent and self._event_loop:
             future = asyncio.run_coroutine_threadsafe(self.voice_agent.shutdown(), self._event_loop)
             try:
                 future.result(timeout=5.0)
             except Exception:
                 pass  # Best-effort — daemon is exiting anyway
+
+        if self.timer_service:
+            self.timer_service.stop()
 
         if self.scheduler:
             self.scheduler.stop()
@@ -584,32 +675,14 @@ class CentralHubDaemon:
 
         # Start memory service (fire-and-forget)
         config = get_config()
-        memory_config = getattr(config, "memory", None)
-        if memory_config is None:
-            # Fall back to raw config dict if WidgetConfig doesn't have a memory attr
-            import json
+        if self.memory_service is not None and config.memory.enabled:
+            asyncio.create_task(self.memory_service._safe_start(config.memory.to_dict()))
 
-            from .widget.config import CONFIG_PATH
-
-            raw = {}
-            try:
-                if CONFIG_PATH.exists():
-                    raw = json.loads(CONFIG_PATH.read_text())
-            except Exception:
-                pass
-            memory_config = raw.get("memory", {})
-        else:
-            memory_config = memory_config if isinstance(memory_config, dict) else {}
-
-        if memory_config.get("enabled", True):
-            asyncio.create_task(self.memory_service._safe_start(memory_config))
-
-        # Start embedded MCP server (SSE on localhost)
+        # Start embedded MCP servers (standard + memory-enabled)
         from .server import run_embedded
 
-        mcp_port = 7777
-        self._mcp_task = asyncio.create_task(run_embedded(self, port=mcp_port))
-        print(f"[Daemon] MCP server listening on 127.0.0.1:{mcp_port}", flush=True)
+        self._mcp_task = asyncio.create_task(run_embedded(self, port=7777, memory_port=7778))
+        print("[Daemon] MCP :7777 (standard) :7778 (memory)", flush=True)
 
         try:
             # Event-driven — sleep indefinitely, all work happens via

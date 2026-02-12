@@ -165,7 +165,7 @@ class HookProcessor:
         current_status = status.get("status", "idle")
 
         # Don't reset if already idle or awaiting (these are resting states)
-        if current_status in ("idle", "awaiting", "resting"):
+        if current_status in ("idle", "awaiting"):
             return False
 
         if not timestamp_str:

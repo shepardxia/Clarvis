@@ -25,7 +25,6 @@ check_dependencies() {
 
     if command -v uv &> /dev/null; then
         print_success "uv found"
-        USE_UV=true
     else
         print_error "uv is required. Install it:"
         echo "  brew install uv"
@@ -39,6 +38,7 @@ check_sibling_repos() {
 
     local missing=false
 
+    # Required sibling repos
     if [ ! -d "$MONOREPO_DIR/clautify" ]; then
         print_error "clautify not found at $MONOREPO_DIR/clautify"
         echo "  git clone git@github.com:shepardxia/clautify.git $MONOREPO_DIR/clautify"
@@ -47,17 +47,23 @@ check_sibling_repos() {
         print_success "clautify found"
     fi
 
-    if [ ! -d "$MONOREPO_DIR/hey-buddy" ]; then
-        print_error "hey-buddy not found at $MONOREPO_DIR/hey-buddy"
-        echo "  git clone git@github.com:shepardxia/hey-buddy.git $MONOREPO_DIR/hey-buddy"
-        missing=true
-    else
-        print_success "hey-buddy found"
+    if [ "$missing" = true ]; then
+        print_error "Missing required sibling repos. Clone them and re-run."
+        exit 1
     fi
 
-    if [ "$missing" = true ]; then
-        print_error "Missing sibling repos. Clone them and re-run."
-        exit 1
+    # Optional sibling repos (voice features)
+    if [ ! -d "$MONOREPO_DIR/nanobuddy" ]; then
+        echo ""
+        read -rp "  Clone nanobuddy for wake word/voice features? [Y/n]: " clone_nano
+        if [ -z "$clone_nano" ] || [[ "$clone_nano" =~ ^[Yy] ]]; then
+            git clone https://github.com/shepardxia/nanobuddy.git "$MONOREPO_DIR/nanobuddy"
+            print_success "nanobuddy cloned"
+        else
+            print_warning "Skipped — wake word/voice features won't be available"
+        fi
+    else
+        print_success "nanobuddy found"
     fi
 }
 
@@ -65,26 +71,34 @@ setup_venv() {
     print_header "Setting up Python environment..."
 
     cd "$REPO_DIR"
-    uv sync
-    print_success "Dependencies installed (including sibling editable deps)"
+    uv sync --extra all
+    print_success "All dependencies installed"
 }
 
 configure_mcp() {
     print_header "Configuring MCP server..."
 
-    if ! command -v claude &> /dev/null; then
-        print_warning "claude CLI not found — skipping MCP config"
-        echo "  Install Claude Code first: npm install -g @anthropic-ai/claude-code"
-        echo "  Then re-run this script or manually run:"
-        echo "    claude mcp add -s user clarvis -- uv run --project $REPO_DIR clarvis"
-        return
+    if command -v cmcp &> /dev/null; then
+        # cmcp writes correct HTTP .mcp.json
+        cd "$MONOREPO_DIR" && cmcp add clarvis
+        print_success "MCP server configured via cmcp"
+    elif command -v claude &> /dev/null; then
+        # Fallback: write .mcp.json directly
+        cat > "$MONOREPO_DIR/.mcp.json" << MCPEOF
+{
+  "mcpServers": {
+    "clarvis": {
+      "type": "http",
+      "url": "http://127.0.0.1:7777/mcp"
+    }
+  }
+}
+MCPEOF
+        print_success "MCP server configured (.mcp.json)"
+    else
+        print_warning "Neither cmcp nor claude CLI found — skipping MCP config"
+        echo "  Install Claude Code: npm install -g @anthropic-ai/claude-code"
     fi
-
-    # Remove existing entry if present, then add fresh
-    claude mcp remove -s user clarvis 2>/dev/null || true
-    claude mcp add -s user clarvis -- uv run --project "$REPO_DIR" clarvis
-
-    print_success "MCP server configured (user scope)"
 }
 
 install_cli() {
@@ -113,23 +127,23 @@ install_cli() {
     print_success "CLI installed: clarvis (-> $link_dir/clarvis)"
 }
 
-configure_voice() {
-    print_header "Configuring voice agent..."
+setup_home() {
+    print_header "Setting up home directory..."
 
-    # Voice agent uses monorepo root as its project dir — write MCP config there
-    cat > "$MONOREPO_DIR/.mcp.json" << MCPEOF
+    mkdir -p "$MONOREPO_DIR/home"
+    if [ ! -f "$MONOREPO_DIR/home/.mcp.json" ]; then
+        cat > "$MONOREPO_DIR/home/.mcp.json" << MCPEOF
 {
   "mcpServers": {
     "clarvis": {
-      "command": "uv",
-      "args": ["run", "--project", "$REPO_DIR", "clarvis"],
-      "cwd": "$REPO_DIR"
+      "type": "http",
+      "url": "http://127.0.0.1:7778/mcp"
     }
   }
 }
 MCPEOF
-
-    print_success "Voice agent MCP config written to $MONOREPO_DIR/.mcp.json"
+    fi
+    print_success "Home directory ready (memory tools on port 7778)"
 }
 
 check_env() {
@@ -141,10 +155,32 @@ check_env() {
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
         print_success "ANTHROPIC_API_KEY set in environment"
     else
-        print_warning "ANTHROPIC_API_KEY not set"
+        print_warning "ANTHROPIC_API_KEY not set (needed for whimsy verbs + token usage)"
         echo "  Create $REPO_DIR/.env with:"
         echo "    ANTHROPIC_API_KEY=sk-ant-..."
         echo "  Or export it in your shell profile."
+    fi
+}
+
+setup_spotify() {
+    print_header "Spotify setup (optional)..."
+
+    if [ -f "$HOME/.config/clautify/session.json" ]; then
+        print_success "Spotify session already configured"
+        return
+    fi
+
+    echo "  Clautify controls Spotify playback. To set it up:"
+    echo "  1. Open open.spotify.com in browser, log in"
+    echo "  2. DevTools (F12) -> Application -> Cookies -> sp_dc"
+    echo "  3. Copy the sp_dc cookie value"
+    echo ""
+    read -rp "  Paste sp_dc cookie (or press Enter to skip): " sp_dc
+    if [ -n "$sp_dc" ]; then
+        "$REPO_DIR/.venv/bin/python" -c "from clautify.dsl import SpotifySession; SpotifySession.setup('$sp_dc')"
+        print_success "Spotify session saved to ~/.config/clautify/session.json"
+    else
+        print_warning "Skipped — run SpotifySession.setup('cookie') later to enable music"
     fi
 }
 
@@ -163,7 +199,6 @@ Usage:
   clarvis restart   Stop then start
   clarvis status    Show running processes
   clarvis logs      Tail daemon logs
-  clarvis debug     Attach to voice agent session
 
 Restart Claude Code to load the MCP server.
 
@@ -187,9 +222,10 @@ main() {
     check_sibling_repos
     setup_venv
     check_env
+    setup_spotify
     configure_mcp
     install_cli
-    configure_voice
+    setup_home
 
     print_success "Setup complete!"
     print_next_steps

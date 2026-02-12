@@ -10,7 +10,17 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-from numba import njit
+
+try:
+    from numba import njit
+except ImportError:
+    # Fallback: no JIT, pure Python (slower but functional)
+    def njit(**kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
 
 from ..elements.registry import ElementRegistry
 from ..widget.pipeline import Layer

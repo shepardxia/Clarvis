@@ -34,9 +34,23 @@ build_widget() {
     return 0
 }
 
+rotate_logs() {
+    local max=512000  # 500KB
+    for f in logs/daemon.err.log logs/daemon.out.log; do
+        [ -f "$f" ] || continue
+        local sz=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null)
+        if [ "${sz:-0}" -gt "$max" ]; then
+            rm -f "$f.2"
+            [ -f "$f.1" ] && mv "$f.1" "$f.2"
+            mv "$f" "$f.1"
+        fi
+    done
+}
+
 do_start() {
     mkdir -p logs
-    uv sync --quiet 2>/dev/null || true
+    rotate_logs
+    uv sync --extra all --quiet 2>/dev/null || true
     if [ -n "$(pid_daemon)" ]; then
         echo "daemon: already running ($(pid_daemon))"
     else
@@ -79,15 +93,16 @@ case "${1:-status}" in
         ;;
     status)  do_status ;;
     logs)    do_logs ;;
-    debug)
-        cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")/.."
+    chat)
+        cd ../home || exit 1
         if [ "$2" = "--new" ]; then
-            echo "Starting new voice agent session..."
             exec claude
         else
-            echo "Attaching to voice agent session..."
             exec claude --continue
         fi
+        ;;
+    debug)
+        tail -f logs/daemon.err.log
         ;;
     help|-h|--help)
         echo "Usage: clarvis <command>"
@@ -98,7 +113,8 @@ case "${1:-status}" in
         echo "  restart   Stop then start (--new for fresh voice session)"
         echo "  status    Show running processes (default)"
         echo "  logs      Tail daemon logs"
-        echo "  debug     Attach to voice agent's Claude session (--new for fresh)"
+        echo "  chat      Chat with Clarvis in terminal (--new for fresh session)"
+        echo "  debug     Tail daemon error log"
         ;;
     *)  echo "Unknown command: $1 (try 'clarvis help')" ;;
 esac

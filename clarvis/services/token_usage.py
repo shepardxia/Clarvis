@@ -7,8 +7,6 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-import requests
-
 logger = logging.getLogger(__name__)
 
 
@@ -127,6 +125,8 @@ class TokenUsageService:
             return None
 
         try:
+            import requests
+
             response = requests.get(
                 self.API_URL,
                 headers={

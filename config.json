@@ -24,37 +24,35 @@
     "context_percent": 75.0
   },
   "token_usage": {
-    "enabled": true,
+    "enabled": false,
     "poll_interval": 120
   },
   "wake_word": {
     "enabled": true,
-    "threshold": 0.3,
-    "vad_threshold": 0.2,
-    "cooldown": 2.0,
-    "input_device": null,
-    "use_int8": false
+    "threshold": 0.75,
+    "vad_threshold": 0.5,
+    "patience": 5,
+    "input_device": null
   },
   "memory": {
-    "enabled": true,
+    "enabled": false,
     "data_dir": "~/.clarvis/memory",
     "default_dataset": "clarvis"
   },
+  "spotify": {
+    "max_volume": 75
+  },
   "voice": {
     "enabled": true,
-    "provider": "claude",
     "asr_timeout": 4.0,
     "asr_language": "en-US",
     "silence_timeout": 4.0,
     "tts_voice": "Fred",
     "tts_enabled": true,
-    "tts_speed": 150,
+    "tts_speed": 170,
     "text_linger": 3.0,
     "model": "haiku",
     "max_thinking_tokens": 0,
-    "idle_timeout": 3600,
-    "mlx_model": "mlx-community/Qwen2.5-7B-Instruct-4bit",
-    "mlx_temperature": 0.7,
-    "mlx_max_tokens": 512
+    "idle_timeout": 3600
   }
 }

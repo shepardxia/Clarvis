@@ -4,12 +4,15 @@ Single tool that accepts DSL command strings via the clautify package.
 Formats raw responses as concise text for LLM consumption.
 """
 
-import time
+import logging
+import re
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, List
 
 from fastmcp import Context, FastMCP
 from pydantic import Field
+
+logger = logging.getLogger(__name__)
 
 # --- Default session factory (lazy init) ---
 
@@ -17,41 +20,27 @@ _session_cache = {}
 
 
 def _default_get_session():
-    """Lazy SpotifySession singleton. No lock needed — asyncio is single-threaded for sync calls."""
+    """Lazy SpotifySession singleton. Re-attempts on each call if previous init failed."""
     if "instance" not in _session_cache:
         from clautify.dsl import SpotifySession
 
         session = SpotifySession.from_config(eager=False)
+        # Apply max volume from Clarvis config
+        try:
+            from .widget.config import get_config
+
+            session.max_volume = get_config().spotify.max_volume / 100
+        except Exception:
+            pass
         check = session.health_check()
         if check.get("authenticated"):
-            print("[Spotify] Health check passed", flush=True)
+            logger.info("Spotify health check passed")
+            _session_cache["instance"] = session
         else:
-            print(f"[Spotify] Health check FAILED: {check.get('error', 'unknown')}", flush=True)
-        _session_cache["instance"] = session
+            logger.warning("Spotify health check FAILED: %s", check.get("error", "unknown"))
+            # Don't cache — next call will retry
+            return session
     return _session_cache["instance"]
-
-
-# --- Device cache ---
-
-_device_cache: Dict[str, Any] = {"names": None, "ts": 0}
-_DEVICE_TTL = 300  # 5 minutes
-
-
-def _ensure_devices(session):
-    """Fetch and cache device names. Called on first tool invocation and periodically."""
-    now = time.time()
-    if _device_cache["names"] is not None and now - _device_cache["ts"] < _DEVICE_TTL:
-        return
-    try:
-        result = session.run("get devices")
-        data = result.get("data")
-        if data and hasattr(data, "devices"):
-            _device_cache["names"] = [d.name for d in data.devices.values()]
-        elif isinstance(data, list):
-            _device_cache["names"] = [d.get("name", str(d)) for d in data]
-        _device_cache["ts"] = now
-    except Exception:
-        pass
 
 
 # --- Formatting helpers ---
@@ -82,14 +71,13 @@ def _fmt_search(result: dict, session) -> str:
     type_ = result.get("type", "tracks")
     data = result.get("data")
 
+    if not isinstance(data, list) or not data:
+        return "No results."
+
     if type_ == "artists":
-        # searchArtists returns full response, extract items
-        try:
-            items = data["data"]["searchV2"]["artists"]["items"]
-        except (KeyError, TypeError):
-            items = data if isinstance(data, list) else []
+        # data is already a flat items list (extracted by executor)
         lines = []
-        for item in items:
+        for item in data:
             try:
                 name = item["data"]["profile"]["name"]
                 lines.append(name)
@@ -98,9 +86,6 @@ def _fmt_search(result: dict, session) -> str:
         return "\n".join(lines) if lines else "No results."
 
     # tracks, albums, playlists — data is already the extracted items list
-    if not isinstance(data, list):
-        return "No results."
-
     lines = []
     for item in data:
         try:
@@ -159,7 +144,7 @@ def _fmt_now_playing(result: dict, session) -> str:
         if album:
             line += f" ({album})"
 
-        if state.is_paused or not state.is_playing:
+        if state.is_paused is True or state.is_playing is False:
             return f"{line}\npaused"
 
         pos = _ms_to_timestamp(state.position_as_of_timestamp)
@@ -206,16 +191,17 @@ def _fmt_devices(result: dict, session) -> str:
     return "\n".join(lines) if lines else "No devices."
 
 
-def _fmt_queue_or_history(result: dict, session, cap: int = 10) -> str:
+def _fmt_queue_or_history(result: dict, session) -> str:
     data = result.get("data")
     if not data:
         return "Empty."
     if not isinstance(data, list):
         data = [data] if data else []
 
+    cap = result.get("limit", 10)
     cache = _get_cache(session)
     lines = []
-    null_count = 0
+    unknown_count = 0
 
     for track in data[:cap]:
         if hasattr(track, "metadata"):
@@ -232,23 +218,34 @@ def _fmt_queue_or_history(result: dict, session, cap: int = 10) -> str:
                 if album:
                     line += f" ({album})"
                 lines.append(line)
+            elif track.uri and cache:
+                # Fallback: resolve track URI from cache
+                name = cache.name_for_uri(track.uri)
+                if name:
+                    lines.append(f'"{name}"')
+                else:
+                    unknown_count += 1
             else:
-                null_count += 1
+                unknown_count += 1
         elif isinstance(track, dict):
             name = track.get("name") or track.get("title")
+            if not name and cache:
+                uri = track.get("uri")
+                if uri:
+                    name = cache.name_for_uri(uri)
             if name:
                 lines.append(f'"{name}"')
             else:
-                null_count += 1
+                unknown_count += 1
         else:
-            null_count += 1
+            unknown_count += 1
+
+    if unknown_count > 0:
+        lines.append(f"...and {unknown_count} untitled tracks")
 
     remaining = len(data) - cap
     if remaining > 0:
-        null_count += remaining
-
-    if null_count > 0:
-        lines.append(f"...and {null_count} more tracks")
+        lines.append(f"...and {remaining} more in queue")
 
     return "\n".join(lines) if lines else "Empty."
 
@@ -356,13 +353,9 @@ def _fmt_info(result: dict, session) -> str:
     if not data:
         return "No info available."
 
-    kind = "track"
-    if "artist" in target:
-        kind = "artist"
-    elif "album" in target:
-        kind = "album"
-    elif "playlist" in target:
-        kind = "playlist"
+    # Parse kind from URI structure (spotify:artist:xxx → "artist")
+    parts = target.split(":")
+    kind = parts[1] if len(parts) >= 3 else "track"
 
     try:
         if kind == "artist":
@@ -396,8 +389,6 @@ def _fmt_info_artist(data: dict) -> str:
         lines.append(", ".join(stat_parts))
 
     if bio:
-        import re
-
         bio = re.sub(r"<[^>]+>", "", bio)  # strip HTML tags
         # Take first paragraph only
         first_para = bio.split("\n")[0].split("\r")[0].strip()
@@ -538,10 +529,15 @@ def _fmt_info_track(data: dict) -> str:
 # --- Action formatters ---
 
 
-def _fmt_action(result: dict) -> str:
+def _fmt_action(result: dict, session=None) -> str:
     action = result.get("action", "")
     target = result.get("target", "")
     kind = result.get("kind", "")
+    # Resolve URI targets to names via cache
+    if target and target.startswith("spotify:") and session:
+        cache = _get_cache(session)
+        if cache:
+            target = cache.name_for_uri(target) or target
 
     if action == "pause":
         return "Paused"
@@ -629,9 +625,9 @@ def _format_result(result: dict, session) -> str:
             elif query == "info":
                 return _fmt_info(result, session)
         elif action:
-            return _fmt_action(result)
+            return _fmt_action(result, session)
     except Exception:
-        pass
+        logger.warning("Formatter error for %s", query or action, exc_info=True)
 
     # Fallback: return raw result truncated
     raw = str(result)
@@ -656,6 +652,7 @@ async def spotify(
     Modifiers compose in a single call. Examples:
 
         search "radiohead" tracks limit 5
+        search "radiohead" "tool" "deftones" tracks
         now playing
         play track "Creep"
         play album "OK Computer"
@@ -666,31 +663,31 @@ async def spotify(
         volume +10
         get devices
         library playlists
-        info spotify:track:abc
-        recommend 5 for spotify:playlist:abc
+        info "Radiohead"
+        recommend 5 for "Rages Cupped"
 
-    ACTIONS: play [track|album|playlist] "name", pause, resume, skip [N],
-    seek <ms>, queue "name", like/unlike <URI>, follow/unfollow <URI>,
-    save/unsave <URI>, add <URI> to <URI>, remove <URI> from <URI>,
-    create playlist "name", delete playlist <URI>.
+    ACTIONS: play [track|album|playlist] "name" [in "playlist"], pause, resume,
+    skip [N], seek <ms>, queue "name", like/unlike "name", follow/unfollow "name",
+    save/unsave "name", add "name" to "playlist", remove "name" from "playlist",
+    create playlist "name", delete playlist "name".
 
-    QUERIES: search "query" [tracks|artists|albums|playlists],
+    QUERIES: search "query"+ [tracks|artists|albums|playlists],
     now playing, get queue, get devices,
-    library [playlists|artists|albums], info <URI>, history,
-    recommend N for <playlist-URI>.
+    library [playlists|artists|albums|tracks], info "name", history,
+    recommend N for "playlist name".
 
-    COMPOSABLE MODIFIERS (chain onto actions, or use standalone):
-    volume N (0-100, or +N/-N for relative), mode shuffle|repeat|normal,
-    on "device name".
+    COMPOSABLE MODIFIERS (chain onto actions, or standalone):
+    volume N (0-100, capped at configured max), volume +N/-N (relative),
+    mode shuffle|repeat|normal, on "device name" (or: device "name").
     Query-only modifiers: limit N, offset N.
 
-    Names in quotes are resolved from prior search/query results.
-    Use search first to discover tracks, then play/queue them by name.
-
-    Returns formatted text describing the result.
+    IMPORTANT: Names in quotes are resolved from prior search/query results.
+    You must search first to discover tracks/artists/albums, then reference
+    them by name in subsequent commands. This is by design — always search
+    before play, queue, info, or any name-based command. Search accepts
+    multiple quoted terms to batch-populate the cache in one call.
     """
     session = ctx.fastmcp._lifespan_result["get_session"]()
-    _ensure_devices(session)
 
     try:
         result = session.run(command)

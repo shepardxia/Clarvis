@@ -51,6 +51,7 @@ class DisplayConfig:
     corner_radius: int = 24
     bg_alpha: float = 0.75
     font_size: int = 14
+    font_name: str = "Courier"
     border_width: int = 2
     pulse_speed: float = 0.1
 
@@ -104,42 +105,98 @@ class TokenUsageConfig:
 
 
 @dataclass
+class SpotifyConfig:
+    """Configuration for Spotify integration."""
+
+    max_volume: int = 75  # 0-100, caps both absolute and relative volume
+
+    def to_dict(self) -> dict:
+        return {"max_volume": self.max_volume}
+
+    @staticmethod
+    def from_dict(d: dict) -> "SpotifyConfig":
+        if not isinstance(d, dict):
+            return SpotifyConfig()
+        return SpotifyConfig(
+            max_volume=max(0, min(100, d.get("max_volume", 75))),
+        )
+
+
+@dataclass
+class MemoryConfig:
+    """Configuration for knowledge graph memory (cognee)."""
+
+    enabled: bool = False
+    data_dir: str = "~/.clarvis/memory"
+    default_dataset: str = "clarvis"
+
+    def to_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "data_dir": self.data_dir,
+            "default_dataset": self.default_dataset,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "MemoryConfig":
+        if not isinstance(d, dict):
+            return MemoryConfig()
+        return MemoryConfig(
+            enabled=d.get("enabled", False),
+            data_dir=d.get("data_dir", "~/.clarvis/memory"),
+            default_dataset=d.get("default_dataset", "clarvis"),
+        )
+
+
+@dataclass
 class WakeWordConfig:
     """Configuration for wake word detection."""
 
     enabled: bool = False
-    threshold: float = 0.3  # Wake word detection threshold
-    vad_threshold: float = 0.2  # Voice activity detection threshold
-    cooldown: float = 2.0  # Seconds between detections
-    input_device: Optional[int] = None  # Audio input device index
-    use_int8: bool = False  # Use INT8 quantized models
+    model: Optional[str] = None  # Stem name, e.g. "r5_ebf" → models/r5_ebf.onnx
+    model_path: Optional[str] = None  # Explicit absolute path override
+    threshold: float = 0.3
+    vad_threshold: float = 0.2
+    patience: int = 4
+    input_device: Optional[int] = None
 
     def to_dict(self) -> dict:
-        """Serialize to dictionary."""
         d = {
             "enabled": self.enabled,
             "threshold": self.threshold,
             "vad_threshold": self.vad_threshold,
-            "cooldown": self.cooldown,
-            "use_int8": self.use_int8,
+            "patience": self.patience,
         }
+        if self.model is not None:
+            d["model"] = self.model
+        if self.model_path is not None:
+            d["model_path"] = self.model_path
         if self.input_device is not None:
             d["input_device"] = self.input_device
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "WakeWordConfig":
-        """Deserialize from dictionary."""
         if not isinstance(d, dict):
             return WakeWordConfig()
 
+        model = d.get("model")
+        model_path = d.get("model_path")
+
+        # Resolve model stem → path (model_path takes precedence)
+        if model_path is None and model is not None:
+            candidate = PROJECT_ROOT / "models" / f"{model}.onnx"
+            if candidate.exists():
+                model_path = str(candidate)
+
         return WakeWordConfig(
             enabled=d.get("enabled", False),
+            model=model,
+            model_path=model_path,
             threshold=d.get("threshold", 0.3),
             vad_threshold=d.get("vad_threshold", 0.2),
-            cooldown=d.get("cooldown", 2.0),
+            patience=d.get("patience", 4),
             input_device=d.get("input_device"),
-            use_int8=d.get("use_int8", False),
         )
 
 
@@ -204,8 +261,10 @@ class WidgetConfig:
     display: DisplayConfig
     testing: TestingConfig
     token_usage: TokenUsageConfig = field(default_factory=TokenUsageConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
     wake_word: WakeWordConfig = field(default_factory=WakeWordConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    spotify: SpotifyConfig = field(default_factory=SpotifyConfig)
 
     def to_dict(self) -> dict:
         return {
@@ -213,8 +272,10 @@ class WidgetConfig:
             "display": asdict(self.display),
             "testing": asdict(self.testing),
             "token_usage": self.token_usage.to_dict(),
+            "memory": self.memory.to_dict(),
             "wake_word": self.wake_word.to_dict(),
             "voice": self.voice.to_dict(),
+            "spotify": self.spotify.to_dict(),
         }
 
     @classmethod
@@ -242,6 +303,10 @@ class WidgetConfig:
         token_usage_dict = d.get("token_usage", {})
         token_usage = TokenUsageConfig.from_dict(token_usage_dict)
 
+        # Handle memory
+        memory_dict = d.get("memory", {})
+        memory = MemoryConfig.from_dict(memory_dict)
+
         # Handle wake_word
         wake_word_dict = d.get("wake_word", {})
         wake_word = WakeWordConfig.from_dict(wake_word_dict)
@@ -250,13 +315,19 @@ class WidgetConfig:
         voice_dict = d.get("voice", {})
         voice = VoiceConfig.from_dict(voice_dict)
 
+        # Handle spotify
+        spotify_dict = d.get("spotify", {})
+        spotify = SpotifyConfig.from_dict(spotify_dict)
+
         return cls(
             theme=theme,
             display=display,
             testing=testing,
             token_usage=token_usage,
+            memory=memory,
             wake_word=wake_word,
             voice=voice,
+            spotify=spotify,
         )
 
     def save(self, path: Path = CONFIG_PATH):

@@ -9,25 +9,26 @@ dependencies = [
     "fastmcp>=2.14,<3",
     "requests",
     "numpy",
-    "numba>=0.63.1",
-    "anthropic",
-    "clautify",
-    "heybuddy",
-    "claude-agent-sdk",
-    "cognee>=0.5.0,<0.6",
 ]
 
 [tool.uv]
 
 [tool.uv.sources]
 clautify = { path = "../clautify", editable = true }
-heybuddy = { git = "https://github.com/shepardxia/hey-buddy.git" }
+nanobuddy = { path = "../nanobuddy", editable = true }
 
 [project.scripts]
-clarvis-daemon = "clarvis.daemon:main"
+clarvis = "clarvis.daemon:main"
 
 [project.optional-dependencies]
+voice = ["claude-agent-sdk", "nanobuddy[detect]"]
+memory = ["cognee>=0.5.0,<0.6"]
+music = ["clautify"]
+ai = ["anthropic"]
+particles = ["numba>=0.63.1"]
+all = ["clarvis[voice,memory,music,ai,particles]"]
 dev = [
+    "clarvis[all]",
     "pytest",
     "pytest-cov",
     "pytest-asyncio",

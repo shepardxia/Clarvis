@@ -18,85 +18,111 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
-# Max user/assistant messages to extract as a session preview
-_PREVIEW_MESSAGES = 8
-_MAX_MSG_LEN = 300
+# Bookend preview: first N + last N messages to capture full session arc
+_BOOKEND_SIZE = 4
+_MAX_MSG_LEN = 400
 
 
 def extract_project_from_slug(project_slug: str) -> tuple[str, str]:
     """Convert a project slug back to (project_name, project_path).
 
     The slug is the absolute path with slashes replaced by dashes.
-    E.g. "-Users-foo-my-project" -> ("my-project", "/Users/foo/my/project")
-    """
-    if project_slug.startswith("-"):
-        project_path = "/" + project_slug[1:].replace("-", "/")
-    else:
-        project_path = project_slug.replace("-", "/")
+    Ambiguous because directory names can contain dashes. We resolve
+    greedily by checking the filesystem, then when the greedy check
+    fails we try joining the remaining segments as one hyphenated leaf.
 
-    project_name = Path(project_path).name or project_slug
-    return project_name, project_path
+    E.g. "-Users-foo-clarvis-suite" -> ("clarvis-suite", "/Users/foo/clarvis-suite")
+    """
+    if not project_slug.startswith("-"):
+        # Non-absolute slug — can't resolve via filesystem, return as-is
+        return project_slug, project_slug
+
+    parts = project_slug[1:].split("-")
+    path = "/" + parts[0]
+
+    for i in range(1, len(parts)):
+        candidate = path + "/" + parts[i]
+        if Path(candidate).is_dir():
+            path = candidate
+            continue
+
+        # Boundary: remaining segments form the (possibly hyphenated) leaf.
+        remaining = "-".join(parts[i:])
+        # Try 1: slash + all remaining as one name
+        with_slash = path + "/" + remaining
+        # Try 2: merge last dir segment with remaining (back up one level)
+        parent = str(Path(path).parent)
+        merged = parent + "/" + Path(path).name + "-" + remaining
+
+        if Path(merged).is_dir():
+            path = merged
+        else:
+            path = with_slash
+        break
+
+    project_name = Path(path).name or project_slug
+    return project_name, path
 
 
 def _extract_preview(transcript_path: str) -> str:
-    """Extract a compact conversation preview from a JSONL transcript.
+    """Extract a bookend conversation preview from a JSONL transcript.
 
-    Reads the last N user/assistant messages, skipping system tags and
-    tool_use blocks. Returns a compact string suitable for check-in review.
+    Reads the FULL transcript (lazy — only at check-in time) and produces
+    a first-N + last-N message preview so the check-in agent can see the
+    full arc of the session, not just the tail.
     """
     tp = Path(transcript_path)
     if not tp.exists():
         return "(transcript not found)"
 
     try:
-        from collections import deque
-
-        tail: deque[str] = deque(maxlen=100)
+        messages: List[str] = []
         with open(tp, encoding="utf-8", errors="replace") as f:
             for line in f:
-                tail.append(line.rstrip("\n"))
-        lines = list(tail)
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                entry_type = entry.get("type")
+                if entry_type not in ("user", "assistant"):
+                    continue
+
+                content = entry.get("message", {}).get("content", "")
+
+                # Flatten content arrays (skip tool_use, system reminders)
+                if isinstance(content, list):
+                    texts = [
+                        c.get("text", "")
+                        for c in content
+                        if c.get("type") == "text" and not c.get("text", "").startswith("<system")
+                    ]
+                    content = " ".join(texts)
+
+                if not content or content.startswith("<system"):
+                    continue
+
+                role = "U" if entry_type == "user" else "A"
+                content = content[:_MAX_MSG_LEN].replace("\n", " ").strip()
+                if content:
+                    messages.append(f"{role}: {content}")
     except OSError:
         return "(unable to read transcript)"
-
-    messages: List[str] = []
-    # Walk backwards through recent lines
-    for line in reversed(lines[-100:]):
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        entry_type = entry.get("type")
-        if entry_type not in ("user", "assistant"):
-            continue
-
-        content = entry.get("message", {}).get("content", "")
-
-        # Flatten content arrays (skip tool_use, system reminders)
-        if isinstance(content, list):
-            texts = [
-                c.get("text", "")
-                for c in content
-                if c.get("type") == "text" and not c.get("text", "").startswith("<system")
-            ]
-            content = " ".join(texts)
-
-        if not content or content.startswith("<system"):
-            continue
-
-        role = "U" if entry_type == "user" else "A"
-        content = content[:_MAX_MSG_LEN].replace("\n", " ").strip()
-        messages.append(f"{role}: {content}")
-
-        if len(messages) >= _PREVIEW_MESSAGES:
-            break
 
     if not messages:
         return "(empty session)"
 
-    messages.reverse()
-    return "\n".join(messages)
+    total = len(messages)
+
+    # Short session — show everything
+    if total <= _BOOKEND_SIZE * 2:
+        return "\n".join(messages)
+
+    # Long session — bookend with gap indicator
+    head = messages[:_BOOKEND_SIZE]
+    tail = messages[-_BOOKEND_SIZE:]
+    gap = total - _BOOKEND_SIZE * 2
+    return "\n".join(head + [f"[... {gap} more messages ...]"] + tail)
 
 
 class ContextAccumulator:
@@ -204,7 +230,7 @@ class ContextAccumulator:
             self._last_check_in = datetime.now(timezone.utc)
             self._staged_items.clear()
             self._session_refs.clear()
-            self._save_state()
+            self._save_state(merge=False)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -225,9 +251,34 @@ class ContextAccumulator:
         except (json.JSONDecodeError, OSError, ValueError) as exc:
             logger.debug("Failed to load accumulator state: %s", exc)
 
-    def _save_state(self) -> None:
-        """Persist watermark, staged items, and session refs to state.json."""
+    def _save_state(self, merge: bool = True) -> None:
+        """Read-merge-write: merge any externally-written items before saving.
+
+        Prevents divergence when something else writes to state.json
+        (e.g. a script, or a second accumulator instance).
+        Pass merge=False when intentionally resetting state (e.g. mark_checked_in).
+        """
         try:
+            # Merge disk state we don't already have
+            if merge and self._state_file.exists():
+                try:
+                    disk = json.loads(self._state_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    disk = {}
+
+                # Merge session refs by session_id
+                known_ids = {r["session_id"] for r in self._session_refs}
+                for ref in disk.get("session_refs", []):
+                    if ref.get("session_id") not in known_ids:
+                        self._session_refs.append(ref)
+
+                # Merge staged items by (content, timestamp) pair
+                known_items = {(it["content"], it["timestamp"]) for it in self._staged_items}
+                for item in disk.get("staged_items", []):
+                    key = (item.get("content"), item.get("timestamp"))
+                    if key not in known_items:
+                        self._staged_items.append(item)
+
             data = {
                 "last_check_in": self._last_check_in.isoformat(),
                 "staged_items": self._staged_items,

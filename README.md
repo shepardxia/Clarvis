@@ -31,18 +31,18 @@ I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see 
 - **Live on your desktop** — I'm a tiny macOS widget that stays out of your way
 - **Know the weather** — Rain and snow particles fall based on actual conditions outside
 - **Control your music** — Spotify playback via [clautify](https://github.com/shepardxia/clautify) DSL (`play "jazz" volume 70 mode shuffle`)
-- **Listen for you** — Wake word detection via [hey-buddy](https://github.com/shepardxia/hey-buddy), speech-to-text, and voice responses via TTS
+- **Listen for you** — Wake word detection via [nanobuddy](https://github.com/shepardxia/nanobuddy), speech-to-text, and voice responses via TTS
+- **Remember things** — Knowledge graph memory via cognee for persistent context across sessions
 - **Track token usage** — Monitor Claude API consumption (5-hour and 7-day limits)
 
 ## Get Me Running
 
-Clarvis lives in a monorepo with sibling dependencies. Clone all repos into the same parent directory:
+Clarvis lives in a monorepo with sibling dependencies. Clone the repos into the same parent directory:
 
 ```bash
 mkdir clarvis-suite && cd clarvis-suite
 git clone git@github.com:shepardxia/Clarvis.git
 git clone git@github.com:shepardxia/clautify.git
-git clone git@github.com:shepardxia/hey-buddy.git
 ```
 
 Then run the setup script:
@@ -51,6 +51,14 @@ Then run the setup script:
 cd Clarvis
 ./scripts/setup.sh
 ```
+
+The setup script will:
+- Install [uv](https://github.com/astral-sh/uv) dependencies (core + all optional extras)
+- Offer to clone [nanobuddy](https://github.com/shepardxia/nanobuddy) for wake word / voice features
+- Configure MCP server registration (HTTP on port 7777)
+- Set up the `home/` directory for memory tools (port 7778)
+- Optionally configure Spotify (sp_dc cookie)
+- Install the `clarvis` CLI
 
 Requires [uv](https://github.com/astral-sh/uv) and [Claude Code](https://claude.ai/code).
 
@@ -62,6 +70,41 @@ clarvis status        # Check what's running
 clarvis restart       # Stop, rebuild widget if needed, start
 clarvis logs          # Tail daemon logs
 ```
+
+### Optional Dependencies
+
+Features are split into optional extras in `pyproject.toml`. The setup script installs everything, but you can also install selectively:
+
+```bash
+uv sync                    # Core only (MCP server, display, weather)
+uv sync --extra voice      # + wake word detection, voice agent
+uv sync --extra memory     # + knowledge graph memory (cognee)
+uv sync --extra music      # + Spotify control (clautify)
+uv sync --extra ai         # + whimsy verbs, token usage (anthropic)
+uv sync --extra particles  # + JIT weather particles (numba)
+uv sync --extra all        # Everything
+uv sync --extra dev        # Everything + test dependencies
+```
+
+Features degrade gracefully — the daemon starts fine with only core deps, and optional services are silently skipped when their dependencies aren't installed.
+
+### Configuration
+
+Single config file: `config.json` — loaded at startup. Changes require `clarvis restart`.
+
+```json
+{
+  "theme": { "base": "c64" },
+  "display": { "grid_width": 43, "grid_height": 17, "fps": 3 },
+  "wake_word": { "enabled": true, "threshold": 0.75, "patience": 5 },
+  "voice": { "enabled": true, "tts_voice": "Fred", "model": "haiku" },
+  "memory": { "enabled": true, "data_dir": "~/.clarvis/memory" },
+  "spotify": { "max_volume": 75 },
+  "token_usage": { "enabled": true, "poll_interval": 120 }
+}
+```
+
+Themes: `modern`, `synthwave`, `crt-amber`, `crt-green`, `c64`, `matrix`.
 
 Want me to know your exact location? `brew install corelocationcli`
 
@@ -75,8 +118,8 @@ Claude Code hooks → nc -U /tmp/clarvis-daemon.sock → Daemon → Widget
                                              MCP Server (tools)
 ```
 
-- **MCP Server** — Thin client registered with Claude Code. Exposes tools for weather, status, music control, thinking feed, and token usage. Communicates with daemon via JSON-RPC.
-- **Daemon** — Long-running singleton. Receives hook events, classifies tools into semantic statuses, manages background services (weather, location, voice, Spotify), drives the rendering loop, and pushes structured grid frames to the widget.
+- **MCP Server** — Embedded in daemon via uvicorn. Two ports: `:7777` (standard tools) and `:7778` (standard + memory tools). Exposes tools for weather, status, music control, thinking feed, timers, and token usage.
+- **Daemon** — Long-running singleton. Receives hook events, classifies tools into semantic statuses, manages background services (weather, location, voice, Spotify, memory), drives the rendering loop, and pushes structured grid frames to the widget.
 - **Widget** — Native Cocoa app. Receives grid data (rows, cell colors, theme color) via Unix socket, renders colored monospace text. Supports click regions for interactive elements like the mic toggle.
 
 ### Rendering Pipeline
@@ -125,7 +168,7 @@ frames:
 
 ### Weather Particles
 
-Weather uses Numba JIT-compiled batch processing:
+Weather uses Numba JIT-compiled batch processing (falls back to pure Python if numba isn't installed):
 
 ```python
 @njit(cache=True)
@@ -135,17 +178,6 @@ def _tick_physics_batch(p_x, p_y, p_vx, p_vy, ...):
         p_x[i] += p_vx[i]
         p_y[i] += p_vy[i]
 ```
-
-### Resource Usage
-
-| Metric | Value |
-|--------|-------|
-| CPU | ~1.2 CPU sec/hour |
-| Memory | ~45 MB resident |
-| Frame budget | <0.3ms of 200ms (5 FPS) |
-| Grid size | 29×12 cells |
-| Staleness timeout | 30s |
-| Startup | ~2s |
 
 ### Tool-Aware Animations
 
@@ -169,14 +201,14 @@ clarvis/
 ├── daemon.py              # Central hub daemon
 ├── spotify_tools.py       # Spotify DSL tool (mounted sub-server)
 ├── core/                  # State management, display loop, IPC, scheduler
-├── services/              # Weather, location, voice pipeline, Spotify, token usage
+├── services/              # Weather, location, voice pipeline, Spotify, token usage, memory
 ├── archetypes/            # Face, weather, progress renderers
 │   ├── face.py            # State-cached face animations
 │   ├── weather.py         # JIT-compiled particle system
 │   └── progress.py        # Percentage-cached progress bar
 ├── elements/              # Declarative YAML definitions
 │   └── animations/        # Status animations + shorthands
-├── widget/                # Render pipeline, socket server, click regions
+├── widget/                # Render pipeline, socket server, click regions, config
 └── ClarvisWidget/         # Native Cocoa widget (Swift)
     └── main.swift         # GridRenderer, socket client, ASR
 ```
@@ -185,19 +217,17 @@ clarvis/
 
 ```bash
 uv sync --extra dev                    # Install all dependencies
-uv run pytest                          # Run tests (69 tests, ~3s)
-uv run pytest --cov=clarvis            # With coverage
+.venv/bin/python -m pytest             # Run tests
+.venv/bin/python -m pytest --cov=clarvis  # With coverage
 uv run ruff check . && uv run ruff format .  # Lint + format
 ```
-
-Pre-commit hooks run ruff lint and ruff-format on every commit.
 
 ## Credits
 
 - Thinking feed adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
 - Token usage API discovery via [codelynx.dev](https://codelynx.dev/posts/claude-code-usage-limits-statusline)
 - Spotify Connect client via [SpotAPI](https://github.com/Aran404/SpotAPI) by [@Aran404](https://github.com/Aran404)
-- Wake word detection via [hey-buddy](https://github.com/painebenjamin/hey-buddy) by [@painebenjamin](https://github.com/painebenjamin)
+- Wake word engine built on [nanowakeword](https://github.com/kahrendt/nanowakeword) by [@kahrendt](https://github.com/kahrendt) and [hey-buddy](https://github.com/painebenjamin/hey-buddy) by [@painebenjamin](https://github.com/painebenjamin)
 
 ## License
 

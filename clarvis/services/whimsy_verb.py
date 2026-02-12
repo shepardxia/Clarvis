@@ -9,18 +9,26 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-import anthropic
+_client = None
 
-# Load .env from project root if ANTHROPIC_API_KEY not already set
-if not os.environ.get("ANTHROPIC_API_KEY"):
-    _env = Path(__file__).resolve().parents[2] / ".env"
-    if _env.exists():
-        for line in _env.read_text().splitlines():
-            if line.strip() and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
 
-_client = anthropic.Anthropic()
+def _get_client():
+    """Lazy Anthropic client singleton."""
+    global _client
+    if _client is None:
+        # Load .env from project root if ANTHROPIC_API_KEY not already set
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            _env = Path(__file__).resolve().parents[2] / ".env"
+            if _env.exists():
+                for line in _env.read_text().splitlines():
+                    if line.strip() and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        os.environ.setdefault(k.strip(), v.strip())
+        import anthropic
+
+        _client = anthropic.Anthropic()
+    return _client
+
 
 SYSTEM_PROMPT = (
     "Generate ONE whimsical gerund (-ing word) that captures what the assistant is doing. "
@@ -44,7 +52,7 @@ def generate_whimsy_verb(context: str) -> str:
         avoid = f"\nAvoid: {', '.join(_verb_history[-5:])}" if _verb_history else ""
     prompt = SYSTEM_PROMPT.format(avoid=avoid)
 
-    response = _client.messages.create(
+    response = _get_client().messages.create(
         model="claude-haiku-4-5-20251001",
         system=prompt,
         messages=[

@@ -30,7 +30,7 @@ control-panel.html
 
 # Models (only keep clarvis_final.onnx and silero-vad.onnx)
 models/*.onnx
-!models/clarvis_final.onnx
+!models/clarvis_ebf.onnx
 !models/silero-vad.onnx
 
 # Generated docs

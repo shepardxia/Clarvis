@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -157,6 +158,7 @@ def extract_project_from_path(file_path: Path) -> tuple[str, str]:
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 IDLE_TIMEOUT_SECONDS = 600  # 10 minutes
 ENDED_GRACE_PERIOD_SECONDS = 30  # Keep ended sessions briefly for final queries
+RECENCY_CUTOFF_SECONDS = 3600  # Only consider session files modified in the last hour
 
 
 class SessionManager:  # pragma: no cover
@@ -183,15 +185,19 @@ class SessionManager:  # pragma: no cover
         pass
 
     def _scan_existing_sessions(self):
-        """Scan for existing session files on startup."""
+        """Scan for recently modified session files on startup."""
         if not CLAUDE_PROJECTS_DIR.exists():
             return
 
+        cutoff = _time.time() - RECENCY_CUTOFF_SECONDS
         for jsonl_file in CLAUDE_PROJECTS_DIR.glob("*/*.jsonl"):
             try:
-                self._known_files[jsonl_file] = jsonl_file.stat().st_mtime
+                mtime = jsonl_file.stat().st_mtime
             except OSError:
                 continue
+            if mtime < cutoff:
+                continue
+            self._known_files[jsonl_file] = mtime
             self._process_session_file(jsonl_file)
 
     def _process_session_file(self, file_path: Path):
@@ -218,6 +224,9 @@ class SessionManager:  # pragma: no cover
             # Read new content from file
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
+                    file_size = f.seek(0, 2)  # get current file size
+                    if session.file_position > file_size:
+                        session.file_position = 0  # file was truncated
                     f.seek(session.file_position)
                     new_content = f.read()
                     session.file_position = f.tell()
@@ -246,12 +255,15 @@ class SessionManager:  # pragma: no cover
         Designed to be called periodically by the Scheduler. Replaces both
         the watchdog Observer and the lifecycle thread.
         """
-        # --- Poll for file changes ---
+        # --- Poll for file changes (only recent files) ---
         if CLAUDE_PROJECTS_DIR.exists():
+            cutoff = _time.time() - RECENCY_CUTOFF_SECONDS
             for jsonl_file in CLAUDE_PROJECTS_DIR.glob("*/*.jsonl"):
                 try:
                     mtime = jsonl_file.stat().st_mtime
                 except OSError:
+                    continue
+                if mtime < cutoff:
                     continue
                 if mtime != self._known_files.get(jsonl_file):
                     self._known_files[jsonl_file] = mtime

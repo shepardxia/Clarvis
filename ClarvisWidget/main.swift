@@ -248,11 +248,13 @@ class ASRManager {
     private var silenceTimer: Timer?
     private var lastTranscript = ""
     private var hasDeliveredResult = false
+    let locale: Locale
 
     /// Called once with (success, text?, error?)
     var onResult: ((Bool, String?, String?) -> Void)?
 
     init(locale: Locale = Locale(identifier: "en-US")) {
+        self.locale = locale
         self.speechRecognizer = SFSpeechRecognizer(locale: locale)
             ?? SFSpeechRecognizer()
     }
@@ -793,6 +795,7 @@ class WidgetWindowController: NSWindowController {
     //
     //   Inbound  (daemon -> widget):
     //     start_asr     { timeout: Float, silence_timeout: Float, id: String }
+    //     stop_asr      {}
     //     show_response { text: String }
     //     clear_response {}
     //
@@ -804,13 +807,16 @@ class WidgetWindowController: NSWindowController {
             let timeout = params["timeout"] as? TimeInterval ?? 10.0
             let silenceTimeout = params["silence_timeout"] as? TimeInterval ?? 3.0
             let id = params["id"] as? String ?? ""
-            startASR(timeout: timeout, silenceTimeout: silenceTimeout, id: id)
+            let language = params["language"] as? String ?? "en-US"
+            startASR(timeout: timeout, silenceTimeout: silenceTimeout, id: id, language: language)
         case "show_response":
             if let text = params["text"] as? String {
                 showResponse(text)
             }
         case "clear_response":
             clearResponse()
+        case "stop_asr":
+            asrManager.stopRecognition()
         case "set_click_regions":
             if let regionsArray = params["regions"] as? [[String: Any]] {
                 updateClickRegions(regionsArray)
@@ -825,7 +831,13 @@ class WidgetWindowController: NSWindowController {
         clickableWindow.clickRegions = regionsData.compactMap { ClickRegion(from: $0) }
     }
 
-    func startASR(timeout: TimeInterval, silenceTimeout: TimeInterval, id: String) {
+    func startASR(timeout: TimeInterval, silenceTimeout: TimeInterval, id: String, language: String = "en-US") {
+        // Recreate recognizer if language changed
+        let locale = Locale(identifier: language)
+        if asrManager.locale != locale {
+            asrManager = ASRManager(locale: locale)
+        }
+
         asrManager.onResult = { [weak self] success, text, error in
             guard let self = self else { return }
             var result: [String: Any] = ["success": success, "id": id]

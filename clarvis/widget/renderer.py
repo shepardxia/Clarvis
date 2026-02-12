@@ -277,31 +277,34 @@ class FrameRenderer:
 
     @staticmethod
     def _word_wrap(text: str, width: int) -> list[str]:
-        """Word-wrap text to fit within width columns."""
-        words = text.split(" ")
+        """Word-wrap text to fit within width columns, respecting newlines."""
         lines: list[str] = []
-        current = ""
-
-        for word in words:
-            if len(word) > width:
-                if current:
-                    lines.append(current)
-                    current = ""
-                while len(word) > width:
-                    lines.append(word[:width])
-                    word = word[width:]
-                current = word
+        for paragraph in text.split("\n"):
+            if not paragraph:
+                lines.append("")
                 continue
+            words = paragraph.split(" ")
+            current = ""
+            for word in words:
+                if len(word) > width:
+                    if current:
+                        lines.append(current)
+                        current = ""
+                    while len(word) > width:
+                        lines.append(word[:width])
+                        word = word[width:]
+                    current = word
+                    continue
 
-            test = f"{current} {word}" if current else word
-            if len(test) <= width:
-                current = test
-            else:
+                test = f"{current} {word}" if current else word
+                if len(test) <= width:
+                    current = test
+                else:
+                    lines.append(current)
+                    current = word
+
+            if current:
                 lines.append(current)
-                current = word
-
-        if current:
-            lines.append(current)
         return lines
 
     def render_grid(

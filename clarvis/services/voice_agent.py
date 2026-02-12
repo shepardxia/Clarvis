@@ -18,14 +18,13 @@ import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    ResultMessage,
-    TextBlock,
-    ToolUseBlock,
-)
+
+def _sdk():
+    """Lazy import of claude_agent_sdk."""
+    import claude_agent_sdk
+
+    return claude_agent_sdk
+
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +53,7 @@ VOICE_ALLOWED_TOOLS = [
 
 MUSIC_PROFILE_PATH = Path.home() / ".claude/memories/music_profile_compact.md"
 
-# Monorepo root: voice_agent.py → services/ → clarvis/ → Clarvis/ → clarvis-suite/
-DEFAULT_PROJECT_DIR = Path(__file__).resolve().parents[3]
+DEFAULT_PROJECT_DIR = Path(__file__).resolve().parent.parent.parent.parent / "home"
 
 # Default seconds of inactivity before the agent auto-disconnects to free memory.
 DEFAULT_IDLE_TIMEOUT = 3600.0
@@ -87,7 +85,7 @@ class VoiceAgent:
         self._model = model
         self._max_thinking_tokens = max_thinking_tokens
         self._idle_timeout = idle_timeout
-        self._client: ClaudeSDKClient | None = None
+        self._client = None  # ClaudeSDKClient | None
         self._connected = False
         self._lock = asyncio.Lock()
         self._idle_handle: asyncio.TimerHandle | None = None
@@ -118,7 +116,7 @@ class VoiceAgent:
     # Agent options
     # ------------------------------------------------------------------
 
-    def _build_options(self) -> ClaudeAgentOptions:
+    def _build_options(self):
         # Build system prompt: base + music profile (if available)
         prompt = VOICE_SYSTEM_PROMPT
         try:
@@ -129,7 +127,8 @@ class VoiceAgent:
             pass
 
         mcp_path = self.project_dir / ".mcp.json"
-        opts = ClaudeAgentOptions(
+        sdk = _sdk()
+        opts = sdk.ClaudeAgentOptions(
             cwd=str(self.project_dir),
             system_prompt=prompt,
             model=self._model,
@@ -183,7 +182,8 @@ class VoiceAgent:
             self.ensure_project_dir()
 
             opts = self._build_options()
-            self._client = ClaudeSDKClient(opts)
+            sdk = _sdk()
+            self._client = sdk.ClaudeSDKClient(opts)
             try:
                 await asyncio.wait_for(self._client.connect(), timeout=10.0)
                 self._connected = True
@@ -225,42 +225,74 @@ class VoiceAgent:
     # Query
     # ------------------------------------------------------------------
 
-    async def send(self, text: str) -> AsyncIterator[str]:
+    async def send(self, text: str) -> AsyncIterator[str | None]:
         """Send a voice command and yield response text chunks.
 
         Manages the idle timer: cancels on entry, restarts in finally.
-        Also detects continue_listening tool calls and sets
-        self.expects_reply accordingly.  Text after the tool call
-        is suppressed to prevent TTS from speaking it.
+        Retries once after reconnect if the SDK subprocess died (e.g.
+        after a ``clarvis debug`` session took over the conversation).
+
+        Yields None at tool-call boundaries to signal the caller to
+        flush accumulated text to TTS before the tool executes.
         """
         self._cancel_idle_timer()
+        self._sending = True
+        try:
+            yielded = False
+            try:
+                async for chunk in self._send_inner(text):
+                    yielded = True
+                    yield chunk
+            except (_sdk().CLIConnectionError, _sdk().ProcessError) as exc:
+                if yielded:
+                    # Partial response already sent to caller — don't retry
+                    # to avoid double-speak.  Let the caller handle the gap.
+                    logger.warning("Voice send failed mid-stream (%s), not retrying", exc)
+                    return
+                logger.warning("Voice send failed (%s), reconnecting for retry", exc)
+                await self.disconnect()
+                async for chunk in self._send_inner(text):
+                    yield chunk
+        finally:
+            self._sending = False
+            self._start_idle_timer()
+
+    async def _send_inner(self, text: str) -> AsyncIterator[str | None]:
+        """Core send logic — no timer management, no retry."""
         await self.ensure_connected()
-        assert self._client is not None  # guaranteed by ensure_connected()
+        assert self._client is not None
 
         self.expects_reply = False
         saw_signal = False
 
-        self._sending = True
+        sdk = _sdk()
         try:
             await self._client.query(text)
             async for message in self._client.receive_response():
-                if isinstance(message, AssistantMessage):
+                if isinstance(message, sdk.AssistantMessage):
+                    has_tool = False
                     for block in message.content:
-                        if isinstance(block, ToolUseBlock) and "continue_listening" in block.name:
-                            self.expects_reply = True
-                            saw_signal = True
-                            logger.debug("continue_listening tool detected")
-                        elif isinstance(block, TextBlock) and not saw_signal:
+                        if isinstance(block, sdk.ToolUseBlock):
+                            if "continue_listening" in block.name:
+                                self.expects_reply = True
+                                saw_signal = True
+                                logger.debug("continue_listening tool detected")
+                            else:
+                                has_tool = True
+                        elif isinstance(block, sdk.TextBlock) and not saw_signal:
                             yield block.text
-                elif isinstance(message, ResultMessage):
+                    # Signal tool boundary so caller can flush TTS
+                    if has_tool and not saw_signal:
+                        yield None
+                elif isinstance(message, sdk.ResultMessage):
                     return
+        except (sdk.CLIConnectionError, sdk.ProcessError):
+            await self.disconnect()
+            raise
         except Exception:
             logger.exception("Voice agent query failed, forcing disconnect")
             await self.disconnect()
             raise
-        finally:
-            self._sending = False
-            self._start_idle_timer()
 
     async def interrupt(self) -> None:
         """Interrupt the current query (e.g. on cancellation)."""

@@ -16,6 +16,7 @@ from pydantic import Field
 from .memory_tools import create_memory_server
 from .services import get_session_manager
 from .spotify_tools import create_spotify_server
+from .timer_tools import create_timer_server
 
 if TYPE_CHECKING:
     from .daemon import CentralHubDaemon
@@ -139,25 +140,50 @@ async def continue_listening() -> str:
     return "Listening."
 
 
+async def stage_item(
+    data: Annotated[
+        str,
+        Field(description="Text content to queue for the next memory check-in."),
+    ],
+    ctx: Context = None,
+) -> dict:
+    """Queue a fact or observation for the next memory check-in.
+
+    Items staged here appear in the check_in bundle for review. They are NOT
+    written to the knowledge graph directly — that happens during check-in
+    after the user approves each item.
+
+    Use this from any session to remember something for later.
+    """
+    d = _daemon(ctx)
+    if not d.context_accumulator:
+        return {"error": "Context accumulator not available"}
+    d.context_accumulator.stage_item(data)
+    return {"status": "staged", "message": "Item queued for next check-in."}
+
+
 # --- Tool lists ---
 
 _TOOLS = [
     ping,
     get_context,
     continue_listening,
+    stage_item,
 ]
 
 
 # --- App factory ---
 
 
-def create_app(daemon, get_session=None):
+def create_app(daemon, get_session=None, include_memory=False):
     """Create the Clarvis MCP server.
 
     Args:
         daemon: CentralHubDaemon instance (or mock with .state, .refresh, etc.).
         get_session: Callable returning SpotifySession instance. Passed through
             to spotify sub-server. Pass a mock factory for testing.
+        include_memory: If True, mount memory tools. Only the dedicated memory
+            port (home/ project) should set this.
     """
 
     @asynccontextmanager
@@ -170,7 +196,10 @@ def create_app(daemon, get_session=None):
         app.tool()(fn)
 
     app.mount(create_spotify_server(get_session=get_session))
-    app.mount(create_memory_server(daemon))
+    app.mount(create_timer_server(daemon))
+
+    if include_memory and daemon.memory_service is not None:
+        app.mount(create_memory_server(daemon))
 
     return app
 
@@ -178,16 +207,26 @@ def create_app(daemon, get_session=None):
 # --- Embedded server ---
 
 
-async def run_embedded(daemon, host="127.0.0.1", port=7777):
-    """Run MCP server embedded in daemon's event loop via streamable HTTP.
+async def run_embedded(daemon, host="127.0.0.1", port=7777, memory_port=7778):
+    """Run two MCP servers embedded in daemon's event loop.
 
-    Uses uvicorn to serve the FastMCP Starlette app. Intended to be
-    launched as an asyncio task from daemon.run().
+    Port 7777: standard tools (ping, context, spotify, timers).
+    Port 7778: standard + memory tools (for home/ check-in sessions only).
     """
+    import asyncio
+
     import uvicorn
 
-    app = create_app(daemon)
-    asgi = app.http_app(transport="streamable-http")
-    config = uvicorn.Config(asgi, host=host, port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    await server.serve()
+    main_app = create_app(daemon)
+    mem_app = create_app(daemon, include_memory=True)
+
+    main_asgi = main_app.http_app(transport="streamable-http")
+    mem_asgi = mem_app.http_app(transport="streamable-http")
+
+    main_cfg = uvicorn.Config(main_asgi, host=host, port=port, log_level="warning")
+    mem_cfg = uvicorn.Config(mem_asgi, host=host, port=memory_port, log_level="warning")
+
+    await asyncio.gather(
+        uvicorn.Server(main_cfg).serve(),
+        uvicorn.Server(mem_cfg).serve(),
+    )
