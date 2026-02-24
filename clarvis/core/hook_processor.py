@@ -91,9 +91,9 @@ class HookProcessor:
             return None
 
         creative_tools = {"Write", "Edit", "NotebookEdit"}
-        recent_tools = tool_history[-5:] if len(tool_history) >= 5 else tool_history
+        recent_tools = tool_history[-5:]
 
-        recent_outcomes = tool_outcomes[-5:] if len(tool_outcomes) >= 5 else tool_outcomes
+        recent_outcomes = tool_outcomes[-5:]
         had_creative_success = any(
             o.get("tool") in creative_tools and o.get("succeeded", False) for o in recent_outcomes
         )

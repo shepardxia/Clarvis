@@ -16,7 +16,6 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import Optional
 
 from filelock import FileLock, Timeout
 
@@ -91,7 +90,7 @@ class PidLock:
 
 
 # Global lock instance for daemon
-_daemon_lock: Optional[PidLock] = None
+_daemon_lock: PidLock | None = None
 
 
 class CentralHubDaemon:
@@ -158,16 +157,16 @@ class CentralHubDaemon:
         # replace "." → "-", then "/" → "-".
         _home_path = str(Path.home() / ".clarvis" / "home")
         self._home_slug = _home_path.replace(".", "-").replace("/", "-")
-        self.ctx: Optional[AppContext] = None
-        self._mcp_task: Optional[asyncio.Task] = None
-        self._staleness_handle: Optional[asyncio.TimerHandle] = None
-        self.scheduler: Optional[Scheduler] = None
-        self.timer_service: Optional[TimerService] = None
-        self.bus: Optional[SignalBus] = None
+        self.ctx: AppContext | None = None
+        self._mcp_task: asyncio.Task | None = None
+        self._staleness_handle: asyncio.TimerHandle | None = None
+        self.scheduler: Scheduler | None = None
+        self.timer_service: TimerService | None = None
+        self.bus: SignalBus | None = None
 
         self.running = False
         self._stopped = False
-        self._shutdown_event: Optional[asyncio.Event] = None
+        self._shutdown_event: asyncio.Event | None = None
 
         # Display manager with pre-warmed renderer
         renderer = FrameRenderer(

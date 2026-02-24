@@ -4,7 +4,6 @@ Layer priorities are defined in pipeline.LayerPriority.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from ..archetypes import FaceArchetype, ProgressArchetype, WeatherArchetype
 from ..archetypes.weather import BoundingBox
@@ -156,8 +155,7 @@ class FrameRenderer:
     def mic_icon_position(self) -> tuple[int, int, int]:
         """Return (row, col, width) for the current mic icon style.
 
-        Positioned on the verb row (bar_y + 2), right-aligned, so it stays
-        within the visible window area regardless of grid height.
+        Positioned two rows below the progress bar, right-aligned.
         """
         icons = self.MIC_ICONS.get(self._mic_style, self.MIC_ICONS["bracket"])
         icon = icons["on"]
@@ -178,7 +176,7 @@ class FrameRenderer:
         self.weather.set_exclusion_zones([avatar_box])
         self.weather.render(self.weather_layer, color=self.WEATHER_COLOR)
 
-    def _render_celestial(self, hour: Optional[int] = None):
+    def _render_celestial(self, hour: int | None = None):
         """Render sun or moon based on time of day, arcing across the top."""
         # Only render if there's room above avatar
         if self.avatar_y < self.CELESTIAL_HEIGHT + 1:
@@ -300,7 +298,7 @@ class FrameRenderer:
     def render_grid(
         self,
         context_percent: float = 0,
-        hour: Optional[int] = None,
+        hour: int | None = None,
     ) -> tuple[list[str], list[list[int]]]:
         """Render complete frame and return structured grid data.
 

@@ -2,7 +2,7 @@
 
 import threading
 import time
-from typing import TYPE_CHECKING, Callable, Optional, Tuple
+from typing import TYPE_CHECKING, Callable
 
 from .colors import StatusColors
 
@@ -29,8 +29,8 @@ class DisplayManager:
         self._running = False
         self._frozen = False
         self._wake_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._state_store: Optional["StateStore"] = None
+        self._thread: threading.Thread | None = None
+        self._state_store: "StateStore | None" = None
 
     def push_frame(self, output: dict) -> None:
         """Push frame to socket."""
@@ -109,7 +109,7 @@ class DisplayManager:
             style=mic.get("style", "bracket"),
         )
 
-    def _loop(self, get_state: Callable[[], Tuple[str, float]]) -> None:
+    def _loop(self, get_state: Callable[[], tuple[str, float]]) -> None:
         """Display rendering loop.
 
         All state reads and rendering happen under a single lock acquisition
@@ -146,7 +146,7 @@ class DisplayManager:
             sleep_time = max(0, interval - elapsed)
             time.sleep(sleep_time)
 
-    def start(self, get_state: Callable[[], Tuple[str, float]], state_store: Optional["StateStore"] = None) -> None:
+    def start(self, get_state: Callable[[], tuple[str, float]], state_store: "StateStore | None" = None) -> None:
         """Start the display loop.
 
         Args:

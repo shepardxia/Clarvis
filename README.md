@@ -33,7 +33,6 @@ I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see 
 - **Control your music** — Spotify playback via [clautify](https://github.com/shepardxia/clautify) DSL (`play "jazz" volume 70 mode shuffle`)
 - **Listen for you** — Wake word detection via [nanobuddy](https://github.com/shepardxia/nanobuddy), speech-to-text, and voice responses via TTS
 - **Remember things** — Dual memory system (Graphiti knowledge graph + memU categorized memory) for persistent context across sessions
-- **Track token usage** — Monitor Claude API consumption (5-hour and 7-day limits)
 
 ## Get Me Running
 
@@ -116,7 +115,7 @@ Claude Code hooks → nc -U /tmp/clarvis-daemon.sock → Daemon → Widget
                                              MCP Server (tools)
 ```
 
-- **MCP Server** — Embedded in daemon via uvicorn. Two ports: `:7777` (standard tools) and `:7778` (standard + memory tools). Exposes tools for weather, status, music control, thinking feed, timers, and token usage.
+- **MCP Server** — Embedded in daemon via uvicorn. Two ports: `:7777` (standard tools) and `:7778` (standard + memory tools). Exposes tools for weather, status, music control, thinking feed, and timers.
 - **Daemon** — Long-running singleton. Receives hook events, classifies tools into semantic statuses, manages background services (weather, location, voice, Spotify, memory), drives the rendering loop, and pushes structured grid frames to the widget.
 - **Widget** — Native Cocoa app. Receives grid data (rows, cell colors, theme color) via Unix socket, renders colored monospace text. Supports click regions for interactive elements like the mic toggle.
 
@@ -199,7 +198,7 @@ clarvis/
 ├── daemon.py              # Central hub daemon
 ├── spotify_tools.py       # Spotify DSL tool (mounted sub-server)
 ├── core/                  # State management, display loop, IPC, scheduler
-├── services/              # Weather, location, voice pipeline, Spotify, token usage, memory
+├── services/              # Weather, location, voice pipeline, Spotify, memory
 ├── archetypes/            # Face, weather, progress renderers
 │   ├── face.py            # State-cached face animations
 │   ├── weather.py         # JIT-compiled particle system
@@ -223,7 +222,6 @@ uv run ruff check . && uv run ruff format .  # Lint + format
 ## Credits
 
 - Thinking feed adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
-- Token usage API discovery via [codelynx.dev](https://codelynx.dev/posts/claude-code-usage-limits-statusline)
 - Spotify Connect client via [SpotAPI](https://github.com/Aran404/SpotAPI) by [@Aran404](https://github.com/Aran404)
 - Wake word engine built on [nanowakeword](https://github.com/kahrendt/nanowakeword) by [@kahrendt](https://github.com/kahrendt) and [hey-buddy](https://github.com/painebenjamin/hey-buddy) by [@painebenjamin](https://github.com/painebenjamin)
 
