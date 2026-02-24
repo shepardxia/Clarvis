@@ -2,7 +2,7 @@
 
 import logging
 import threading
-from typing import Callable, Optional
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -122,29 +122,9 @@ class StateStore:
         with self._lock:
             return {k: v.copy() if isinstance(v, dict) else v for k, v in self._state.items()}
 
-    def batch_update(self, updates: dict[str, dict]) -> None:
-        """
-        Update multiple sections atomically, notify once per section.
-
-        Args:
-            updates: Dict of {section: value} to update
-        """
-        with self._lock:
-            for section, value in updates.items():
-                self._state[section] = value
-            observers = self._observers.copy()
-
-        # Notify after all updates complete
-        for section, value in updates.items():
-            for observer in observers:
-                try:
-                    observer(section, value)
-                except Exception as e:
-                    logger.warning(f"Observer failed for section '{section}': {e}")
-
 
 # Global instance for singleton access
-_store_instance: Optional[StateStore] = None
+_store_instance: StateStore | None = None
 _store_lock = threading.Lock()
 
 

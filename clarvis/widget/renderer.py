@@ -1,13 +1,6 @@
-"""
-Widget frame renderer - orchestrates archetypes to generate complete ASCII frames.
+"""Widget frame renderer - orchestrates archetypes to generate complete ASCII frames.
 
-Uses the layered RenderPipeline for compositing:
-- Layer 0: Weather particles (transparent)
-- Layer 50: Avatar face (overwrites)
-- Layer 80: Progress bar (transparent)
-- Layer 90: Whimsy verb (transparent)
-- Layer 92: Mic icon (transparent)
-- Layer 95: Voice text overlay (transparent)
+Layer priorities are defined in pipeline.LayerPriority.
 """
 
 from datetime import datetime
@@ -17,7 +10,7 @@ from ..archetypes import FaceArchetype, ProgressArchetype, WeatherArchetype
 from ..archetypes.weather import BoundingBox
 from ..core.colors import StatusColors
 from ..elements.registry import ElementRegistry
-from .pipeline import RenderPipeline
+from .pipeline import LayerPriority, RenderPipeline
 
 
 class FrameRenderer:
@@ -36,11 +29,24 @@ class FrameRenderer:
     BAR_WIDTH_RATIO = 0.65
     BAR_GAP_RATIO = 0.1
 
-    # Celestial bodies (sun: 6am-8pm, moon: 8pm-6am)
+    # Celestial bodies
     SUN_ART = ["\\|/", "-o-", "/|\\"]
     MOON_ART = [" _ ", "(') ", " ~ "]
     CELESTIAL_WIDTH = 3
     CELESTIAL_HEIGHT = 3
+    CELESTIAL_MARGIN = 1
+    DAY_START_HOUR = 6
+    DAY_END_HOUR = 20
+
+    # Layout
+    BAR_GAP = 1
+    BAR_PADDING = 4
+
+    # ANSI 256 colors
+    WEATHER_COLOR = 15
+    SUN_COLOR = 220
+    MOON_COLOR = 15
+    TEXT_COLOR = 255
 
     def __init__(
         self,
@@ -66,12 +72,11 @@ class FrameRenderer:
 
         # Pipeline with layers
         self.pipeline = RenderPipeline(width, height)
-        self.weather_layer = self.pipeline.add_layer("weather", priority=0)
-        self.avatar_layer = self.pipeline.add_layer("avatar", priority=50)
-        self.bar_layer = self.pipeline.add_layer("bar", priority=80)
-        self.verb_layer = self.pipeline.add_layer("verb", priority=90)
-        self.mic_layer = self.pipeline.add_layer("mic_icon", priority=92, transparent=True)
-        self.text_layer = self.pipeline.add_layer("voice_text", priority=95, transparent=True)
+        self.weather_layer = self.pipeline.add_layer("weather", priority=LayerPriority.WEATHER)
+        self.avatar_layer = self.pipeline.add_layer("avatar", priority=LayerPriority.AVATAR)
+        self.bar_layer = self.pipeline.add_layer("bar", priority=LayerPriority.BAR)
+        self.mic_layer = self.pipeline.add_layer("mic_icon", priority=LayerPriority.MIC, transparent=True)
+        self.text_layer = self.pipeline.add_layer("voice_text", priority=LayerPriority.TEXT, transparent=True)
 
         # Voice text state
         self._voice_text = ""
@@ -85,16 +90,15 @@ class FrameRenderer:
 
         # Calculate layout
         w, h = self.width, self.height
-        bar_gap = 1
-        total_content_h = self.AVATAR_HEIGHT + bar_gap + 1
+        total_content_h = self.AVATAR_HEIGHT + self.BAR_GAP + 1
         content_start_y = (h - total_content_h) // 2
         avatar_x_centered = (w - self.AVATAR_WIDTH) // 2
-        self.bar_width = max(self.AVATAR_WIDTH, min(int(w * self.BAR_WIDTH_RATIO), w - 4))
+        self.bar_width = max(self.AVATAR_WIDTH, min(int(w * self.BAR_WIDTH_RATIO), w - self.BAR_PADDING))
         bar_x_centered = (w - self.bar_width) // 2
         self.avatar_x = avatar_x_centered + self.avatar_x_offset
         self.avatar_y = content_start_y + self.avatar_y_offset
         self.bar_x = bar_x_centered + self.bar_x_offset
-        self.bar_y = content_start_y + self.AVATAR_HEIGHT + bar_gap + self.bar_y_offset
+        self.bar_y = content_start_y + self.AVATAR_HEIGHT + self.BAR_GAP + self.bar_y_offset
 
         # Initialize archetypes
         self.face = FaceArchetype(self.registry)
@@ -172,7 +176,7 @@ class FrameRenderer:
         self.weather_layer.clear()
         avatar_box = BoundingBox(x=self.avatar_x, y=self.avatar_y, w=self.AVATAR_WIDTH, h=self.AVATAR_HEIGHT)
         self.weather.set_exclusion_zones([avatar_box])
-        self.weather.render(self.weather_layer, color=15)
+        self.weather.render(self.weather_layer, color=self.WEATHER_COLOR)
 
     def _render_celestial(self, hour: Optional[int] = None):
         """Render sun or moon based on time of day, arcing across the top."""
@@ -184,27 +188,26 @@ class FrameRenderer:
             hour = datetime.now().hour
 
         # Determine which celestial body and calculate position
-        # Sun: 6am-8pm (hours 6-20), Moon: 8pm-6am (hours 20-24, 0-6)
-        margin = 1
-        available_width = self.width - 2 * margin - self.CELESTIAL_WIDTH
+        available_width = self.width - 2 * self.CELESTIAL_MARGIN - self.CELESTIAL_WIDTH
 
-        if 6 <= hour < 20:
+        if self.DAY_START_HOUR <= hour < self.DAY_END_HOUR:
             # Daytime: sun arcs from left to right
             art = self.SUN_ART
-            progress = (hour - 6) / 14  # 14 hours of daylight
-            color = 220  # yellow — theme-independent
+            day_hours = self.DAY_END_HOUR - self.DAY_START_HOUR
+            progress = (hour - self.DAY_START_HOUR) / day_hours
+            color = self.SUN_COLOR
         else:
             # Nighttime: moon arcs from left to right
             art = self.MOON_ART
-            # Normalize: 20->0, 21->1, ..., 24->4, 0->4, 1->5, ..., 6->10
-            if hour >= 20:
-                night_hour = hour - 20
+            night_hours = 24 - (self.DAY_END_HOUR - self.DAY_START_HOUR)
+            if hour >= self.DAY_END_HOUR:
+                night_hour = hour - self.DAY_END_HOUR
             else:
-                night_hour = hour + 4
-            progress = night_hour / 10  # 10 hours of night
-            color = 15
+                night_hour = hour + (24 - self.DAY_END_HOUR)
+            progress = night_hour / night_hours
+            color = self.MOON_COLOR
 
-        x = margin + int(progress * available_width)
+        x = self.CELESTIAL_MARGIN + int(progress * available_width)
         y = 0  # Top of screen
 
         # Render art lines
@@ -239,19 +242,6 @@ class FrameRenderer:
         row, col, _ = self.mic_icon_position()
         self.mic_layer.put_text(col, row, icon, color)
 
-    def _render_verb(self, verb: Optional[str]):
-        """Render whimsy verb below the progress bar."""
-        self.verb_layer.clear()
-        if not verb:
-            return
-
-        display_verb = f"{verb.lower()}..."
-        verb_y = self.bar_y + 2
-        verb_x = self.bar_x + (self.bar_width - len(display_verb)) // 2
-        verb_x = max(0, verb_x)
-
-        self.verb_layer.put_text(verb_x, verb_y, display_verb, 249)
-
     def _render_voice_text(self):
         """Render voice response text with word-wrap and character reveal."""
         self.text_layer.clear()
@@ -273,7 +263,7 @@ class FrameRenderer:
             y = self.TEXT_Y_START + row_idx
             if y >= self.height:
                 break
-            self.text_layer.put_text(self.TEXT_X_MARGIN, y, line, 255)
+            self.text_layer.put_text(self.TEXT_X_MARGIN, y, line, self.TEXT_COLOR)
 
     @staticmethod
     def _word_wrap(text: str, width: int) -> list[str]:
@@ -310,7 +300,6 @@ class FrameRenderer:
     def render_grid(
         self,
         context_percent: float = 0,
-        whimsy_verb: Optional[str] = None,
         hour: Optional[int] = None,
     ) -> tuple[list[str], list[list[int]]]:
         """Render complete frame and return structured grid data.
@@ -324,7 +313,5 @@ class FrameRenderer:
         self._render_avatar()
         self._render_bar(context_percent)
         self._render_mic_icon()
-        if not self._voice_active:
-            self._render_verb(whimsy_verb)
         self._render_voice_text()
         return self.pipeline.to_grid()

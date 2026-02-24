@@ -3,6 +3,26 @@ import Foundation
 import Speech
 import AVFoundation
 
+// MARK: - Logging
+
+enum LogLevel: String {
+    case debug = "DEBUG"
+    case info  = "INFO"
+    case warn  = "WARN"
+    case error = "ERROR"
+}
+
+func log(_ level: LogLevel, _ category: String, _ message: String) {
+    let ts = ISO8601DateFormatter.string(from: Date(), timeZone: .current,
+                                         formatOptions: [.withTime, .withColonSeparatorInTime])
+    let line = "\(ts) [\(level.rawValue)] \(category): \(message)\n"
+    if level == .error || level == .warn {
+        FileHandle.standardError.write(Data(line.utf8))
+    } else {
+        FileHandle.standardOutput.write(Data(line.utf8))
+    }
+}
+
 // MARK: - Configuration
 
 // RGB as [r, g, b] array
@@ -237,17 +257,22 @@ struct ClickRegion {
     }
 }
 
-// MARK: - ASR Manager
+// MARK: - ASR Manager (SpeechAnalyzer — macOS 26+)
 
 class ASRManager {
-    private let speechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    private var analyzer: SpeechAnalyzer?
+    private var transcriber: SpeechTranscriber?
+    private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
+    private var rawContinuation: AsyncStream<AVAudioPCMBuffer>.Continuation?
+    private var resultTask: Task<Void, Never>?
+    private var converterTask: Task<Void, Never>?
+    private var setupTask: Task<Void, Never>?
     private let audioEngine = AVAudioEngine()
     private var timeoutTimer: Timer?
     private var silenceTimer: Timer?
     private var lastTranscript = ""
     private var hasDeliveredResult = false
+    private static var modelReady = false
     let locale: Locale
 
     /// Called once with (success, text?, error?)
@@ -255,87 +280,183 @@ class ASRManager {
 
     init(locale: Locale = Locale(identifier: "en-US")) {
         self.locale = locale
-        self.speechRecognizer = SFSpeechRecognizer(locale: locale)
-            ?? SFSpeechRecognizer()
     }
 
-    var isAvailable: Bool { speechRecognizer?.isAvailable ?? false }
-
-    func requestAuthorization(completion: @escaping (Bool) -> Void) {
-        SFSpeechRecognizer.requestAuthorization { status in
-            DispatchQueue.main.async { completion(status == .authorized) }
+    /// Ensure speech model is downloaded. Only calls AssetInventory once per session.
+    private func ensureModel(for transcriber: SpeechTranscriber) async throws {
+        guard !ASRManager.modelReady else { return }
+        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            log(.info, "asr","Installing speech model for \(self.locale.identifier)...")
+            try await request.downloadAndInstall()
         }
+        ASRManager.modelReady = true
     }
 
     func startRecognition(timeout: TimeInterval = 10.0, silenceTimeout: TimeInterval = 3.0) {
+        let authStatus = SFSpeechRecognizer.authorizationStatus()
+        log(.info, "asr","Speech auth status: \(authStatus.rawValue) (0=notDetermined, 1=denied, 2=restricted, 3=authorized)")
+
         stopRecognition()
         hasDeliveredResult = false
         lastTranscript = ""
 
-        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-            deliverResult(success: false, error: "Speech recognizer not available")
-            return
-        }
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        if #available(macOS 13.0, *) {
-            request.requiresOnDeviceRecognition = true
-        }
-
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            request.append(buffer)
-        }
-
-        audioEngine.prepare()
-        do {
-            try audioEngine.start()
-        } catch {
-            deliverResult(success: false, error: "Audio engine failed: \(error.localizedDescription)")
-            return
-        }
-
-        self.recognitionRequest = request
-        let silenceDuration = silenceTimeout
-
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            DispatchQueue.main.async {
-                guard let self = self, !self.hasDeliveredResult else { return }
-
-                if let result = result {
-                    self.lastTranscript = result.bestTranscription.formattedString
-
-                    // Reset silence timer on new speech
-                    self.silenceTimer?.invalidate()
-                    self.silenceTimer = Timer.scheduledTimer(
-                        withTimeInterval: silenceDuration, repeats: false
-                    ) { _ in self.finalize() }
-
-                    if result.isFinal {
-                        self.finalize()
-                    }
-                }
-
-                if let error = error {
-                    if self.lastTranscript.isEmpty {
-                        self.deliverResult(success: false, error: error.localizedDescription)
-                    } else {
-                        self.finalize()
-                    }
-                }
-            }
-        }
-
-        // Overall timeout
+        // Overall timeout (main thread timer — set before async work)
         timeoutTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
             guard let self = self, !self.hasDeliveredResult else { return }
             if self.lastTranscript.isEmpty {
                 self.deliverResult(success: false, error: "Timeout — no speech detected")
             } else {
                 self.finalize()
+            }
+        }
+
+        let currentLocale = locale
+        let silenceDuration = silenceTimeout
+        setupTask = Task { [weak self] in
+            guard let self = self else { return }
+            do {
+                // Verify locale support
+                guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: currentLocale) else {
+                    await MainActor.run {
+                        self.deliverResult(success: false, error: "Locale \(currentLocale.identifier) not supported")
+                    }
+                    return
+                }
+
+                let transcriber = SpeechTranscriber(locale: supported, preset: .progressiveTranscription)
+                self.transcriber = transcriber
+
+                // Ensure model is available (no-op after first download)
+                try await self.ensureModel(for: transcriber)
+
+                // Build async stream for audio input
+                let (inputStream, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
+                self.inputContinuation = continuation
+
+                let analyzer = SpeechAnalyzer(modules: [transcriber])
+                self.analyzer = analyzer
+
+                // Two-stage audio pipeline: tap captures raw → async task converts → AnalyzerInput
+                let inputNode = self.audioEngine.inputNode
+                let micFormat = inputNode.outputFormat(forBus: 0)
+                let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+                log(.debug, "asr","Mic: \(micFormat), target: \(targetFormat?.description ?? "nil")")
+
+                if let targetFormat = targetFormat, targetFormat != micFormat,
+                   let converter = AVAudioConverter(from: micFormat, to: targetFormat) {
+                    log(.debug, "asr","Using two-stage converter pipeline")
+
+                    // Stage 1: Capture raw audio into intermediate stream
+                    let (rawStream, rawCont) = AsyncStream.makeStream(of: AVAudioPCMBuffer.self)
+                    self.rawContinuation = rawCont
+
+                    inputNode.installTap(onBus: 0, bufferSize: 4096, format: micFormat) { buffer, _ in
+                        rawCont.yield(buffer)
+                    }
+
+                    // Stage 2: Convert in async task (NOT in real-time audio callback)
+                    self.converterTask = Task { [weak self] in
+                        var converted = 0
+                        var dropped = 0
+                        for await rawBuffer in rawStream {
+                            let ratio = targetFormat.sampleRate / micFormat.sampleRate
+                            let capacity = AVAudioFrameCount(Double(rawBuffer.frameLength) * ratio)
+                            guard capacity > 0,
+                                  let outBuf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
+                                dropped += 1
+                                continue
+                            }
+                            var error: NSError?
+                            let status = converter.convert(to: outBuf, error: &error) { _, outStatus in
+                                outStatus.pointee = .haveData
+                                return rawBuffer
+                            }
+                            if status == .haveData && error == nil && outBuf.frameLength > 0 {
+                                converted += 1
+                                self?.inputContinuation?.yield(AnalyzerInput(buffer: outBuf))
+                            } else {
+                                dropped += 1
+                                if dropped <= 3 {
+                                    log(.warn, "asr","Convert drop: status=\(status.rawValue) err=\(error?.localizedDescription ?? "nil") frames=\(outBuf.frameLength)")
+                                }
+                            }
+                        }
+                        log(.debug, "asr","Converter done: \(converted) converted, \(dropped) dropped")
+                    }
+                } else {
+                    log(.debug, "asr","No conversion needed — passing raw audio")
+                    inputNode.installTap(onBus: 0, bufferSize: 4096, format: micFormat) { [weak self] buffer, _ in
+                        self?.inputContinuation?.yield(AnalyzerInput(buffer: buffer))
+                    }
+                }
+
+                self.audioEngine.prepare()
+                try self.audioEngine.start()
+                log(.debug, "asr","Audio engine started")
+
+                // 1. Subscribe to results FIRST (separate Task)
+                self.resultTask = Task { [weak self] in
+                    guard let self = self else { return }
+                    log(.debug, "asr","Result iteration started")
+                    do {
+                        for try await result in transcriber.results {
+                            guard !self.hasDeliveredResult else { break }
+                            let text = String(result.text.characters)
+                            let isFinal = result.isFinal
+                            log(.debug, "asr","\(isFinal ? "FINAL" : "partial"): \"\(text)\"")
+                            await MainActor.run {
+                                guard !self.hasDeliveredResult else { return }
+                                self.lastTranscript = text
+
+                                // Reset silence timer on each volatile result
+                                self.silenceTimer?.invalidate()
+                                self.silenceTimer = Timer.scheduledTimer(
+                                    withTimeInterval: silenceDuration, repeats: false
+                                ) { _ in self.finalize() }
+                            }
+                        }
+                        log(.debug, "asr","Result stream ended naturally")
+
+                        // Stream ended — finalize if we have text
+                        if !self.hasDeliveredResult {
+                            await MainActor.run {
+                                if !self.lastTranscript.isEmpty {
+                                    self.finalize()
+                                }
+                            }
+                        }
+                    } catch is CancellationError {
+                        log(.debug, "asr","Result task cancelled")
+                    } catch {
+                        log(.error, "asr","Result iteration error: \(error.localizedDescription)")
+                        guard !self.hasDeliveredResult else { return }
+                        await MainActor.run {
+                            if self.lastTranscript.isEmpty {
+                                self.deliverResult(success: false, error: error.localizedDescription)
+                            } else {
+                                self.finalize()
+                            }
+                        }
+                    }
+                }
+
+                // 2. THEN start analyzer
+                log(.debug, "asr","Starting analyzer...")
+                try await analyzer.start(inputSequence: inputStream)
+                log(.debug, "asr","Analyzer started")
+
+            } catch is CancellationError {
+                log(.debug, "asr","Setup task cancelled")
+            } catch {
+                log(.error, "asr","Setup error: \(error.localizedDescription)")
+                guard !self.hasDeliveredResult else { return }
+                await MainActor.run {
+                    if self.lastTranscript.isEmpty {
+                        self.deliverResult(success: false, error: error.localizedDescription)
+                    } else {
+                        self.finalize()
+                    }
+                }
             }
         }
     }
@@ -347,6 +468,11 @@ class ASRManager {
     private func deliverResult(success: Bool, text: String? = nil, error: String? = nil) {
         guard !hasDeliveredResult else { return }
         hasDeliveredResult = true
+        if success {
+            log(.info, "asr","Result: \"\(text ?? "")\"")
+        } else {
+            log(.warn, "asr","Failed: \(error ?? "unknown")")
+        }
         stopRecognition()
         onResult?(success, text, error)
     }
@@ -360,11 +486,24 @@ class ASRManager {
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
 
-        recognitionRequest?.endAudio()
-        recognitionRequest = nil
+        // Proper shutdown: finish streams → finalize analyzer → cancel tasks
+        rawContinuation?.finish()
+        rawContinuation = nil
+        inputContinuation?.finish()
+        inputContinuation = nil
 
-        recognitionTask?.cancel()
-        recognitionTask = nil
+        if let analyzer = analyzer {
+            Task { try? await analyzer.finalizeAndFinishThroughEndOfInput() }
+        }
+
+        converterTask?.cancel()
+        converterTask = nil
+        resultTask?.cancel()
+        resultTask = nil
+        setupTask?.cancel()
+        setupTask = nil
+        analyzer = nil
+        transcriber = nil
     }
 }
 
@@ -725,11 +864,6 @@ class WidgetWindowController: NSWindowController {
 
     func setupASR() {
         asrManager = ASRManager()
-        asrManager.requestAuthorization { granted in
-            if !granted {
-                NSLog("ClarvisWidget: Speech recognition not authorized")
-            }
-        }
     }
 
     func setupSocket() {
@@ -915,7 +1049,7 @@ func releaseLock() {
 // MARK: - Main
 
 if !acquireLock() {
-    print("ClarvisWidget is already running. Exiting.")
+    log(.warn, "app","ClarvisWidget is already running. Exiting.")
     exit(0)
 }
 

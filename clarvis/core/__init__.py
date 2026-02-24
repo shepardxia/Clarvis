@@ -16,7 +16,8 @@ from .session_tracker import SessionTracker
 from .display_manager import DisplayManager
 from .refresh_manager import RefreshManager
 from .scheduler import Scheduler
-from .hook_processor import HookProcessor, classify_tool
+from .hook_processor import HookProcessor
+from .tool_classifier import classify_tool
 
 __all__ = [
     # Time

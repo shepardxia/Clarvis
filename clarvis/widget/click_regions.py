@@ -5,8 +5,6 @@ widget via ``set_click_regions`` command for hover cursor feedback.
 The widget hit-tests on click and sends ``region_click`` with the region id.
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Callable
@@ -31,7 +29,7 @@ class ClickRegion:
 class ClickRegionManager:
     """Manages clickable grid regions and dispatches clicks to handlers."""
 
-    def __init__(self, socket_server: WidgetSocketServer) -> None:
+    def __init__(self, socket_server: "WidgetSocketServer") -> None:
         self._regions: dict[str, ClickRegion] = {}
         self._handlers: dict[str, Callable[[], None]] = {}
         self._socket = socket_server

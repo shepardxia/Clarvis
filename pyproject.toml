@@ -2,13 +2,17 @@
 name = "clarvis"
 version = "0.1.0"
 description = "Clarvis MCP server for widget data (weather, status, thinking feed, music control)"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 readme = "README.md"
 license = { text = "MIT" }
 dependencies = [
     "fastmcp>=2.14,<3",
-    "requests",
+    "httpx",
+    "filelock",
+    "cachetools",
+    "pytimeparse2",
     "numpy",
+    "orjson",
 ]
 
 [tool.uv]
@@ -22,17 +26,16 @@ clarvis = "clarvis.daemon:main"
 
 [project.optional-dependencies]
 voice = ["claude-agent-sdk", "nanobuddy[detect]"]
-memory = ["cognee>=0.5.0,<0.6"]
+memory = ["graphiti-core[anthropic]>=0.28", "falkordblite>=0.8.0", "redis>=7.2", "memu-py>=1.4"]
 music = ["clautify"]
-ai = ["anthropic"]
+channels = ["httpx", "websockets"]
 particles = ["numba>=0.63.1"]
-all = ["clarvis[voice,memory,music,ai,particles]"]
+all = ["clarvis[voice,memory,music,particles]"]
 test = [
     "pytest",
     "pytest-cov",
     "pytest-asyncio",
     "hypothesis",
-    "responses",
 ]
 dev = [
     "clarvis[all,test]",
@@ -57,7 +60,7 @@ source = ["clarvis"]
 omit = ["*/__pycache__/*", "*/tests/*"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py313"
 line-length = 120
 
 [tool.ruff.lint]

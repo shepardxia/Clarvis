@@ -6,11 +6,12 @@ mode transitions.  Tasks registered with two intervals are rescheduled
 atomically when mode changes.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from .context import AppContext
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ class Scheduler:
 
     Usage::
 
-        scheduler = Scheduler(loop)
+        scheduler = Scheduler(ctx)
         scheduler.register("refresh", refresh_all, active_interval=30, idle_interval=300, blocking=True)
         scheduler.register("staleness", check_staleness, active_interval=5, idle_interval=30)
         scheduler.start()
@@ -63,12 +64,17 @@ class Scheduler:
         scheduler.stop()
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop):
-        self._loop = loop
+    def __init__(self, ctx: "AppContext"):
+        self._loop = ctx.loop
         self._tasks: dict[str, _Task] = {}
         self._mode: Mode = "active"
         self._running = False
         self._mode_callbacks: list[Callable[[Mode], None]] = []
+        ctx.bus.on("hook:event", self._on_hook_event)
+
+    def _on_hook_event(self, signal: str, *, event_name: str = None, **kw) -> None:
+        if event_name and event_name != "Stop":
+            self.set_mode("active")
 
     @property
     def mode(self) -> Mode:

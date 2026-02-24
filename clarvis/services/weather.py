@@ -1,21 +1,19 @@
 """Weather and location services via Open-Meteo API and geolocation."""
 
-from __future__ import annotations
-
 import json
 import subprocess
-import time as _time
 from dataclasses import dataclass
 
-import requests
+import httpx
+from cachetools import TTLCache
 
 # --- Location detection ---
 
 CORELOCATION_CMD = "CoreLocationCLI"
 _corelocation_available: bool | None = None
 
-_cache: dict | None = None
-_cache_time: float = 0.0
+# Single-entry TTL cache for location data; default TTL overridden per call via get_location_full()
+_location_cache: TTLCache = TTLCache(maxsize=1, ttl=60)
 
 DEFAULT_LOCATION = {
     "latitude": 37.7749,
@@ -63,7 +61,7 @@ def _get_location_corelocation() -> dict | None:
 def _get_location_ip() -> dict | None:
     """Get location via IP geolocation (fallback)."""
     try:
-        response = requests.get("http://ip-api.com/json/", timeout=5)
+        response = httpx.get("http://ip-api.com/json/", timeout=5)
         response.raise_for_status()
         data = response.json()
         if data.get("status") == "success":
@@ -76,7 +74,7 @@ def _get_location_ip() -> dict | None:
                 "timezone": data.get("timezone", ""),
                 "source": "ip",
             }
-    except requests.RequestException:
+    except httpx.HTTPError:
         pass
     return None
 
@@ -86,17 +84,23 @@ def get_location_full(cache_max_age: int = 60) -> dict:
 
     Tries: CoreLocation cache → CoreLocation → IP cache → IP API → default.
     """
-    global _cache, _cache_time
+    global _location_cache
 
-    cached = _cache if _cache and (_time.time() - _cache_time) < cache_max_age else None
+    # Recreate cache if TTL changed (e.g. caller passes different max_age)
+    if _location_cache.ttl != cache_max_age:
+        old = _location_cache.get("loc")
+        _location_cache = TTLCache(maxsize=1, ttl=cache_max_age)
+        if old is not None:
+            _location_cache["loc"] = old
+
+    cached = _location_cache.get("loc")
 
     if cached and cached.get("source") == "corelocation":
         return cached
 
     location_data = _get_location_corelocation()
     if location_data:
-        _cache = location_data
-        _cache_time = _time.time()
+        _location_cache["loc"] = location_data
         return location_data
 
     if cached:
@@ -104,8 +108,7 @@ def get_location_full(cache_max_age: int = 60) -> dict:
 
     location_data = _get_location_ip()
     if location_data:
-        _cache = location_data
-        _cache_time = _time.time()
+        _location_cache["loc"] = location_data
         return location_data
 
     return DEFAULT_LOCATION
@@ -247,7 +250,7 @@ def fetch_weather(latitude: float, longitude: float) -> WeatherData:
         WeatherData with current conditions
 
     Raises:
-        requests.RequestException: On network/API errors
+        httpx.HTTPError: On network/API errors
     """
     url = (
         f"https://api.open-meteo.com/v1/forecast"
@@ -257,7 +260,7 @@ def fetch_weather(latitude: float, longitude: float) -> WeatherData:
         f"&wind_speed_unit=mph"
     )
 
-    response = requests.get(url, timeout=10)
+    response = httpx.get(url, timeout=10)
     response.raise_for_status()
     data = response.json()
 

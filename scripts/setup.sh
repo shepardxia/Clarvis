@@ -130,9 +130,10 @@ install_cli() {
 setup_home() {
     print_header "Setting up home directory..."
 
-    mkdir -p "$MONOREPO_DIR/home"
-    if [ ! -f "$MONOREPO_DIR/home/.mcp.json" ]; then
-        cat > "$MONOREPO_DIR/home/.mcp.json" << MCPEOF
+    local home_dir="$HOME/.clarvis/home"
+    mkdir -p "$home_dir"
+    if [ ! -f "$home_dir/.mcp.json" ]; then
+        cat > "$home_dir/.mcp.json" << MCPEOF
 {
   "mcpServers": {
     "clarvis": {
@@ -143,7 +144,7 @@ setup_home() {
 }
 MCPEOF
     fi
-    print_success "Home directory ready (memory tools on port 7778)"
+    print_success "Home directory ready at $home_dir (memory tools on port 7778)"
 }
 
 check_env() {
@@ -155,7 +156,7 @@ check_env() {
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
         print_success "ANTHROPIC_API_KEY set in environment"
     else
-        print_warning "ANTHROPIC_API_KEY not set (needed for whimsy verbs + token usage)"
+        print_warning "ANTHROPIC_API_KEY not set (needed for voice agent + memory consolidation)"
         echo "  Create $REPO_DIR/.env with:"
         echo "    ANTHROPIC_API_KEY=sk-ant-..."
         echo "  Or export it in your shell profile."

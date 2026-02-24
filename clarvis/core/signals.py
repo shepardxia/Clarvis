@@ -4,8 +4,6 @@ Signal naming convention: 'category:event'
   e.g., 'timer:fired', 'playback:queue_empty', 'playback:stopped'
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading

@@ -11,7 +11,7 @@ sleep 0.5
 mkdir -p logs
 
 # Start
-.venv/bin/python -m clarvis.daemon >>logs/daemon.out.log 2>>logs/daemon.err.log &
+.venv/bin/python -m clarvis.daemon 2>>logs/daemon.log &
 ./ClarvisWidget/ClarvisWidget >>logs/widget.out.log 2>>logs/widget.err.log &
 
 sleep 1

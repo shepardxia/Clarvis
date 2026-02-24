@@ -32,7 +32,7 @@ I blink when I'm idle, look focused when I'm thinking, and sometimes you'll see 
 - **Know the weather** — Rain and snow particles fall based on actual conditions outside
 - **Control your music** — Spotify playback via [clautify](https://github.com/shepardxia/clautify) DSL (`play "jazz" volume 70 mode shuffle`)
 - **Listen for you** — Wake word detection via [nanobuddy](https://github.com/shepardxia/nanobuddy), speech-to-text, and voice responses via TTS
-- **Remember things** — Knowledge graph memory via cognee for persistent context across sessions
+- **Remember things** — Dual memory system (Graphiti knowledge graph + memU categorized memory) for persistent context across sessions
 - **Track token usage** — Monitor Claude API consumption (5-hour and 7-day limits)
 
 ## Get Me Running
@@ -78,9 +78,8 @@ Features are split into optional extras in `pyproject.toml`. The setup script in
 ```bash
 uv sync                    # Core only (MCP server, display, weather)
 uv sync --extra voice      # + wake word detection, voice agent
-uv sync --extra memory     # + knowledge graph memory (cognee)
+uv sync --extra memory     # + knowledge graph memory (Graphiti + memU)
 uv sync --extra music      # + Spotify control (clautify)
-uv sync --extra ai         # + whimsy verbs, token usage (anthropic)
 uv sync --extra particles  # + JIT weather particles (numba)
 uv sync --extra all        # Everything
 uv sync --extra dev        # Everything + test dependencies
@@ -99,8 +98,7 @@ Single config file: `config.json` — loaded at startup. Changes require `clarvi
   "wake_word": { "enabled": true, "threshold": 0.75, "patience": 5 },
   "voice": { "enabled": true, "tts_voice": "Fred", "model": "haiku" },
   "memory": { "enabled": true, "data_dir": "~/.clarvis/memory" },
-  "spotify": { "max_volume": 75 },
-  "token_usage": { "enabled": true, "poll_interval": 120 }
+  "spotify": { "max_volume": 75 }
 }
 ```
 

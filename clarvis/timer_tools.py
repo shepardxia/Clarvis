@@ -4,20 +4,13 @@ Exposes timer management tools (set, cancel, list) that use the
 daemon's TimerService directly (in-process).
 """
 
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastmcp import Context, FastMCP
+from fastmcp import Context
 from pydantic import Field
 
-from .services.timer_service import parse_duration
-
-if TYPE_CHECKING:
-    from .daemon import CentralHubDaemon
-
-
-def _daemon(ctx: Context) -> "CentralHubDaemon":
-    return ctx.fastmcp._lifespan_result["daemon"]
+from ..services.timer_service import parse_duration
+from ._helpers import create_tool_server, get_daemon_service
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -38,44 +31,34 @@ def _fmt_duration(seconds: float) -> str:
 # --- Tool implementations ---
 
 
-_VALID_TRIGGERS = {"simple", "voice"}
-
-
 async def set_timer(
     name: Annotated[
         str,
-        Field(description="Unique timer name (e.g. 'pasta', 'meeting')"),
+        Field(description="Unique timer name"),
     ],
     duration: Annotated[
         str,
         Field(description="Duration: '5m', '1h30m', '90s', or seconds as number"),
     ],
-    label: Annotated[
-        str,
-        Field(description="What this timer is for"),
-    ] = "",
-    recurring: Annotated[
+    label: str = "",
+    recurring: bool = False,
+    wake_clarvis: Annotated[
         bool,
-        Field(description="Repeat after each firing"),
+        Field(description="Also wake up Clarvis when the timer fires"),
     ] = False,
-    trigger: Annotated[
-        str,
-        Field(description="Notification when timer fires: 'simple' (flash + sound) or 'voice' (wake voice assistant)"),
-    ] = "simple",
     ctx: Context = None,
 ) -> str:
     """Set a named timer. Overwrites any existing timer with the same name."""
-    d = _daemon(ctx)
-    if not d.timer_service:
-        return "Error: Timer service not available"
-    if trigger not in _VALID_TRIGGERS:
-        return f"Error: Invalid trigger '{trigger}'. Must be one of: {', '.join(sorted(_VALID_TRIGGERS))}"
+    svc, err = get_daemon_service(ctx, "timer_service", "Timer service")
+    if err:
+        return err
     try:
         seconds = parse_duration(duration)
     except ValueError as e:
         return f"Error: {e}"
-    d.timer_service.set_timer(name, seconds, recurring, label, trigger)
-    return f"Timer '{name}' set for {_fmt_duration(seconds)} [{trigger}]"
+    svc.set_timer(name, seconds, recurring, label, wake_clarvis)
+    suffix = " [+clarvis]" if wake_clarvis else ""
+    return f"Timer '{name}' set for {_fmt_duration(seconds)}{suffix}"
 
 
 async def cancel_timer(
@@ -86,10 +69,10 @@ async def cancel_timer(
     ctx: Context = None,
 ) -> str:
     """Cancel an active timer."""
-    d = _daemon(ctx)
-    if not d.timer_service:
-        return "Error: Timer service not available"
-    if d.timer_service.cancel(name):
+    svc, err = get_daemon_service(ctx, "timer_service", "Timer service")
+    if err:
+        return err
+    if svc.cancel(name):
         return f"Cancelled '{name}'"
     return f"No timer '{name}' found"
 
@@ -98,10 +81,10 @@ async def list_timers(
     ctx: Context = None,
 ) -> str:
     """List all active timers with remaining time."""
-    d = _daemon(ctx)
-    if not d.timer_service:
-        return "Error: Timer service not available"
-    timers = d.timer_service.list_timers()
+    svc, err = get_daemon_service(ctx, "timer_service", "Timer service")
+    if err:
+        return err
+    timers = svc.list_timers()
     if not timers:
         return "No active timers."
     lines = []
@@ -113,8 +96,8 @@ async def list_timers(
         parts.append(f"-- {remaining} remaining")
         if t.get("recurring"):
             parts.append("[recurring]")
-        if t.get("trigger", "simple") != "simple":
-            parts.append(f"[{t['trigger']}]")
+        if t.get("wake_clarvis"):
+            parts.append("[+clarvis]")
         lines.append(" ".join(parts))
     return "\n".join(lines)
 
@@ -125,18 +108,5 @@ _TOOLS = [set_timer, cancel_timer, list_timers]
 
 
 def create_timer_server(daemon):
-    """Create the timer MCP sub-server.
-
-    Args:
-        daemon: CentralHubDaemon instance (or mock with .timer_service).
-            Injected into lifespan for tool access.
-    """
-
-    @asynccontextmanager
-    async def timer_lifespan(server):
-        yield {"daemon": daemon}
-
-    srv = FastMCP("timer", lifespan=timer_lifespan)
-    for fn in _TOOLS:
-        srv.tool()(fn)
-    return srv
+    """Create the timer MCP sub-server."""
+    return create_tool_server("timer", _TOOLS, daemon)

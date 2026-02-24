@@ -13,7 +13,6 @@ Supports multiple retro themes:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -21,7 +20,7 @@ class ColorDef:
     """Color definition with ANSI and RGB values."""
 
     ansi: int  # ANSI 256 color code
-    rgb: Tuple[float, float, float]  # RGB values 0.0-1.0 for Swift
+    rgb: tuple[float, float, float]  # RGB values 0.0-1.0 for Swift
 
 
 # =============================================================================
@@ -150,12 +149,12 @@ DEFAULT_THEME = "modern"
 _current_theme: str = DEFAULT_THEME
 
 
-def get_available_themes() -> List[str]:
+def get_available_themes() -> list[str]:
     """Get list of available theme names."""
     return list(THEMES.keys())
 
 
-def load_theme(theme_name: str, overrides: Optional[Dict[str, List[float]]] = None) -> bool:
+def load_theme(theme_name: str, overrides: dict[str, list[float]] | None = None) -> bool:
     """
     Load a theme by name with optional color overrides.
 
@@ -188,11 +187,6 @@ def load_theme(theme_name: str, overrides: Optional[Dict[str, List[float]]] = No
 
 # Current overrides (set by load_theme)
 _current_overrides: dict[str, list[float]] = {}
-
-
-def get_current_theme() -> str:
-    """Get the name of the currently active theme."""
-    return _current_theme
 
 
 # =============================================================================

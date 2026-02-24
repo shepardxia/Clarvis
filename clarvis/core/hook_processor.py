@@ -1,56 +1,15 @@
 """Hook event processing for Claude Code status updates.
 
 Handles the translation of raw hook events (PreToolUse, PostToolUse, Stop,
-etc.) into semantic statuses, special animation triggers, staleness
-detection, and context building for whimsy verb generation.
+etc.) into semantic statuses, special animation triggers, and staleness
+detection.
 """
 
-from __future__ import annotations
-
-import json
 from datetime import datetime
-from pathlib import Path
-from typing import Optional
 
 from .session_tracker import SessionTracker
 from .state import StateStore
-
-# --- Tool classification ---
-
-READING_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS", "NotebookRead"}
-WRITING_TOOLS = {"Write", "Edit", "NotebookEdit"}
-EXECUTING_TOOLS = {"Bash", "TodoWrite", "TodoRead"}
-THINKING_TOOLS = {"Task", "EnterPlanMode", "ExitPlanMode"}
-AWAITING_TOOLS = {"AskUserQuestion"}
-
-READING_KEYWORDS = {"read", "get", "list", "find", "search", "fetch", "query", "inspect", "browse", "view"}
-WRITING_KEYWORDS = {"write", "create", "edit", "replace", "insert", "delete", "update", "add", "remove", "set"}
-EXECUTING_KEYWORDS = {"execute", "run", "shell", "browser", "click", "navigate", "type", "press", "play", "pause"}
-
-
-def classify_tool(tool_name: str) -> str:
-    """Classify a tool into a semantic status based on its name."""
-    if tool_name in READING_TOOLS:
-        return "reading"
-    if tool_name in WRITING_TOOLS:
-        return "writing"
-    if tool_name in EXECUTING_TOOLS:
-        return "executing"
-    if tool_name in THINKING_TOOLS:
-        return "thinking"
-    if tool_name in AWAITING_TOOLS:
-        return "awaiting"
-
-    if tool_name.startswith("mcp__"):
-        lower = tool_name.lower()
-        if any(kw in lower for kw in WRITING_KEYWORDS):
-            return "writing"
-        if any(kw in lower for kw in EXECUTING_KEYWORDS):
-            return "executing"
-        if any(kw in lower for kw in READING_KEYWORDS):
-            return "reading"
-
-    return "running"
+from .tool_classifier import classify_tool
 
 
 class HookProcessor:
@@ -67,7 +26,6 @@ class HookProcessor:
     ):
         self.state = state
         self.session_tracker = session_tracker
-        self.last_transcript_path: Optional[str] = None
 
     def process_hook_event(self, raw_data: dict) -> dict:
         """Process raw hook event into a semantic status dict."""
@@ -116,7 +74,7 @@ class HookProcessor:
             "timestamp": datetime.now().isoformat(),
         }
 
-    def _check_special_animation(self, session_id: str, raw_data: dict) -> Optional[str]:
+    def _check_special_animation(self, session_id: str, raw_data: dict) -> str | None:
         """Check if Stop event should trigger a special animation.
 
         Returns a status string if special animation should play, None otherwise.
@@ -186,120 +144,3 @@ class HookProcessor:
             pass
 
         return False
-
-    def get_rich_context(self, max_messages: int = 5, max_chars: int = 1500) -> str:
-        """Build task-focused context for whimsy verb generation.
-
-        Prioritizes what Claude is doing over ambient info.
-        """
-        parts = []
-
-        # --- PRIMARY: What Claude is doing ---
-        status = self.state.get("status")
-        if status:
-            current_status = status.get("status", "idle")
-            parts.append(f"status: {current_status}")
-
-            tool_history = status.get("tool_history", [])
-            if tool_history:
-                recent = tool_history[-3:]
-                tool_actions = {
-                    "Read": "reading code",
-                    "Grep": "searching codebase",
-                    "Glob": "finding files",
-                    "Write": "writing new code",
-                    "Edit": "editing code",
-                    "Bash": "running commands",
-                    "Task": "delegating to subagent",
-                    "WebFetch": "fetching from web",
-                    "WebSearch": "searching web",
-                }
-                actions = [tool_actions.get(t, t.lower()) for t in recent]
-                parts.append(f"doing: {', '.join(actions)}")
-
-            ctx_pct = status.get("context_percent", 0)
-            if ctx_pct > 70:
-                parts.append(f"context: {ctx_pct:.0f}% full (deep in complex task)")
-            elif ctx_pct > 40:
-                parts.append(f"context: {ctx_pct:.0f}% (working steadily)")
-
-        # --- SECONDARY: Conversation (the actual task) ---
-        chat = self._get_chat_context(max_messages, max_msg_len=200)
-        if chat:
-            parts.append(f"conversation:\n{chat}")
-
-        # --- TERTIARY: Ambient context ---
-        ambient = []
-
-        weather = self.state.get("weather")
-        if weather and weather.get("temperature"):
-            desc = weather.get("description", "").lower()
-            temp = weather.get("temperature", "")
-            ambient.append(f"{temp}F {desc}")
-
-        time_data = self.state.get("time")
-        if time_data and time_data.get("timestamp"):
-            try:
-                dt = datetime.fromisoformat(time_data["timestamp"])
-                hour = dt.hour
-                if 5 <= hour < 12:
-                    period = "morning"
-                elif 12 <= hour < 17:
-                    period = "afternoon"
-                elif 17 <= hour < 21:
-                    period = "evening"
-                else:
-                    period = "night"
-                ambient.append(f"{dt.strftime('%A')} {period}")
-            except (ValueError, KeyError):
-                pass
-
-        if ambient:
-            parts.append(f"environment: {', '.join(ambient)}")
-
-        result = "\n".join(parts)
-        return result[:max_chars] if len(result) > max_chars else result
-
-    def _get_chat_context(self, max_messages: int = 5, max_msg_len: int = 150) -> str:
-        """Extract recent chat context from transcript file (compact format)."""
-        try:
-            transcript_path = self.last_transcript_path
-
-            if not transcript_path or not Path(transcript_path).exists():
-                return ""
-
-            messages = []
-            with open(transcript_path, "r") as f:
-                lines = f.readlines()
-
-            for line in reversed(lines[-50:]):
-                try:
-                    entry = json.loads(line)
-                    entry_type = entry.get("type")
-
-                    if entry_type in ("user", "assistant"):
-                        content = entry.get("message", {}).get("content", "")
-
-                        if isinstance(content, list):
-                            texts = [
-                                c.get("text", "")
-                                for c in content
-                                if c.get("type") == "text" and not c.get("text", "").startswith("<system")
-                            ]
-                            content = " ".join(texts)
-
-                        if content and not content.startswith("<system"):
-                            role = "U" if entry_type == "user" else "A"
-                            content = content[:max_msg_len].replace("\n", " ").strip()
-                            messages.append(f"{role}: {content}")
-
-                            if len(messages) >= max_messages:
-                                break
-                except json.JSONDecodeError:
-                    continue
-
-            messages.reverse()
-            return "\n".join(messages)
-
-        except Exception:
-            return ""

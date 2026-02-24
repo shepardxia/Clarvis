@@ -4,6 +4,7 @@ Single tool that accepts DSL command strings via the clautify package.
 Formats raw responses as concise text for LLM consumption.
 """
 
+import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
@@ -27,9 +28,9 @@ def _default_get_session():
         session = SpotifySession.from_config(eager=False)
         # Apply max volume from Clarvis config
         try:
-            from .widget.config import get_config
+            from ..widget.config import get_config
 
-            session.max_volume = get_config().spotify.max_volume / 100
+            session.max_volume = get_config().music.max_volume / 100
         except Exception:
             pass
         check = session.health_check()
@@ -46,6 +47,16 @@ def _default_get_session():
 # --- Formatting helpers ---
 
 
+def _dig(d: Any, *keys: str, default: Any = None) -> Any:
+    """Safely navigate nested dicts: _dig(d, 'a', 'b') == d['a']['b']."""
+    for k in keys:
+        if isinstance(d, dict):
+            d = d.get(k)
+        else:
+            return default
+    return d if d is not None else default
+
+
 def _ms_to_timestamp(ms: Any) -> str:
     """Convert milliseconds (int or str) to M:SS format."""
     try:
@@ -56,112 +67,147 @@ def _ms_to_timestamp(ms: Any) -> str:
     return f"{m}:{s:02d}"
 
 
-def _get_cache(session):
-    """Access the executor's name cache for reverse URI lookups."""
+def _bare_id(uri: str) -> str:
+    """Extract the 22-char bare ID from a spotify URI, or return as-is."""
+    if uri and ":" in uri:
+        return uri.rsplit(":", 1)[-1]
+    return uri
+
+
+def _first_artist(artists_node: Any, fallback: str = "?") -> str:
+    """Extract the first artist name from a Spotify artists dict or items list."""
     try:
-        return session._executor._cache
-    except AttributeError:
+        items = artists_node.get("items", []) if isinstance(artists_node, dict) else artists_node
+        return items[0].get("profile", {}).get("name", fallback) if items else fallback
+    except (KeyError, TypeError, IndexError, AttributeError):
+        return fallback
+
+
+def _track_line(name: str, artist: str = "", album: str = "") -> str:
+    """Format 'Name - Artist (Album)', omitting blank parts."""
+    line = name or "?"
+    if artist:
+        line += f" - {artist}"
+    if album:
+        line += f" ({album})"
+    return line
+
+
+def _resolve_track(track) -> str | None:
+    """Extract a displayable line from a track (dataclass or dict), or None."""
+    if hasattr(track, "metadata"):
+        m = track.metadata
+        if m and m.title:
+            return m.title
         return None
+    if isinstance(track, dict):
+        return track.get("name") or track.get("title")
+    return None
+
+
+def _section(label: str, items: list) -> list[str]:
+    """['', 'Label:', 'a, b, c'] if any truthy items, else []."""
+    items = [i for i in items if i]
+    return ["", f"{label}:", ", ".join(items)] if items else []
 
 
 # --- Query formatters ---
 
 
 def _fmt_search(result: dict, session) -> str:
-    type_ = result.get("type", "tracks")
+    kind = result.get("kind", "track")
     data = result.get("data")
-
     if not isinstance(data, list) or not data:
         return "No results."
 
-    if type_ == "artists":
-        # data is already a flat items list (extracted by executor)
-        lines = []
-        for item in data:
-            try:
-                name = item["data"]["profile"]["name"]
-                lines.append(name)
-            except (KeyError, TypeError):
-                continue
-        return "\n".join(lines) if lines else "No results."
-
-    # tracks, albums, playlists — data is already the extracted items list
     lines = []
     for item in data:
         try:
-            d = item.get("item", {}).get("data", {}) if type_ == "tracks" else item.get("data", {})
-            name = d.get("name", "?")
-
-            if type_ == "tracks":
-                artists = d.get("artists", {}).get("items", [])
-                artist = artists[0]["profile"]["name"] if artists else "?"
-                album = d.get("albumOfTrack", {}).get("name", "")
-                line = f'"{name}" - {artist}'
-                if album:
-                    line += f" ({album})"
-            elif type_ == "albums":
-                artists = d.get("artists", {}).get("items", [])
-                artist = artists[0]["profile"]["name"] if artists else "?"
-                line = f'"{name}" - {artist}'
-            elif type_ == "playlists":
-                owner = d.get("ownerV2", {}).get("data", {}).get("name", "?")
-                count = (d.get("content") or {}).get("totalCount")
-                line = f'"{name}" - {owner}'
+            if kind == "artist":
+                name = _dig(item, "data", "profile", "name", default="?")
+                uri = _dig(item, "data", "uri", default="")
+                bid = _bare_id(uri) if uri else ""
+                lines.append(f"{bid}  {name}" if bid else name)
+            elif kind == "track":
+                d = _dig(item, "item", "data", default={})
+                uri = d.get("uri", "")
+                bid = _bare_id(uri) if uri else ""
+                display = _track_line(
+                    d.get("name", "?"),
+                    _first_artist(d.get("artists", {})),
+                    _dig(d, "albumOfTrack", "name", default=""),
+                )
+                lines.append(f"{bid}  {display}" if bid else display)
+            elif kind == "album":
+                d = _dig(item, "data", default={})
+                uri = d.get("uri", "")
+                bid = _bare_id(uri) if uri else ""
+                display = _track_line(d.get("name", "?"), _first_artist(d.get("artists", {})))
+                lines.append(f"{bid}  {display}" if bid else display)
+            elif kind == "playlist":
+                d = _dig(item, "data", default={})
+                uri = d.get("uri", "")
+                bid = _bare_id(uri) if uri else ""
+                owner = _dig(d, "ownerV2", "data", "name", default="?")
+                count = _dig(d, "content", "totalCount")
+                display = f"{d.get('name', '?')} - {owner}"
                 if count:
-                    line += f" ({count} tracks)"
+                    display += f" ({count} tracks)"
+                lines.append(f"{bid}  {display}" if bid else display)
             else:
-                line = name
-
-            lines.append(line)
+                lines.append(_dig(item, "data", "name", default="?"))
         except (KeyError, TypeError, IndexError):
             continue
     return "\n".join(lines) if lines else "No results."
 
 
-def _fmt_now_playing(result: dict, session) -> str:
-    state = result.get("data")
-    if state is None:
-        return "Nothing playing."
+def _fmt_status(result: dict, session) -> str:
+    sections = []
 
-    cache = _get_cache(session)
-
-    # Handle PlayerState dataclass
-    if hasattr(state, "track"):
-        track = state.track
-        if not track:
-            return "Nothing playing."
-        m = track.metadata
+    # Now playing
+    state = result.get("now_playing")
+    if state and hasattr(state, "track") and state.track:
+        m = state.track.metadata
         title = m.title if m else "?"
         album = m.album_title if m else ""
-        # Try reverse-lookup for artist name
-        artist = None
-        if m and m.artist_uri and cache:
-            artist = cache.name_for_uri(m.artist_uri)
-
-        line = f'"{title}"'
-        if artist:
-            line += f" by {artist}"
-        if album:
-            line += f" ({album})"
+        line = _track_line(title, "", album)
 
         if state.is_paused is True or state.is_playing is False:
-            return f"{line}\npaused"
+            sections.append(f"Playing:\n{line} (paused)")
+        else:
+            pos = _ms_to_timestamp(state.position_as_of_timestamp)
+            dur = _ms_to_timestamp(state.duration)
+            modes = []
+            if state.options:
+                if state.options.shuffling_context:
+                    modes.append("shuffle")
+                if state.options.repeating_context:
+                    modes.append("repeat")
+            info = f"{pos} / {dur}"
+            if modes:
+                info += ", " + ", ".join(modes)
+            sections.append(f"Playing:\n{line}\n{info}")
+    else:
+        sections.append("Nothing playing.")
 
-        pos = _ms_to_timestamp(state.position_as_of_timestamp)
-        dur = _ms_to_timestamp(state.duration)
-        mode_parts = []
-        if state.options:
-            if state.options.shuffling_context:
-                mode_parts.append("shuffle")
-            if state.options.repeating_context:
-                mode_parts.append("repeat")
+    # Queue
+    queue = result.get("queue")
+    if queue:
+        lines = [_resolve_track(t) or "?" for t in queue]
+        sections.append("Queue:\n" + "\n".join(lines))
 
-        status_line = f"{pos} / {dur}"
-        if mode_parts:
-            status_line += ", " + ", ".join(mode_parts)
-        return f"{line}\n{status_line}"
+    # History
+    history = result.get("history")
+    if history:
+        lines = [_resolve_track(t) or "?" for t in history]
+        sections.append("History:\n" + "\n".join(lines))
 
-    return str(state)
+    # Devices
+    devices = result.get("devices")
+    if devices:
+        sections.append("Devices:\n" + _fmt_devices({"data": devices}, session))
+
+    return "\n\n".join(sections)
 
 
 def _fmt_devices(result: dict, session) -> str:
@@ -170,23 +216,15 @@ def _fmt_devices(result: dict, session) -> str:
         return "No devices."
 
     lines = []
-    active_id = None
-
     if hasattr(data, "devices"):
         active_id = data.active_device_id
-        devices = data.devices
-        for dev_id, dev in devices.items():
-            parts = [dev.name]
-            parts.append(f"({dev.device_type.title()}")
-            if dev_id == active_id:
-                parts[-1] += ", currently used"
+        for dev_id, dev in data.devices.items():
             vol_pct = round(dev.volume / 65535 * 100) if dev.volume is not None else "?"
-            parts[-1] += f", vol: {vol_pct}%)"
-            lines.append(" ".join(parts))
+            active = ", currently used" if dev_id == active_id else ""
+            lines.append(f"{dev.name} ({dev.device_type.title()}{active}, vol: {vol_pct}%)")
     elif isinstance(data, dict):
         for dev_id, dev in data.items():
-            name = dev.get("name", dev_id) if isinstance(dev, dict) else str(dev)
-            lines.append(name)
+            lines.append(dev.get("name", dev_id) if isinstance(dev, dict) else str(dev))
 
     return "\n".join(lines) if lines else "No devices."
 
@@ -196,53 +234,21 @@ def _fmt_queue_or_history(result: dict, session) -> str:
     if not data:
         return "Empty."
     if not isinstance(data, list):
-        data = [data] if data else []
+        data = [data]
 
     cap = result.get("limit", 10)
-    cache = _get_cache(session)
     lines = []
-    unknown_count = 0
+    unknown = 0
 
     for track in data[:cap]:
-        if hasattr(track, "metadata"):
-            m = track.metadata
-            title = m.title if m else None
-            if title:
-                album = m.album_title or ""
-                artist = None
-                if m.artist_uri and cache:
-                    artist = cache.name_for_uri(m.artist_uri)
-                line = f'"{title}"'
-                if artist:
-                    line += f" - {artist}"
-                if album:
-                    line += f" ({album})"
-                lines.append(line)
-            elif track.uri and cache:
-                # Fallback: resolve track URI from cache
-                name = cache.name_for_uri(track.uri)
-                if name:
-                    lines.append(f'"{name}"')
-                else:
-                    unknown_count += 1
-            else:
-                unknown_count += 1
-        elif isinstance(track, dict):
-            name = track.get("name") or track.get("title")
-            if not name and cache:
-                uri = track.get("uri")
-                if uri:
-                    name = cache.name_for_uri(uri)
-            if name:
-                lines.append(f'"{name}"')
-            else:
-                unknown_count += 1
+        line = _resolve_track(track)
+        if line:
+            lines.append(line)
         else:
-            unknown_count += 1
+            unknown += 1
 
-    if unknown_count > 0:
-        lines.append(f"...and {unknown_count} untitled tracks")
-
+    if unknown:
+        lines.append(f"...and {unknown} untitled tracks")
     remaining = len(data) - cap
     if remaining > 0:
         lines.append(f"...and {remaining} more in queue")
@@ -251,318 +257,208 @@ def _fmt_queue_or_history(result: dict, session) -> str:
 
 
 def _fmt_recommend(result: dict, session) -> str:
-    data = result.get("data")
-    if not data:
+    tracks = _dig(result, "data", "recommendedTracks", default=[])
+    if not tracks:
         return "No recommendations."
 
-    tracks = data.get("recommendedTracks", []) if isinstance(data, dict) else []
     lines = []
     for t in tracks:
         try:
-            name = t["name"]
             artists = t.get("artists", [])
             artist = artists[0]["name"] if artists else "?"
-            album = t.get("album", {}).get("name", "")
-            line = f'"{name}" - {artist}'
-            if album:
-                line += f" ({album})"
-            lines.append(line)
+            lines.append(_track_line(t["name"], artist, _dig(t, "album", "name", default="")))
         except (KeyError, TypeError, IndexError):
             continue
     return "\n".join(lines) if lines else "No recommendations."
 
 
-def _fmt_library(result: dict, session) -> str:
-    data = result.get("data")
-    if not data:
+def _fmt_library_list(result: dict, session) -> str:
+    items = _dig(result, "data", "data", "me", "libraryV3", "items")
+    if not items:
         return "Library empty."
 
-    try:
-        items = data["data"]["me"]["libraryV3"]["items"]
-    except (KeyError, TypeError):
-        return "Library empty."
+    cap = result.get("limit") or 50
 
-    # Get current user name for my vs saved playlists
+    # Detect current user for my-vs-saved classification
     user_name = None
-    try:
-        for item in items:
-            owner = item.get("item", {}).get("data", {}).get("ownerV2", {}).get("data", {})
-            if owner.get("uri", "").startswith("spotify:user:"):
-                user_name = owner.get("name")
-                break
-    except (KeyError, TypeError):
-        pass
+    for item in items:
+        uri = _dig(item, "item", "data", "ownerV2", "data", "uri", default="")
+        if uri.startswith("spotify:user:"):
+            user_name = _dig(item, "item", "data", "ownerV2", "data", "name")
+            break
 
-    my_playlists: List[str] = []
-    saved_playlists: List[str] = []
-    albums: List[str] = []
-    following: List[str] = []
+    buckets: dict[str, List[str]] = {
+        "My Playlists": [],
+        "Albums": [],
+        "Following": [],
+        "Saved Playlists": [],
+    }
 
     for item in items:
-        try:
-            item_data = item.get("item", {}).get("data", {})
-            typename = item_data.get("__typename", "")
-            name = item_data.get("name", "?")
+        d = _dig(item, "item", "data", default={})
+        typename = d.get("__typename", "")
+        name = d.get("name", "?")
 
-            # Skip podcasts, audiobooks, episodes
-            if any(kw in typename.lower() for kw in ("podcast", "show", "audiobook", "episode")):
-                continue
-
-            if "PseudoPlaylist" in typename:
-                # Built-in collections like Liked Songs, Your Episodes
-                if "episode" in name.lower():
-                    continue
-                count = item_data.get("count", "?")
-                my_playlists.append(f"{name} ({count} tracks)")
-            elif "Playlist" in typename:
-                owner = item_data.get("ownerV2", {}).get("data", {}).get("name", "?")
-                # Count not directly available in library response
-                if user_name and owner == user_name:
-                    my_playlists.append(f'"{name}"')
-                else:
-                    saved_playlists.append(f'"{name}" by {owner}')
-            elif "Album" in typename:
-                artist = "?"
-                try:
-                    artist = item_data["artists"]["items"][0]["profile"]["name"]
-                except (KeyError, TypeError, IndexError):
-                    pass
-                albums.append(f'"{name}" - {artist}')
-            elif "Artist" in typename:
-                artist_name = item_data.get("profile", {}).get("name") or name
-                following.append(artist_name)
-        except (KeyError, TypeError):
+        if any(kw in typename.lower() for kw in ("podcast", "show", "audiobook", "episode")):
             continue
 
+        if "PseudoPlaylist" in typename:
+            if "episode" in name.lower():
+                continue
+            buckets["My Playlists"].append(f"{name} ({d.get('count', '?')} tracks)")
+        elif "Playlist" in typename:
+            owner = _dig(d, "ownerV2", "data", "name", default="?")
+            if user_name and owner == user_name:
+                buckets["My Playlists"].append(name)
+            else:
+                buckets["Saved Playlists"].append(f"{name} by {owner}")
+        elif "Album" in typename:
+            buckets["Albums"].append(_track_line(name, _first_artist(d.get("artists", {}))))
+        elif "Artist" in typename:
+            buckets["Following"].append(_dig(d, "profile", "name", default=name))
+
     sections = []
-    if my_playlists:
-        sections.append("My Playlists:\n" + "\n".join(f"  {p}" for p in my_playlists[:10]))
-    if albums:
-        sections.append("Albums:\n" + "\n".join(f"  {a}" for a in albums[:10]))
-    if following:
-        sections.append("Following:\n" + "\n".join(f"  {a}" for a in following[:10]))
-    if saved_playlists:
-        sections.append("Saved Playlists:\n" + "\n".join(f"  {p}" for p in saved_playlists[:10]))
+    for label, entries in buckets.items():
+        if entries:
+            sections.append(f"{label}:\n" + "\n".join(f"  {e}" for e in entries[:cap]))
 
     return "\n\n".join(sections) if sections else "Library empty."
 
 
 def _fmt_info(result: dict, session) -> str:
-    target = result.get("target", "")
+    kind = result.get("kind", "track")
     data = result.get("data")
     if not data:
         return "No info available."
 
-    # Parse kind from URI structure (spotify:artist:xxx → "artist")
-    parts = target.split(":")
-    kind = parts[1] if len(parts) >= 3 else "track"
-
     try:
         if kind == "artist":
-            return _fmt_info_artist(data)
-        elif kind == "album":
-            return _fmt_info_album(data)
-        elif kind == "playlist":
-            return _fmt_info_playlist(data)
-        else:
-            return _fmt_info_track(data)
+            a = _dig(data, "data", "artistUnion", default={})
+            name = _dig(a, "profile", "name", default="?")
+            listeners = _dig(a, "stats", "monthlyListeners", default=0)
+            rank = _dig(a, "stats", "worldRank")
+            stats = [f"{listeners:,} monthly listeners" if listeners else "", f"#{rank} worldwide" if rank else ""]
+            lines = [name] + ([", ".join(s for s in stats if s)] if any(stats) else [])
+
+            bio = _dig(a, "profile", "biography", "text", default="")
+            if bio:
+                bio = re.sub(r"<[^>]+>", "", bio).split("\n")[0].strip()[:300]
+                if bio:
+                    lines += ["", bio]
+
+            lines += _section(
+                "Top tracks",
+                [_dig(t, "track", "name") for t in _dig(a, "discography", "topTracks", "items", default=[])[:5]],
+            )
+
+            album_names = []
+            for al in _dig(a, "discography", "albums", "items", default=[])[:10]:
+                r = (_dig(al, "releases", "items") or [{}])[0]
+                if r.get("name"):
+                    y = _dig(r, "date", "year", default="")
+                    album_names.append(f"{r['name']} ({y})" if y else r["name"])
+            lines += _section("Albums", album_names)
+            lines += _section(
+                "Related artists",
+                [
+                    _dig(r, "profile", "name")
+                    for r in _dig(a, "relatedContent", "relatedArtists", "items", default=[])[:10]
+                ],
+            )
+            return "\n".join(lines)
+
+        if kind == "album":
+            al = _dig(data, "data", "albumUnion", default={})
+            name, artist = al.get("name", "?"), _first_artist(al.get("artists", {}))
+            year = _dig(al, "date", "year") or (_dig(al, "date", "isoString", default="") or "")[:4]
+            meta = [s for s in [str(year) if year else "", al.get("label", "")] if s]
+            header = f"{name} by {artist}" + (f" ({', '.join(meta)})" if meta else "")
+            tracks = [
+                _dig(t, "track", "name") for t in (_dig(al, "tracksV2", "items") or _dig(al, "tracks", "items") or [])
+            ]
+            tracks = [n for n in tracks if n]
+            return header + ("\n" + ", ".join(tracks) if tracks else "")
+
+        if kind == "playlist":
+            pl = _dig(data, "data", "playlistV2", default={})
+            owner = _dig(pl, "ownerV2", "data", "name", default="?")
+            total = _dig(pl, "content", "totalCount", default="?")
+            lines = [f"{pl.get('name', '?')} by {owner} - {total} tracks"]
+            items = _dig(pl, "content", "items", default=[])
+            for item in items[:20]:
+                try:
+                    td = _dig(item, "itemV2", "data", default={})
+                    lines.append(_track_line(td.get("name", "?"), _first_artist(td.get("artists", {}))))
+                except (KeyError, TypeError, IndexError):
+                    continue
+            if len(items) > 20:
+                lines.append(f"...and {len(items) - 20} more")
+            return "\n".join(lines)
+
+        # track (default)
+        t = _dig(data, "data", "trackUnion", default={})
+        duration = _dig(t, "duration", "totalMilliseconds")
+        playcount = t.get("playcount")
+        line = _track_line(
+            t.get("name", "?"), _first_artist(t.get("firstArtist", {})), _dig(t, "albumOfTrack", "name", default="")
+        )
+        meta = [_ms_to_timestamp(duration) if duration else ""]
+        if playcount:
+            try:
+                meta.append(f"{int(playcount):,} plays")
+            except (ValueError, TypeError):
+                pass
+        meta = [m for m in meta if m]
+        return line + ("\n" + ", ".join(meta) if meta else "")
+
     except (KeyError, TypeError, IndexError):
         return str(data)[:2000]
 
 
-def _fmt_info_artist(data: dict) -> str:
-    artist = data.get("data", {}).get("artistUnion", {})
-    profile = artist.get("profile", {})
-    name = profile.get("name", "?")
-    bio = profile.get("biography", {}).get("text", "")
-    stats = artist.get("stats", {})
-    listeners = stats.get("monthlyListeners", 0)
-    rank = stats.get("worldRank")
-
-    lines = [name]
-    stat_parts = []
-    if listeners:
-        stat_parts.append(f"{listeners:,} monthly listeners")
-    if rank:
-        stat_parts.append(f"#{rank} worldwide")
-    if stat_parts:
-        lines.append(", ".join(stat_parts))
-
-    if bio:
-        bio = re.sub(r"<[^>]+>", "", bio)  # strip HTML tags
-        # Take first paragraph only
-        first_para = bio.split("\n")[0].split("\r")[0].strip()
-        if len(first_para) > 300:
-            first_para = first_para[:297] + "..."
-        if first_para:
-            lines.append("")
-            lines.append(first_para)
-
-    # Top tracks
-    top_tracks = artist.get("discography", {}).get("topTracks", {}).get("items", [])
-    if top_tracks:
-        names = []
-        for t in top_tracks[:5]:
-            track = t.get("track", {})
-            n = track.get("name")
-            if n:
-                names.append(f'"{n}"')
-        if names:
-            lines.append("")
-            lines.append("Top tracks:")
-            lines.append(", ".join(names))
-
-    # Albums
-    album_items = artist.get("discography", {}).get("albums", {}).get("items", [])
-    if album_items:
-        album_names = []
-        for a in album_items[:10]:
-            releases = a.get("releases", {}).get("items", [])
-            if releases:
-                name_a = releases[0].get("name")
-                year = releases[0].get("date", {}).get("year", "")
-                if name_a:
-                    album_names.append(f'"{name_a}" ({year})' if year else f'"{name_a}"')
-        if album_names:
-            lines.append("")
-            lines.append("Albums:")
-            lines.append(", ".join(album_names))
-
-    # Related artists
-    related = artist.get("relatedContent", {}).get("relatedArtists", {}).get("items", [])
-    if related:
-        rel_names = [r.get("profile", {}).get("name") for r in related[:10]]
-        rel_names = [n for n in rel_names if n]
-        if rel_names:
-            lines.append("")
-            lines.append("Related artists:")
-            lines.append(", ".join(rel_names))
-
-    return "\n".join(lines)
-
-
-def _fmt_info_album(data: dict) -> str:
-    album = data.get("data", {}).get("albumUnion", {})
-    name = album.get("name", "?")
-    artists = album.get("artists", {}).get("items", [])
-    artist = artists[0].get("profile", {}).get("name", "?") if artists else "?"
-    date = album.get("date", {})
-    year = date.get("year") or (date.get("isoString", "")[:4] if date.get("isoString") else "")
-    label = album.get("label", "")
-
-    header_parts = [f'"{name}" by {artist}']
-    meta = []
-    if year:
-        meta.append(str(year))
-    if label:
-        meta.append(label)
-    if meta:
-        header_parts.append(f"({', '.join(meta)})")
-
-    tracks = (album.get("tracksV2") or album.get("tracks") or {}).get("items", [])
-    track_names = []
-    for t in tracks:
-        track = t.get("track", {})
-        n = track.get("name")
-        if n:
-            track_names.append(f'"{n}"')
-
-    lines = [" ".join(header_parts)]
-    if track_names:
-        lines.append(", ".join(track_names))
-    return "\n".join(lines)
-
-
-def _fmt_info_playlist(data: dict) -> str:
-    pl = data.get("data", {}).get("playlistV2", {})
-    name = pl.get("name", "?")
-    owner = pl.get("ownerV2", {}).get("data", {}).get("name", "?")
-    total = pl.get("content", {}).get("totalCount", "?")
-
-    lines = [f'"{name}" by {owner} - {total} tracks']
-
-    items = pl.get("content", {}).get("items", [])
-    for item in items[:20]:
-        try:
-            track_data = item.get("itemV2", {}).get("data", {})
-            track_name = track_data.get("name", "?")
-            artists = track_data.get("artists", {}).get("items", [])
-            artist = artists[0].get("profile", {}).get("name", "?") if artists else "?"
-            lines.append(f'"{track_name}" - {artist}')
-        except (KeyError, TypeError, IndexError):
-            continue
-
-    if len(items) > 20:
-        lines.append(f"...and {len(items) - 20} more")
-
-    return "\n".join(lines)
-
-
-def _fmt_info_track(data: dict) -> str:
-    track = data.get("data", {}).get("trackUnion", {})
-    name = track.get("name", "?")
-    artists = track.get("firstArtist", {}).get("items", [])
-    artist = artists[0].get("profile", {}).get("name", "?") if artists else "?"
-    album = track.get("albumOfTrack", {}).get("name", "")
-    duration = track.get("duration", {}).get("totalMilliseconds")
-    playcount = track.get("playcount")
-
-    line = f'"{name}" - {artist}'
-    if album:
-        line += f" ({album})"
-
-    parts = [line]
-    meta = []
-    if duration:
-        meta.append(_ms_to_timestamp(duration))
-    if playcount:
-        try:
-            meta.append(f"{int(playcount):,} plays")
-        except (ValueError, TypeError):
-            pass
-    if meta:
-        parts.append(", ".join(meta))
-
-    return "\n".join(parts)
-
-
-# --- Action formatters ---
+# --- Action formatter ---
 
 
 def _fmt_action(result: dict, session=None) -> str:
     action = result.get("action", "")
     target = result.get("target", "")
-    kind = result.get("kind", "")
-    # Resolve URI targets to names via cache
-    if target and target.startswith("spotify:") and session:
-        cache = _get_cache(session)
-        if cache:
-            target = cache.name_for_uri(target) or target
 
     if action == "pause":
         return "Paused"
-    elif action == "resume":
+    if action == "resume":
         return "Resumed"
-    elif action == "skip":
+    if action == "library_add":
+        kind = result.get("kind", "")
+        playlist = result.get("playlist")
+        if playlist:
+            return f"Added {target} to {playlist}"
+        return f"Added {kind} {target} to library"
+    if action == "library_remove":
+        kind = result.get("kind", "")
+        playlist = result.get("playlist")
+        if playlist:
+            return f"Removed {target} from {playlist}"
+        return f"Removed {kind} {target} from library"
+    if action == "library_create":
+        return f'Created playlist "{target}"'
+    if action == "library_delete":
+        return f"Deleted playlist {target}"
+    if action == "skip":
         n = result.get("n", 1)
-        if n == 1:
-            return "Skipped"
-        elif n == -1:
-            return "Skipped back"
-        elif n > 0:
-            return f"Skipped {n} tracks"
-        else:
-            return f"Skipped back {abs(n)} tracks"
-    elif action == "seek":
+        if abs(n) == 1:
+            return "Skipped back" if n < 0 else "Skipped"
+        return f"Skipped {'back ' if n < 0 else ''}{abs(n)} tracks"
+    if action == "seek":
         pos = result.get("position_ms")
         return f"Seeked to {_ms_to_timestamp(pos)}" if pos else "Seeked"
-    elif action == "play":
-        if kind in ("album", "playlist"):
-            return f"Playing {kind} {target}"
-        return f"Playing {target}"
-    elif action == "queue":
-        return f"Added {target} to queue"
-    elif action == "set":
+    if action == "play":
+        kind = result.get("kind", "")
+        return f"Playing {kind + ' ' if kind in ('album', 'playlist') else ''}{target}"
+    if action == "queue":
+        targets = result.get("targets", [target] if target else [])
+        if len(targets) == 1:
+            return f"Added {targets[0]} to queue"
+        return f"Queued {len(targets)} tracks:\n" + "\n".join(f"  {n}" for n in targets)
+    if action == "set":
         parts = []
         if "volume" in result:
             parts.append(f"Volume set to {int(result['volume'])}%")
@@ -570,136 +466,121 @@ def _fmt_action(result: dict, session=None) -> str:
             v = result["volume_rel"]
             parts.append(f"Volume {'+' if v > 0 else ''}{v}%")
         if "mode" in result:
-            mode = result["mode"]
-            if mode == "shuffle":
-                parts.append("Shuffle on")
-            elif mode == "repeat":
-                parts.append("Repeat on")
-            else:
-                parts.append("Normal playback")
+            parts.append({"shuffle": "Shuffle on", "repeat": "Repeat on"}.get(result["mode"], "Normal playback"))
         if "device" in result:
             parts.append(f"Playing on {result['device']}")
         return ", ".join(parts) if parts else "OK"
-    elif action in ("like", "unlike", "follow", "unfollow", "save", "unsave"):
-        return f"{action.capitalize()}d {target}"
-    elif action == "playlist_create":
-        return f'Created playlist "{result.get("name", target)}"'
-    elif action == "playlist_delete":
-        return f"Deleted playlist {target}"
-    elif action == "playlist_add":
-        return "Added to playlist"
-    elif action == "playlist_remove":
-        return "Removed from playlist"
-
     return "OK"
 
 
 # --- Main formatter ---
+
+_QUERY_FORMATTERS = {
+    "search": _fmt_search,
+    "status": _fmt_status,
+    "recommend": _fmt_recommend,
+    "library_list": _fmt_library_list,
+    "info": _fmt_info,
+}
 
 
 def _format_result(result: dict, session) -> str:
     """Format a clautify DSL result as concise text for LLM consumption."""
     if not isinstance(result, dict):
         return str(result)
-
     if "error" in result:
         return result["error"]
 
-    query = result.get("query")
-    action = result.get("action")
-
     try:
+        query = result.get("query")
         if query:
-            if query == "search":
-                return _fmt_search(result, session)
-            elif query == "now_playing":
-                return _fmt_now_playing(result, session)
-            elif query == "get_devices":
-                return _fmt_devices(result, session)
-            elif query in ("get_queue", "history"):
-                return _fmt_queue_or_history(result, session)
-            elif query == "recommend":
-                return _fmt_recommend(result, session)
-            elif query == "library":
-                return _fmt_library(result, session)
-            elif query == "info":
-                return _fmt_info(result, session)
-        elif action:
+            fmt = _QUERY_FORMATTERS.get(query)
+            if fmt:
+                return fmt(result, session)
+        elif result.get("action"):
             return _fmt_action(result, session)
     except Exception:
-        logger.warning("Formatter error for %s", query or action, exc_info=True)
+        logger.warning("Formatter error for %s", result.get("query") or result.get("action"), exc_info=True)
 
-    # Fallback: return raw result truncated
     raw = str(result)
-    if len(raw) > 2000:
-        return raw[:2000] + "... (truncated)"
-    return raw
+    return raw[:2000] + "... (truncated)" if len(raw) > 2000 else raw
 
 
 # --- Tool ---
 
 
-async def spotify(
+async def clautify(
     command: Annotated[
         str,
-        Field(description='Command string, e.g. \'play "jazz" volume 70 mode shuffle on "Den"\''),
+        Field(description="A Spotify command."),
     ],
     ctx: Context = None,
 ) -> str:
-    """Execute a Spotify command using natural command strings.
+    """Control Spotify playback, search, and library.
 
-    Quoted strings refer to names from previous search results (search first, then act).
-    Modifiers compose in a single call. Examples:
+    ACTIONS: play, pause, resume, skip, seek, queue
+             library add/remove/list/create/delete
 
-        search "radiohead" tracks limit 5
-        search "radiohead" "tool" "deftones" tracks
-        now playing
-        play track "Creep"
-        play album "OK Computer"
-        play playlist "Rages Cupped" mode shuffle
-        queue "Karma Police"
-        skip 3
-        volume 50
-        volume +10
-        get devices
-        library playlists
-        info "Radiohead"
-        recommend 5 for "Rages Cupped"
+    QUERIES: search, info, recommend, status
 
-    ACTIONS: play [track|album|playlist] "name" [in "playlist"], pause, resume,
-    skip [N], seek <ms>, queue "name", like/unlike "name", follow/unfollow "name",
-    save/unsave "name", add "name" to "playlist", remove "name" from "playlist",
-    create playlist "name", delete playlist "name".
+    MODIFIERS: volume, mode (shuffle/repeat/normal), device
+               limit, offset (for query results)
 
-    QUERIES: search "query"+ [tracks|artists|albums|playlists],
-    now playing, get queue, get devices,
-    library [playlists|artists|albums|tracks], info "name", history,
-    recommend N for "playlist name".
+    When acting on a specific item, specify its kind (track/album/artist/playlist) and target:
 
-    COMPOSABLE MODIFIERS (chain onto actions, or standalone):
-    volume N (0-100, capped at configured max), volume +N/-N (relative),
-    mode shuffle|repeat|normal, on "device name" (or: device "name").
-    Query-only modifiers: limit N, offset N.
+        search artist "radiohead"
 
-    IMPORTANT: Names in quotes are resolved from prior search/query results.
-    You must search first to discover tracks/artists/albums, then reference
-    them by name in subsequent commands. This is by design — always search
-    before play, queue, info, or any name-based command. Search accepts
-    multiple quoted terms to batch-populate the cache in one call.
+    Targets are either a quoted "name" (resolved via fuzzy match) or a
+    Spotify ID returned in search results.
+
+        search track "karma police"          # returns IDs
+        play album "OK Computer Radiohead"   # fuzzy match works better with artist name included
+        play track 6rqhFgbbKwnb9MLmUQDhG6   # prefer IDs for exact matches
+        info album 6dVIqQ8qmQ5GBnJ9shOYGE   # richer detail than search
+        status                               # now playing, queue, devices, history
+        library list playlist limit 10                # 10 saved playlists
+
+    Queue and library add/remove are batchable:
+
+        queue track "Karma Police" "Paranoid Android"
+
+    Use play for albums and playlists.
+
+    Use "in <kind> <target>" for destination context. Kind is required:
+
+        library add track "Bohemian Rhapsody" in playlist "Classics"
+        recommend track 5 in playlist "丁A之之"
+
+    Limit and offset work on any query:
+
+        search track "karma police" limit 3
+
+    Playback modifiers work standalone or chained onto actions:
+
+        play playlist "Rages Cupped" mode shuffle volume 60
+        volume +10 device "Den"  # standalone (Den is the preferred device)
+        skip -2                              # negative = go back
+        seek 30                              # jump to 0:30
+
     """
-    session = ctx.fastmcp._lifespan_result["get_session"]()
+    get_session = ctx.fastmcp._lifespan_result["get_session"]
+    loop = asyncio.get_running_loop()
 
     try:
-        result = session.run(command)
+
+        def _run():
+            session = get_session()
+            return session.run(command), session
+
+        result, session = await loop.run_in_executor(None, _run)
     except Exception as e:
-        result = {"error": str(e)}
+        return str(e)
 
     return _format_result(result, session)
 
 
 # --- Sub-server factory ---
-
-_TOOLS = [spotify]
+_TOOLS = [clautify]
 
 
 def create_spotify_server(get_session=None):
@@ -715,7 +596,7 @@ def create_spotify_server(get_session=None):
     async def session_lifespan(server):
         yield {"get_session": factory}
 
-    srv = FastMCP("spotify", lifespan=session_lifespan)
+    srv = FastMCP("clautify", lifespan=session_lifespan)
     for fn in _TOOLS:
         srv.tool()(fn)
     return srv

@@ -18,23 +18,23 @@ boundary.  Swift keeps dynamic JSON parsing — see the protocol reference
 comment in ClarvisWidget/main.swift.
 """
 
-from __future__ import annotations
-
 import asyncio
 import enum
 import logging
 import time
-import uuid
 from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..core.state import StateStore
-    from ..services.voice_agent import VoiceAgent
-    from ..services.wake_word import WakeWordService
-    from ..widget.socket_server import WidgetSocketServer
+    from ...core.agent import Agent
+    from ...core.signals import SignalBus
+    from ...core.state import StateStore
+    from ...services.wake_word import WakeWordService
+    from ...widget.socket_server import WidgetSocketServer
+    from .asr import ASRBackend
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,6 @@ AGENT_QUERY_TIMEOUT = 60.0
 # ──────────────────────────────────────────────────────────────────────
 # Pipeline state machine
 # ──────────────────────────────────────────────────────────────────────
-
-
 class VoicePipelineState(enum.Enum):
     IDLE = "idle"
     ACTIVATED = "activated"
@@ -79,8 +77,6 @@ _STATE_TO_STATUS: dict[VoicePipelineState, str] = {
 # ──────────────────────────────────────────────────────────────────────
 # IPC protocol dataclasses
 # ──────────────────────────────────────────────────────────────────────
-
-
 @dataclass(frozen=True)
 class StartASRCommand:
     """Orchestrator -> Widget: begin speech recognition."""
@@ -131,30 +127,9 @@ class ClearResponseCommand:
         return {"method": "clear_response"}
 
 
-@dataclass(frozen=True)
-class ASRResult:
-    """Widget -> Orchestrator: speech recognition result."""
-
-    success: bool
-    id: str
-    text: str | None = None
-    error: str | None = None
-
-    @classmethod
-    def from_message(cls, params: dict[str, Any]) -> ASRResult:
-        return cls(
-            success=params.get("success", False),
-            id=params.get("id", ""),
-            text=params.get("text"),
-            error=params.get("error"),
-        )
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Orchestrator
 # ──────────────────────────────────────────────────────────────────────
-
-
 class VoiceCommandOrchestrator:
     """Coordinates wake-word -> ASR -> Claude -> TTS pipeline.
 
@@ -168,10 +143,12 @@ class VoiceCommandOrchestrator:
     def __init__(
         self,
         event_loop: asyncio.AbstractEventLoop,
-        socket_server: WidgetSocketServer,
-        voice_agent: VoiceAgent,
-        state_store: StateStore,
-        wake_word_service: WakeWordService,
+        socket_server: "WidgetSocketServer",
+        voice_agent: "Agent",
+        state_store: "StateStore",
+        wake_word_service: "WakeWordService",
+        asr_backend: "ASRBackend",
+        bus: "SignalBus | None" = None,
         tts_voice: str = "Samantha",
         tts_speed: float = 150,
         tts_enabled: bool = True,
@@ -185,6 +162,7 @@ class VoiceCommandOrchestrator:
         self.agent = voice_agent
         self.state = state_store
         self.wake = wake_word_service
+        self._asr_backend = asr_backend
         self.tts_voice = tts_voice
         self.tts_speed = tts_speed
         self.tts_enabled = tts_enabled
@@ -194,15 +172,43 @@ class VoiceCommandOrchestrator:
         self.text_linger = text_linger
 
         self._state = VoicePipelineState.IDLE
-        # Written on the event loop, read from the socket thread.
-        # Benign race: the future.done() guard in _safe_set() prevents
-        # double-setting, and a stale read at worst drops a result.
-        self._asr_future: asyncio.Future[ASRResult] | None = None
-        self._asr_id: str | None = None
         self._interrupt = asyncio.Event()
         self._cancelled = False  # True when mic-off cancels the pipeline
         self._tts_proc: asyncio.subprocess.Process | None = None
         self._prev_display: str = ""  # Previous voice text for turn separator
+        self._prompt_reply_pending = False  # Set by voice:prompt_reply signal
+        self._bus = bus
+
+        # Memory grounding — set by daemon after construction
+        self.memory_service = None
+        self._voice_session_grounded = False
+
+        if bus:
+            bus.on("voice:prompt_reply", self._on_prompt_reply)
+            bus.on("wake_word:detected", self._on_wake_word)
+            bus.on("wake_word:audio_lost", self._on_audio_lost)
+
+    def _on_prompt_reply(self, signal: str, **kw) -> None:
+        """Signal callback: prompt_response MCP tool was invoked."""
+        self._prompt_reply_pending = True
+
+    def _on_wake_word(self, signal: str, **kw) -> None:
+        """Handle wake word detection — trigger voice command pipeline."""
+        logger.info("Wake word detected")
+        future = asyncio.run_coroutine_threadsafe(self.on_wake_word(), self._loop)
+
+        def _on_done(f):
+            exc = f.exception()
+            if exc:
+                logger.error("on_wake_word failed: %s", exc, exc_info=exc)
+
+        future.add_done_callback(_on_done)
+
+    def _on_audio_lost(self, signal: str, *, reason: str = "", **kw) -> None:
+        """Handle audio device loss — cancel pipeline, show mic as off."""
+        logger.warning("Audio lost: %s", reason)
+        self.cancel()
+        self.state.update("mic", {"visible": True, "enabled": False, "style": "bracket"})
 
     # ------------------------------------------------------------------
     # State machine
@@ -234,7 +240,7 @@ class VoiceCommandOrchestrator:
 
     def _push_status_now(self, status: str) -> None:
         """Send a lightweight status-only frame for instant visual feedback."""
-        from ..core.colors import StatusColors
+        from ...core.colors import StatusColors
 
         color_def = StatusColors.get(status)
         self.socket.push_frame({"theme_color": list(color_def.rgb)})
@@ -270,35 +276,11 @@ class VoiceCommandOrchestrator:
     def handle_widget_message(self, message: dict) -> None:
         """Dispatch messages received from the widget.
 
-        Called from the socket server's read thread.  Uses
-        self._loop.call_soon_threadsafe() to resolve the ASR future
-        on the event loop.
+        Called from the socket server's read thread.  Delegates ASR
+        messages to the backend (only ``WidgetASRBackend`` acts on them;
+        the base class no-ops).
         """
-        method = message.get("method")
-        params = message.get("params", {})
-
-        if method == "asr_result":
-            future = self._asr_future
-            expected_id = self._asr_id
-            if future is None:
-                return
-
-            result = ASRResult.from_message(params)
-
-            # Validate that this result matches the current ASR request.
-            if expected_id and result.id != expected_id:
-                logger.debug(
-                    "Ignoring stale ASR result (got %s, expected %s)",
-                    result.id,
-                    expected_id,
-                )
-                return
-
-            def _safe_set() -> None:
-                if not future.done():
-                    future.set_result(result)
-
-            self._loop.call_soon_threadsafe(_safe_set)
+        self._asr_backend.handle_widget_message(message)
 
     # ------------------------------------------------------------------
     # Main pipeline
@@ -343,10 +325,10 @@ class VoiceCommandOrchestrator:
                 self._clear_voice_text()
 
                 if was_interrupted and not self._cancelled:
-                    # Pause wake word and restart pipeline
+                    # Mute wake word and restart pipeline
                     logger.info("Pipeline interrupted — restarting")
                     self._prev_display = ""
-                    self.wake.pause()
+                    self.wake.mute()
                     self._state = VoicePipelineState.IDLE
                     is_restart = True
                     continue
@@ -361,9 +343,9 @@ class VoiceCommandOrchestrator:
             restored = self.state.get("status") or {}
             restored_status = restored.get("status", "idle")
             self._push_status_now(restored_status)
-            # Only resume wake word if not cancelled by mic toggle
+            # Only unmute wake word if not cancelled by mic toggle
             if not self._cancelled:
-                self.wake.resume()
+                self.wake.unmute()
             self._cancelled = False
 
     async def notify(self, prompt: str) -> None:
@@ -397,20 +379,26 @@ class VoiceCommandOrchestrator:
             restored = self.state.get("status") or {}
             self._push_status_now(restored.get("status", "idle"))
             if not self._cancelled:
-                self.wake.resume()
+                self.wake.unmute()
             self._cancelled = False
 
     async def _run_pipeline(self, is_restart: bool = False, prompt: str | None = None) -> None:
         t_start = time.monotonic()
 
-        # 1. Activate — pause wake word (lock_status handled by caller)
+        # 1. Activate — mute wake word (lock_status handled by caller)
         self._transition(VoicePipelineState.ACTIVATED)
         self._play_sound("Tink")
-        self.wake.pause()
+        self.wake.mute()
 
-        # 2. Kick off prep work (agent connect + context build)
-        agent_task = asyncio.create_task(self.agent.ensure_connected())
-        context_task = self._loop.run_in_executor(None, self._build_voice_context)
+        # 2. Kick off prep work (agent connect + context build + memory grounding)
+        agent_task = asyncio.create_task(self.agent.connect())
+        context_task = self._loop.run_in_executor(None, self.build_voice_context)
+
+        # Memory grounding — parallel with prep, 3s timeout, first turn only
+        memory_prefix = ""
+        memory_task = None
+        if not self._voice_session_grounded and self.memory_service:
+            memory_task = asyncio.create_task(self._build_memory_grounding())
 
         # 3. Get the user's text — either from ASR or from the supplied prompt
         if prompt is not None:
@@ -419,31 +407,15 @@ class VoiceCommandOrchestrator:
             await asyncio.sleep(0.3)  # let activation sound play
         else:
             # ASR path: fire off speech recognition in parallel with prep
-            self._asr_id = uuid.uuid4().hex[:12]
-            self._asr_future = self._loop.create_future()
-            asr_cmd = StartASRCommand(
+            self._transition(VoicePipelineState.LISTENING)
+            result = await self._asr_backend.listen(
                 timeout=self.asr_timeout,
                 silence_timeout=self.silence_timeout,
-                id=self._asr_id,
                 language=self.asr_language,
             )
-            self.socket.send_command(asr_cmd.to_message())
-
-            self._transition(VoicePipelineState.LISTENING)
-            try:
-                result = await asyncio.wait_for(self._asr_future, timeout=self.asr_timeout + 2.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                if not is_restart and not self._cancelled:
-                    await self._visual_bail()
-                else:
-                    self._transition(VoicePipelineState.COOLDOWN)
-                return
-            finally:
-                self._asr_future = None
-                self._asr_id = None
 
             if not result.success:
-                if not is_restart:
+                if not is_restart and not self._cancelled:
                     await self._visual_bail()
                 else:
                     self._transition(VoicePipelineState.COOLDOWN)
@@ -463,15 +435,32 @@ class VoiceCommandOrchestrator:
         await agent_task
         context_prefix = await context_task
 
+        # Collect memory grounding (3s timeout — voice latency is critical)
+        if memory_task is not None:
+            try:
+                memory_prefix = await asyncio.wait_for(memory_task, timeout=3.0)
+                if memory_prefix:
+                    self._voice_session_grounded = True
+                    logger.info("Voice memory grounding: %d chars", len(memory_prefix))
+            except asyncio.TimeoutError:
+                logger.debug("Memory grounding timed out (3s); skipping")
+            except Exception:
+                logger.debug("Memory grounding failed", exc_info=True)
+
         t_prep = time.monotonic()
 
-        # Re-enable wake word now that ASR is done (mic is free).
+        # Re-enable wake word now that ASR is done.
         # This lets the user say "clarvis" to interrupt Claude or TTS.
-        self.wake.resume()
+        self.wake.unmute()
 
         # 5. Send to Claude, stream, parse metadata, speak
         self._transition(VoicePipelineState.THINKING)
-        enriched = f"{context_prefix}{text}" if context_prefix else text
+
+        # Prepend memory grounding to first turn only
+        if memory_prefix:
+            enriched = f"{memory_prefix}\n\n{context_prefix}{text}" if context_prefix else f"{memory_prefix}\n\n{text}"
+        else:
+            enriched = f"{context_prefix}{text}" if context_prefix else text
         logger.info(
             "Voice context: %s",
             context_prefix.replace("\n", " | ")[:200] if context_prefix else "none",
@@ -489,10 +478,10 @@ class VoiceCommandOrchestrator:
         clean_text, expects_reply = result
 
         # 6. Follow-up conversation loop (no repeat wake word needed)
-        #    Wake word stays paused for the entire follow-up loop to
+        #    Wake word stays muted for the entire follow-up loop to
         #    prevent accidental interrupts between turns.
         while expects_reply and not self._interrupt.is_set():
-            self.wake.pause()
+            self.wake.mute()
             self._push_status_now("awaiting")
             self._play_sound("Pop")  # Audible cue: "I'm listening for your reply"
             self._transition(VoicePipelineState.LISTENING)
@@ -501,30 +490,12 @@ class VoiceCommandOrchestrator:
             if self._interrupt.is_set():
                 break
 
-            # Cancel any stale ASR future before creating a new one
-            if self._asr_future is not None and not self._asr_future.done():
-                self._asr_future.cancel()
-
             # Start follow-up ASR with extended timeout
-            self._asr_id = uuid.uuid4().hex[:12]
-            self._asr_future = self._loop.create_future()
-            asr_cmd = StartASRCommand(
-                timeout=self.asr_timeout + 3.0,
+            asr_result = await self._asr_backend.listen(
+                timeout=self.asr_timeout,
                 silence_timeout=self.silence_timeout,
-                id=self._asr_id,
                 language=self.asr_language,
             )
-            self.socket.send_command(asr_cmd.to_message())
-
-            try:
-                asr_result = await asyncio.wait_for(self._asr_future, timeout=self.asr_timeout + 5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                logger.info("Follow-up ASR timed out or cancelled — ending conversation")
-                self._kill_tts()
-                break
-            finally:
-                self._asr_future = None
-                self._asr_id = None
 
             if not asr_result.success or not (asr_result.text or "").strip():
                 logger.info("Follow-up ASR empty/failed — ending conversation")
@@ -535,7 +506,7 @@ class VoiceCommandOrchestrator:
             logger.info("Voice follow-up: %s", follow_up_text)
 
             # Re-enable wake word for interrupt during Claude streaming/TTS
-            self.wake.resume()
+            self.wake.unmute()
 
             self._transition(VoicePipelineState.THINKING)
             result = await self._stream_and_speak(follow_up_text)
@@ -550,7 +521,7 @@ class VoiceCommandOrchestrator:
     # Context enrichment
     # ------------------------------------------------------------------
 
-    def _build_voice_context(self) -> str:
+    def build_voice_context(self) -> str:
         """Build situational context to prepend to voice commands.
 
         Reads directly from self.state (StateStore) — no IPC overhead.
@@ -563,26 +534,55 @@ class VoiceCommandOrchestrator:
         if weather.get("temperature"):
             desc = weather.get("description", "").lower()
             temp = weather.get("temperature", "")
-            parts.append(f"weather: {temp}F {desc}")
+            parts.append(f"{temp}F {desc}")
 
         location = self.state.get("location") or {}
         if location.get("city"):
-            parts.append(f"location: {location['city']}")
+            parts.append(f"{location['city']}")
 
         # Time
         time_data = self.state.get("time") or {}
         if time_data.get("timestamp"):
             try:
                 dt = datetime.fromisoformat(time_data["timestamp"])
-                parts.append(f"time: {dt.strftime('%A, %B %-d, %-I:%M%p').lower()}")
+                parts.append(f"{dt.strftime('%A, %B %-d, %-I:%M%p').lower()}")
             except (ValueError, KeyError):
                 pass
+
+        # Currently playing on Spotify (only if actively playing)
+        try:
+            from ...mcp.spotify_tools import _default_get_session
+
+            session = _default_get_session()
+            state = session._executor.player.state
+            if state and state.is_playing and not state.is_paused and state.track:
+                m = state.track.metadata
+                if m and m.title:
+                    artist = session._executor._cache.name_for_uri(m.artist_uri) if m.artist_uri else None
+                    parts.append(f"♫ {m.title}" + (f" – {artist}" if artist else ""))
+        except Exception:
+            pass
 
         if not parts:
             return ""
 
         block = "\n".join(parts)
-        return f"<context>\n{block}\n</context>\n\n"
+        return f"{block}\n\n"
+
+    async def _build_memory_grounding(self) -> str:
+        """Build memory grounding block for voice session start."""
+        from clarvis.channels.memory_context import (
+            build_memory_grounding,
+            read_recent_transcript,
+        )
+
+        transcript_path = Path.home() / ".clarvis" / "channels" / "transcript.jsonl"
+        transcript = read_recent_transcript(transcript_path)
+        return await build_memory_grounding(
+            self.memory_service,
+            "master",
+            transcript,
+        )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -599,6 +599,7 @@ class VoiceCommandOrchestrator:
         Returns (full_response_text, expects_reply), or None if interrupted
         or timed out (transitions to COOLDOWN in those cases).
         """
+        self._prompt_reply_pending = False  # Reset before streaming
         t_query = time.monotonic()
         t_first_token = None
         response_chunks: list[str] = []
@@ -666,15 +667,15 @@ class VoiceCommandOrchestrator:
 
         # Speak any remaining text after stream ends
         final_segment = "".join(response_chunks).strip()
-        expects_reply = self.agent.expects_reply
+        expects_reply = self._prompt_reply_pending
 
-        # When a follow-up turn is expected, pause wake word before
+        # When a follow-up turn is expected, mute wake word before
         # the final TTS so speaker audio can't trigger a false wake-word
         # detection (which would kill TTS and skip the follow-up loop).
-        # The follow-up loop in _run_pipeline keeps it paused; on_wake_word's
-        # finally block resumes it when the voice session ends.
+        # The follow-up loop in _run_pipeline keeps it muted; on_wake_word's
+        # finally block unmutes it when the voice session ends.
         if expects_reply:
-            self.wake.pause()
+            self.wake.mute()
 
         # Shorter linger when a follow-up is expected — just enough for
         # the audio system to flush before the "Pop" + ASR prompt.
@@ -710,20 +711,9 @@ class VoiceCommandOrchestrator:
 
     def _play_sound(self, sound: str = "Tink") -> None:
         """Play a macOS system sound (fire-and-forget)."""
+        from ...core.audio import play_system_sound
 
-        async def _reap() -> None:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "afplay",
-                    f"/System/Library/Sounds/{sound}.aiff",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
-            except Exception:
-                pass
-
-        self._loop.create_task(_reap())
+        self._loop.create_task(play_system_sound(sound))
 
     async def _visual_bail(self) -> None:
         """Brief visual-only feedback on ASR failure, then cooldown.
@@ -773,12 +763,9 @@ class VoiceCommandOrchestrator:
         self._interrupt.set()
         self._kill_tts()
 
-        # Cancel the pending ASR future so the pipeline doesn't hang
+        # Cancel the pending ASR so the pipeline doesn't hang
         # waiting for speech that will never come.
-        if self._asr_future is not None and not self._asr_future.done():
-            self._asr_future.cancel()
-            # Tell the widget to stop listening immediately
-            self.socket.send_command(StopASRCommand().to_message())
+        self._asr_backend.cancel()
 
     async def _bail(self, message: str) -> None:
         """Speak an error/abort message and transition to COOLDOWN."""
@@ -789,6 +776,7 @@ class VoiceCommandOrchestrator:
         """TTS via macOS say command. Killable via _interrupt / _tts_proc."""
         if not self.tts_enabled:
             return
+        self.wake.mute()
         try:
             self._tts_proc = await asyncio.create_subprocess_exec(
                 "say",
@@ -803,3 +791,4 @@ class VoiceCommandOrchestrator:
             logger.exception("TTS failed")
         finally:
             self._tts_proc = None
+            self.wake.unmute()

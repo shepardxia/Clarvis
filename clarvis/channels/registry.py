@@ -1,0 +1,185 @@
+"""Global user registry — persistent identity store for cross-channel users.
+
+Stores user profiles with names, affiliations, and per-channel IDs in
+``~/.clarvis/registry.json``.  Thread-safe with auto-save on mutation.
+"""
+
+import copy
+import logging
+from pathlib import Path
+from threading import RLock
+from typing import Any
+
+from ..core.persistence import json_load_safe, json_save_atomic
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_PATH = Path.home() / ".clarvis" / "registry.json"
+
+
+class UserRegistry:
+    """Thread-safe persistent user registry.
+
+    Schema (``~/.clarvis/registry.json``)::
+
+        {
+          "users": {
+            "shepardxia": {
+              "names": ["Shepard", "Shep"],
+              "affiliations": ["CS Lab"],
+              "channels": {
+                "discord": {"user_id": "650197363591348250"}
+              }
+            }
+          }
+        }
+    """
+
+    def __init__(self, path: Path = _DEFAULT_PATH):
+        self._path = path
+        self._lock = RLock()
+        self._data: dict[str, Any] = {"users": {}}
+        self.load()
+
+    def load(self) -> None:
+        """Load registry from disk."""
+        with self._lock:
+            raw = json_load_safe(self._path)
+            if isinstance(raw, dict) and "users" in raw:
+                self._data = raw
+            else:
+                self._data = {"users": {}}
+
+    def save(self) -> bool:
+        """Persist registry to disk atomically."""
+        with self._lock:
+            return json_save_atomic(self._path, self._data)
+
+    @property
+    def orgs(self) -> list[str]:
+        """Predefined org names (seeded in registry.json)."""
+        with self._lock:
+            return list(self._data.get("orgs", []))
+
+    def is_valid_org(self, name: str) -> bool:
+        """Check if an org name is in the predefined list (case-insensitive)."""
+        lower = name.lower()
+        return any(o.lower() == lower for o in self.orgs)
+
+    def add_org(self, name: str) -> bool:
+        """Add an org to the predefined list. Returns False if already present."""
+        with self._lock:
+            orgs = self._data.setdefault("orgs", [])
+            if any(o.lower() == name.lower() for o in orgs):
+                return False
+            orgs.append(name)
+            self.save()
+            return True
+
+    def remove_org(self, name: str) -> bool:
+        """Remove an org from the predefined list (case-insensitive). Returns False if not found."""
+        with self._lock:
+            orgs = self._data.get("orgs", [])
+            lower = name.lower()
+            for i, o in enumerate(orgs):
+                if o.lower() == lower:
+                    orgs.pop(i)
+                    self.save()
+                    return True
+            return False
+
+    @property
+    def users(self) -> dict[str, dict]:
+        with self._lock:
+            return copy.deepcopy(self._data.get("users", {}))
+
+    def get_by_channel_id(self, channel: str, user_id: str) -> dict | None:
+        """Look up a user by their channel-specific ID.
+
+        Returns the full user dict (names, affiliations, channels) or None.
+        """
+        with self._lock:
+            for _username, profile in self._data.get("users", {}).items():
+                ch_info = profile.get("channels", {}).get(channel, {})
+                if ch_info.get("user_id") == user_id:
+                    return dict(profile)
+        return None
+
+    def get_by_name(self, name: str) -> dict | None:
+        """Look up a user by username key or any name in their names list.
+
+        Case-insensitive matching.
+        """
+        lower = name.lower()
+        with self._lock:
+            for username, profile in self._data.get("users", {}).items():
+                if username.lower() == lower:
+                    return dict(profile)
+                for n in profile.get("names", []):
+                    if n.lower() == lower:
+                        return dict(profile)
+        return None
+
+    def register(
+        self,
+        username: str,
+        names: list[str] | None = None,
+        affiliations: list[str] | None = None,
+        channel: str | None = None,
+        channel_user_id: str | None = None,
+    ) -> None:
+        """Add or update a user in the registry.
+
+        Merges into existing profile if username already exists.
+        """
+        with self._lock:
+            users = self._data.setdefault("users", {})
+            profile = users.setdefault(username, {})
+            if names is not None:
+                profile["names"] = names
+            if affiliations is not None:
+                profile["affiliations"] = affiliations
+            if channel and channel_user_id:
+                channels = profile.setdefault("channels", {})
+                channels[channel] = {"user_id": channel_user_id}
+            self.save()
+
+    def unregister(self, channel: str, user_id: str) -> str | None:
+        """Remove a user by their channel-specific ID.
+
+        Removes the channel entry.  If no channels remain, removes the
+        entire user.  Returns the removed username, or None if not found.
+        """
+        with self._lock:
+            for username, profile in self._data.get("users", {}).items():
+                ch_info = profile.get("channels", {}).get(channel, {})
+                if ch_info.get("user_id") != user_id:
+                    continue
+                del profile["channels"][channel]
+                if not profile["channels"]:
+                    del self._data["users"][username]
+                self.save()
+                return username
+        return None
+
+    def is_registered(self, channel: str, user_id: str) -> bool:
+        """Check if a user is registered for the given channel."""
+        return self.get_by_channel_id(channel, user_id) is not None
+
+    def all_name_mappings(self, channel: str) -> dict[str, str]:
+        """Return ``{name: channel_user_id}`` for all users on a channel.
+
+        Maps both the username key and all names in the names list to the
+        channel user ID.  Used for @mention replacement in outbound messages.
+        """
+        mappings: dict[str, str] = {}
+        with self._lock:
+            for username, profile in self._data.get("users", {}).items():
+                ch_info = profile.get("channels", {}).get(channel, {})
+                uid = ch_info.get("user_id")
+                if not uid:
+                    continue
+                mappings[username] = uid
+                for name in profile.get("names", []):
+                    mappings[name] = uid
+        return mappings

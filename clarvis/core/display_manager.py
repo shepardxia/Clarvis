@@ -1,10 +1,8 @@
 """Manages display rendering and frame output."""
 
-from __future__ import annotations
-
 import threading
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Tuple
 
 from .colors import StatusColors
 
@@ -19,8 +17,8 @@ class DisplayManager:
 
     def __init__(
         self,
-        renderer: FrameRenderer,
-        socket_server: WidgetSocketServer,
+        renderer: "FrameRenderer",
+        socket_server: "WidgetSocketServer",
         fps: int = 2,
     ):
         self.renderer = renderer
@@ -29,8 +27,10 @@ class DisplayManager:
 
         self._lock = threading.Lock()
         self._running = False
+        self._frozen = False
+        self._wake_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._state_store: Optional[StateStore] = None
+        self._state_store: Optional["StateStore"] = None
 
     def push_frame(self, output: dict) -> None:
         """Push frame to socket."""
@@ -54,6 +54,16 @@ class DisplayManager:
     def set_fps(self, fps: int) -> None:
         """Update render FPS. Takes effect on the next loop iteration."""
         self.fps = max(1, fps)
+
+    def freeze(self) -> None:
+        """Freeze rendering — zero CPU until wake() is called."""
+        self._frozen = True
+
+    def wake(self) -> None:
+        """Resume rendering from frozen state."""
+        if self._frozen:
+            self._frozen = False
+            self._wake_event.set()
 
     def _update_voice_text(self) -> None:
         """Calculate and apply voice text reveal state from state store."""
@@ -99,13 +109,22 @@ class DisplayManager:
             style=mic.get("style", "bracket"),
         )
 
-    def _loop(self, get_state: callable) -> None:
+    def _loop(self, get_state: Callable[[], Tuple[str, float]]) -> None:
         """Display rendering loop.
 
         All state reads and rendering happen under a single lock acquisition
         to prevent mid-frame tearing (e.g., stale voice text with new status).
+
+        When frozen, the thread sleeps on an Event with zero CPU cost.
+        wake() resumes rendering instantly.
         """
         while self._running:
+            # Frozen: sleep until wake() is called
+            if self._frozen:
+                self._wake_event.wait(timeout=5.0)
+                self._wake_event.clear()
+                continue
+
             interval = 1.0 / self.fps
             start = time.time()
 
@@ -113,9 +132,9 @@ class DisplayManager:
             with self._lock:
                 self._update_voice_text()
                 self._update_mic_state()
-                status, context_percent, whimsy_verb = get_state()
+                status, context_percent = get_state()
                 color_def = StatusColors.get(status)
-                rows, cell_colors = self.renderer.render_grid(context_percent, whimsy_verb)
+                rows, cell_colors = self.renderer.render_grid(context_percent)
                 output = {
                     "rows": rows,
                     "cell_colors": cell_colors,
@@ -127,11 +146,11 @@ class DisplayManager:
             sleep_time = max(0, interval - elapsed)
             time.sleep(sleep_time)
 
-    def start(self, get_state: callable, state_store: Optional[StateStore] = None) -> None:
+    def start(self, get_state: Callable[[], Tuple[str, float]], state_store: Optional["StateStore"] = None) -> None:
         """Start the display loop.
 
         Args:
-            get_state: Callable returning (status, context_percent, whimsy_verb)
+            get_state: Callable returning (status, context_percent)
             state_store: Optional StateStore for voice text reveal calculation
         """
         if self._thread is not None and self._thread.is_alive():
@@ -149,6 +168,7 @@ class DisplayManager:
     def stop(self) -> None:
         """Stop the display loop."""
         self._running = False
+        self._wake_event.set()  # Unblock if frozen
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None

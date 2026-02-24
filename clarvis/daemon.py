@@ -10,55 +10,47 @@ CentralHubDaemon is the orchestration layer that wires together:
 - StateStore: single source of truth for all state
 """
 
-from __future__ import annotations
-
 import asyncio
-import atexit
-import fcntl
 import logging
 import os
 import signal
 import sys
-import threading
-import time
 from pathlib import Path
 from typing import Optional
 
+from filelock import FileLock, Timeout
+
 from .core.command_handlers import CommandHandlers
+from .core.context import AppContext
 from .core.display_manager import DisplayManager
 from .core.hook_processor import HookProcessor
 from .core.ipc import DaemonServer
+from .core.persistence import json_load_safe
 from .core.refresh_manager import RefreshManager
 from .core.scheduler import Scheduler
 from .core.session_tracker import SessionTracker
 from .core.signals import SignalBus
 from .core.state import StateStore, get_state_store
-from .services.context_accumulator import ContextAccumulator, extract_project_from_slug
+from .services.context_accumulator import ContextAccumulator
 from .services.timer_service import TimerService
 from .widget.click_regions import ClickRegion, ClickRegionManager
-from .widget.config import get_config
+from .widget.config import CONFIG_PATH, get_config
 from .widget.renderer import FrameRenderer
 from .widget.socket_server import WidgetSocketServer, get_socket_server
 
 logger = logging.getLogger(__name__)
 
+STALENESS_TIMEOUT_SECONDS = 30
+
 
 class PidLock:
-    """Ensures only one daemon instance runs at a time using PID file locking.
-
-    Features:
-    - Atomic locking with fcntl.flock()
-    - Stale PID detection (handles crashed processes)
-    - Signal handler registration for cleanup
-    - Context manager support
-    """
+    """Ensures only one daemon instance runs at a time using filelock."""
 
     DEFAULT_PID_FILE = Path("/tmp/clarvis-daemon.pid")
 
     def __init__(self, pid_file: Path = None):
         self.pid_file = pid_file or self.DEFAULT_PID_FILE
-        self._lock_fd: Optional[int] = None
-        self._original_handlers: dict = {}
+        self._lock = FileLock(str(self.pid_file) + ".lock")
 
     def acquire(self) -> bool:
         """Attempt to acquire the daemon lock.
@@ -66,71 +58,28 @@ class PidLock:
         Returns:
             True if lock acquired, False if another instance is running.
         """
-        if self.pid_file.exists():
-            try:
-                old_pid = int(self.pid_file.read_text().strip())
-                os.kill(old_pid, 0)
-            except (ValueError, ProcessLookupError, PermissionError):
-                try:
-                    self.pid_file.unlink()
-                except OSError:
-                    pass
-
         try:
-            self._lock_fd = os.open(str(self.pid_file), os.O_RDWR | os.O_CREAT, 0o644)
-        except OSError as e:
-            print(f"Error: Cannot create PID file {self.pid_file}: {e}", file=sys.stderr)
-            return False
-
-        try:
-            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, OSError):
-            os.close(self._lock_fd)
-            self._lock_fd = None
+            self._lock.acquire(timeout=0)
+            self.pid_file.write_text(f"{os.getpid()}\n")
+            return True
+        except Timeout:
             try:
-                existing_pid = self.pid_file.read_text().strip()
-                print(f"Error: Daemon already running (PID {existing_pid})", file=sys.stderr)
+                pid = self.pid_file.read_text().strip()
+                logger.error("Daemon already running (PID %s)", pid)
             except Exception:
-                print("Error: Daemon already running", file=sys.stderr)
+                logger.error("Daemon already running")
             return False
-
-        os.ftruncate(self._lock_fd, 0)
-        os.write(self._lock_fd, f"{os.getpid()}\n".encode())
-        os.fsync(self._lock_fd)
-
-        self._register_signal_handlers()
-        atexit.register(self.release)
-        return True
 
     def release(self) -> None:
         """Release the daemon lock and clean up."""
-        if self._lock_fd is not None:
-            try:
-                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-                os.close(self._lock_fd)
-            except OSError:
-                pass
-            self._lock_fd = None
-
         try:
-            self.pid_file.unlink()
+            self.pid_file.unlink(missing_ok=True)
         except OSError:
             pass
-
-        for sig, handler in self._original_handlers.items():
-            signal.signal(sig, handler)
-        self._original_handlers.clear()
-
-    def _register_signal_handlers(self) -> None:
-        """Register signal handlers for graceful cleanup."""
-
-        def cleanup_handler(signum, frame):
-            self.release()
-            signal.signal(signum, signal.SIG_DFL)
-            os.kill(os.getpid(), signum)
-
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            self._original_handlers[sig] = signal.signal(sig, cleanup_handler)
+        try:
+            self._lock.release()
+        except Exception:
+            pass
 
     def __enter__(self) -> "PidLock":
         if not self.acquire():
@@ -175,30 +124,50 @@ class CentralHubDaemon:
         self.state = state_store or get_state_store()
         self.session_tracker = SessionTracker(self.state)
         self.command_server = DaemonServer()
-        self.token_usage_service = None
         self.wake_word_service = None
+        self._agents = {}  # str -> Agent, populated by _init_agents / _init_channel_manager
+        self._force_new = False  # Set from CLARVIS_NEW_CONVERSATION env var
         self.voice_agent = None
         self.voice_orchestrator = None
-        self.context_accumulator = ContextAccumulator()
+        self.channel_manager = None
+        self.context_accumulator = None
+        self._wakeup_manager = None
+        self._owned_services: list = []  # services with no other refs (prevent GC)
 
-        # Memory service (optional — requires cognee)
+        # Memory service (optional — requires graphiti + memu)
         self.memory_service = None
+        self._ingestion_pipeline = None
         if config.memory.enabled:
             try:
-                from .services.cognee_memory import CogneeMemoryService
+                from .services.memory import DualMemoryService
+                from .services.memory.ingestion import IngestionPipeline
 
-                self.memory_service = CogneeMemoryService()
+                self.memory_service = DualMemoryService(
+                    data_dir=config.memory.data_dir,
+                    dataset_configs=config.memory.datasets,
+                    model=config.memory.model,
+                )
+                self._ingestion_pipeline = IngestionPipeline(
+                    state_dir=Path(config.memory.data_dir).expanduser(),
+                    memory_service=self.memory_service,
+                )
             except ImportError:
-                logger.info("cognee not installed — memory disabled")
-        # Home project path — only stage sessions from this project
-        self._home_project = Path(__file__).resolve().parents[2]
-        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+                logger.info("graphiti/memu not installed — memory disabled")
+        # Home project slug — only stage sessions from this project.
+        # Encode path the same way Claude Code names its projects/ dirs:
+        # replace "." → "-", then "/" → "-".
+        _home_path = str(Path.home() / ".clarvis" / "home")
+        self._home_slug = _home_path.replace(".", "-").replace("/", "-")
+        self.ctx: Optional[AppContext] = None
         self._mcp_task: Optional[asyncio.Task] = None
+        self._staleness_handle: Optional[asyncio.TimerHandle] = None
         self.scheduler: Optional[Scheduler] = None
         self.timer_service: Optional[TimerService] = None
         self.bus: Optional[SignalBus] = None
 
         self.running = False
+        self._stopped = False
+        self._shutdown_event: Optional[asyncio.Event] = None
 
         # Display manager with pre-warmed renderer
         renderer = FrameRenderer(
@@ -217,17 +186,6 @@ class CentralHubDaemon:
             fps=self.display_fps,
         )
 
-        # Whimsy verb manager (optional — requires anthropic)
-        self.whimsy = None
-        try:
-            from .services.whimsy_verb import WhimsyManager
-
-            self.whimsy = WhimsyManager(
-                context_provider=lambda: self.hook_processor.get_rich_context(),
-            )
-        except ImportError:
-            logger.info("anthropic not installed — whimsy verbs disabled")
-
         # Refresh manager (passive — Scheduler drives it)
         self.refresh = RefreshManager(
             state=self.state,
@@ -241,15 +199,8 @@ class CentralHubDaemon:
         )
 
         # Command handlers (IPC request handlers for MCP server)
-        self.commands = CommandHandlers(
-            state=self.state,
-            session_tracker=self.session_tracker,
-            refresh=self.refresh,
-            whimsy=self.whimsy,
-            command_server=self.command_server,
-            token_usage_service_provider=lambda: self.token_usage_service,
-            voice_orchestrator_provider=lambda: self.voice_orchestrator,
-        )
+        # CommandHandlers created in run() after AppContext is available
+        self.commands = None
 
     # --- Hook event processing (delegated to HookProcessor) ---
 
@@ -259,11 +210,7 @@ class CentralHubDaemon:
 
     def _handle_hook_event(self, **raw_data) -> dict:
         """Process a hook event received via IPC (replaces file-based watcher)."""
-        # Stash transcript_path for whimsy context
         tp = raw_data.get("transcript_path")
-        if tp:
-            self.hook_processor.last_transcript_path = tp
-
         processed = self.process_hook_event(raw_data)
         self.state.update("status", processed)
 
@@ -271,26 +218,38 @@ class CentralHubDaemon:
             self.display.set_status(processed.get("status", "idle"))
 
         event = raw_data.get("hook_event_name")
-        if event:
-            self.whimsy.maybe_generate(event)
         self.session_tracker.cleanup_stale()
 
-        # Stage completed sessions for memory check-in (home project only)
-        if event == "Stop" and tp and self.context_accumulator:
-            slug = Path(tp).parent.name
-            _, project_path = extract_project_from_slug(slug)
-            if Path(project_path).resolve() == self._home_project:
-                session_id = raw_data.get("session_id", "unknown")
-                self.context_accumulator.stage_session(session_id, tp)
+        if event and event != "Stop":
+            self._reset_staleness_timer()
 
-        if event != "Stop" and self.scheduler:
-            self.scheduler.set_mode("active")
+        # Enriched signal — services self-subscribe for side effects
+        if self.bus:
+            session_id = raw_data.get("session_id", "unknown")
+            self.bus.emit(
+                "hook:event",
+                event_name=event,
+                session_id=session_id,
+                transcript_path=tp,  # may be None
+            )
 
-    # --- Staleness check (called by Scheduler) ---
+    # --- Staleness timer (signal-driven, replaces polling) ---
 
-    def _check_staleness(self) -> None:
-        """Check for stale status and reset to idle + switch to idle mode."""
-        stale_reset = self.hook_processor.check_status_staleness()
+    def _reset_staleness_timer(self) -> None:
+        """Reset the 30s staleness timer. Called from IPC thread on each hook event."""
+        if not self.ctx:
+            return
+
+        def _reset():
+            if self._staleness_handle is not None:
+                self._staleness_handle.cancel()
+            self._staleness_handle = self.ctx.loop.call_later(STALENESS_TIMEOUT_SECONDS, self._go_stale)
+
+        self.ctx.loop.call_soon_threadsafe(_reset)
+
+    def _go_stale(self) -> None:
+        """Fire once after 30s of silence — reset status to idle."""
+        stale_reset = self.hook_processor.check_status_staleness(STALENESS_TIMEOUT_SECONDS)
         if stale_reset and not self.state.status_locked:
             self.display.set_status("idle")
             if self.scheduler:
@@ -308,65 +267,106 @@ class CentralHubDaemon:
     def _on_mode_change(self, mode: str) -> None:
         """Handle scheduler mode transitions — adjust display FPS."""
         if mode == "active":
+            self.display.wake()
             self.display.set_fps(self.display_fps)
         else:
             self.display.set_fps(1)
+            mic = self.state.get("mic") or {}
+            if not mic.get("enabled"):
+                self.display.freeze()
 
     # --- Display state ---
 
-    def _get_display_state(self) -> tuple[str, float, str | None]:
+    def _get_display_state(self) -> tuple[str, float]:
         """Get current display state for rendering.
 
         Returns:
-            Tuple of (status, context_percent, whimsy_verb)
+            Tuple of (status, context_percent)
         """
-        config = get_config()
+        config = self.ctx.config
 
         if config.testing.enabled:
             self.display.set_status(config.testing.status)
             self.display.set_weather(
                 config.testing.weather, config.testing.weather_intensity, config.testing.wind_speed
             )
-            return config.testing.status, config.testing.context_percent, self.whimsy.current_verb
+            return config.testing.status, config.testing.context_percent
 
         status = self.state.get("status")
         context_percent = status.get("context_percent", 0) if status else 0
         display_status = status.get("status", "idle") if status else "idle"
-        return display_status, context_percent, self.whimsy.current_verb
+        return display_status, context_percent
 
     # --- Voice pipeline ---
 
-    def _init_voice_pipeline(self) -> None:
-        """Initialize voice agent + orchestrator with the captured event loop.
+    def _init_agents(self) -> None:
+        """Create the master (voice/terminal) Agent.
 
-        Called from run() after self._event_loop is set, so both
-        components receive the loop for consistent thread-to-async bridging.
+        Called from run() after AppContext is set.  The master agent
+        serves voice and ``clarvis chat``.  Online channels get a shared
+        agent in ``_init_channel_manager()``.
         """
-        config = get_config()
+        if self.ctx is None:
+            return
+
+        config = self.ctx.config
+        self._force_new = bool(os.environ.pop("CLARVIS_NEW_CONVERSATION", None))
+
+        # Read channels config early — needed by both voice gate and _init_channel_manager
+        raw_config = json_load_safe(CONFIG_PATH) or {}
+        self._channels_config = raw_config.get("channels") or {}
+        has_channels = any(ch.get("enabled") for ch in self._channels_config.values() if isinstance(ch, dict))
+
+        if not config.voice.enabled and not has_channels:
+            return
+
+        # Main Clarvis agent — shared by voice and terminal chat
+        if config.voice.enabled:
+            from .channels.agent_factory import create_master_agent
+
+            agent = create_master_agent(
+                event_loop=self.ctx.loop,
+                model=config.voice.model,
+                max_thinking_tokens=config.voice.max_thinking_tokens,
+                force_new=self._force_new,
+                mcp_port=config.mcp.home_port,
+            )
+            self._agents["voice"] = agent
+            self.voice_agent = agent
+
+    def _init_voice_pipeline(self) -> None:
+        """Initialize voice orchestrator with the captured event loop.
+
+        Called from run() after AppContext and voice agent are set.
+        The voice agent is already a self-contained Agent created in
+        ``_init_agents()``.
+        """
+        config = self.ctx.config
         needs_voice = (
-            config.wake_word.enabled
+            config.voice.wake_word.enabled
             and config.voice.enabled
             and self.wake_word_service is not None
-            and self._event_loop is not None
+            and self.voice_agent is not None
         )
         if not needs_voice:
             return
 
-        from .services.voice_agent import VoiceAgent
-        from .services.voice_orchestrator import VoiceCommandOrchestrator
+        from .channels.voice.asr import WidgetASRBackend
+        from .channels.voice.orchestrator import VoiceCommandOrchestrator
 
-        self.voice_agent = VoiceAgent(
-            event_loop=self._event_loop,
-            model=config.voice.model,
-            max_thinking_tokens=config.voice.max_thinking_tokens,
-            idle_timeout=config.voice.idle_timeout,
+        asr_backend = WidgetASRBackend(
+            event_loop=self.ctx.loop,
+            socket_server=self.socket_server,
         )
+
         self.voice_orchestrator = VoiceCommandOrchestrator(
-            event_loop=self._event_loop,
+            event_loop=self.ctx.loop,
             socket_server=self.socket_server,
             voice_agent=self.voice_agent,
             state_store=self.state,
             wake_word_service=self.wake_word_service,
+            asr_backend=asr_backend,
+            bus=self.bus,
             tts_voice=config.voice.tts_voice,
             tts_speed=config.voice.tts_speed,
             tts_enabled=config.voice.tts_enabled,
@@ -375,9 +375,141 @@ class CentralHubDaemon:
             silence_timeout=config.voice.silence_timeout,
             text_linger=config.voice.text_linger,
         )
+        self.voice_orchestrator.memory_service = self.memory_service
+        # Orchestrator now self-subscribes to wake_word signals via bus;
+        # remove the daemon fallback so both don't fire.
+        if self.bus:
+            self.bus.off("wake_word:detected", self._fallback_wake_word)
+
         # Register mic toggle region
         self._register_mic_region()
-        print("[Daemon] Voice command pipeline initialized", flush=True)
+        logger.info("Voice command pipeline initialized")
+
+    def _init_wakeup(self) -> None:
+        """Wire WakeupManager for autonomous context-rich prompts.
+
+        Only active when backend is 'pi' and wakeup is enabled.
+        Called from run() after agents are created.
+        """
+        config = self.ctx.config
+        if config.channels.agent_backend != "pi":
+            return
+        if not config.channels.wakeup.enabled:
+            return
+
+        voice_agent = self._agents.get("voice")
+        if not voice_agent:
+            return
+
+        from .core.wakeup import WakeupManager
+        from .services.consolidation import ConversationConsolidator
+
+        consolidator = ConversationConsolidator(
+            memory_service=self.memory_service,
+            threshold=config.channels.wakeup.consolidation_threshold,
+        )
+
+        # Lazy Spotify session getter (same as MCP tools use)
+        def _get_spotify_session():
+            try:
+                from .mcp.spotify_tools import _default_get_session
+
+                return _default_get_session()
+            except Exception:
+                return None
+
+        self._wakeup_manager = WakeupManager(
+            agent=voice_agent,
+            state_store=self.state,
+            memory_service=self.memory_service,
+            consolidator=consolidator,
+            get_spotify_session=_get_spotify_session,
+        )
+
+        # Register pulse wakeup with scheduler
+        pulse_secs = config.channels.wakeup.pulse_interval_minutes * 60
+        self.scheduler.register(
+            "wakeup_pulse",
+            lambda: asyncio.ensure_future(self._wakeup_manager.on_pulse()),
+            active_interval=pulse_secs,
+            idle_interval=pulse_secs * 2,
+        )
+
+        # Subscribe to timer:fired for wake_clarvis timers
+        self.bus.on(
+            "timer:fired", lambda sig, **kw: asyncio.ensure_future(self._wakeup_manager.on_timer_fired(sig, **kw))
+        )
+
+        logger.info(
+            "WakeupManager active (pulse=%dm, consolidation_threshold=%d)",
+            config.channels.wakeup.pulse_interval_minutes,
+            config.channels.wakeup.consolidation_threshold,
+        )
+
+    async def _init_channel_manager(self) -> None:
+        """Initialize online channels with a single shared agent.
+
+        All online channels (Discord, Telegram, etc.) share one agent at
+        ``~/.clarvis/channels/`` with serialized access.  The master agent
+        (voice + terminal) is set up separately in ``_init_agents()``.
+        """
+        channels_config = getattr(self, "_channels_config", None) or {}
+        if not any(ch.get("enabled") for ch in channels_config.values() if isinstance(ch, dict)):
+            return
+
+        config = self.ctx.config
+
+        try:
+            from .channels.agent_factory import create_channel_agent
+            from .channels.manager import ChannelManager
+            from .channels.registry import UserRegistry
+            from .channels.state import ChannelState
+            from .mcp.server import CHANNEL_DEFAULTS
+
+            # Determine MCP port and tools config for shared channel agent
+            # Merge order: CHANNEL_DEFAULTS ← channels.tools ← per-channel tools
+            tools_cfg = dict(CHANNEL_DEFAULTS)
+            if config.channels.tools:
+                tools_cfg.update(config.channels.tools)
+            for ch_cfg in channels_config.values():
+                if not isinstance(ch_cfg, dict):
+                    continue
+                if ch_cfg.get("enabled"):
+                    tools_cfg.update(ch_cfg.get("tools", {}))
+            ch_port = config.mcp.channel_port
+            self._channel_ports = [(tools_cfg, ch_port)]
+
+            # Single shared agent for all online channels
+            channel_agent = create_channel_agent(
+                event_loop=self.ctx.loop,
+                tools_config=tools_cfg,
+                model=config.channels.model or config.voice.model,
+                max_thinking_tokens=config.channels.max_thinking_tokens or config.voice.max_thinking_tokens,
+                force_new=self._force_new,
+                mcp_port=ch_port,
+            )
+            self._agents["channels"] = channel_agent
+
+            registry = UserRegistry()
+            state = ChannelState()
+
+            self.channel_manager = ChannelManager(
+                agent=channel_agent,
+                channels_config=channels_config,
+                registry=registry,
+                state=state,
+                memory_service=self.memory_service,
+            )
+            await self.channel_manager.start()
+
+            # Bind voice channel to orchestrator for outbound TTS
+            if self.voice_orchestrator and self.channel_manager.voice_channel:
+                self.channel_manager.voice_channel.set_orchestrator(self.voice_orchestrator)
+
+            enabled = self.channel_manager.enabled_channels
+            logger.info("Channels: %s", ", ".join(enabled))
+        except Exception:
+            logger.exception("Failed to start channel service")
 
     def _handle_widget_message(self, message: dict) -> None:
         """General dispatcher for messages from the widget.
@@ -388,8 +520,8 @@ class CentralHubDaemon:
         method = message.get("method")
         if method == "region_click":
             region_id = message.get("params", {}).get("id", "")
-            if self._event_loop:
-                self._event_loop.call_soon_threadsafe(self.click_manager.handle_click, region_id)
+            if self.ctx:
+                self.ctx.loop.call_soon_threadsafe(self.click_manager.handle_click, region_id)
         elif self.voice_orchestrator:
             self.voice_orchestrator.handle_widget_message(message)
 
@@ -422,98 +554,33 @@ class CentralHubDaemon:
                 self.voice_orchestrator.cancel()
             self.wake_word_service.pause()
             self.state.update("mic", {"visible": True, "enabled": False, "style": "bracket"})
-            print("[Daemon] Voice disabled (mic toggled off)", flush=True)
+            logger.info("Voice disabled (mic toggled off)")
+            # Freeze display if already in idle mode
+            if self.scheduler and self.scheduler.mode == "idle":
+                self.display.freeze()
         else:
             self.wake_word_service.resume()
             self.state.update("mic", {"visible": True, "enabled": True, "style": "bracket"})
-            print("[Daemon] Voice enabled (mic toggled on)", flush=True)
+            logger.info("Voice enabled (mic toggled on)")
+            # Wake display if frozen
+            self.display.wake()
 
-    def _on_wake_word_detected(self) -> None:
-        """Handle wake word detection -- trigger voice command pipeline.
-
-        Called from nanobuddy's detector thread, NOT the asyncio event loop.
-        """
-        print("[Daemon] Wake word detected", flush=True)
-
-        if self.voice_orchestrator and self._event_loop:
-            future = asyncio.run_coroutine_threadsafe(
-                self.voice_orchestrator.on_wake_word(),
-                self._event_loop,
-            )
-
-            def _on_done(f):
-                exc = f.exception()
-                if exc:
-                    import traceback
-
-                    print(f"[Daemon] on_wake_word failed: {exc}", flush=True)
-                    traceback.print_exception(type(exc), exc, exc.__traceback__)
-
-            future.add_done_callback(_on_done)
-            return
-
-        # Fallback when voice pipeline is not initialized: brief activation flash.
-        self.display.set_status("activated")
-
-        def revert_after_delay() -> None:
-            time.sleep(2.0)
-            current = self.state.get("status")
-            current_status = current.get("status", "idle") if current else "idle"
-            if current_status == "activated":
-                self.display.set_status("awaiting")
-
-        threading.Thread(target=revert_after_delay, daemon=True).start()
-
-    # --- Timer notifications ---
-
-    def _on_timer_fired(self, signal: str, *, name: str, label: str, trigger: str, **kw) -> None:
-        """Handle timer:fired signal — dispatch based on trigger type."""
-        if trigger == "voice":
-            self._timer_voice(name, label)
-        else:
-            self._timer_simple(name, label)
-
-    def _timer_simple(self, name: str, label: str) -> None:
-        """Flash the widget to 'activated' and play a notification sound."""
+    def _fallback_wake_word(self, signal: str, **kw) -> None:
+        """Brief activation flash when voice pipeline is not active."""
         self.display.set_status("activated")
 
         def _revert() -> None:
             current = self.state.get("status")
             current_status = current.get("status", "idle") if current else "idle"
             if current_status == "activated":
-                self.display.set_status("idle")
+                self.display.set_status("awaiting")
 
-        self._event_loop.call_later(2.0, _revert)
-
-        async def _play_sound() -> None:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "afplay",
-                    "/System/Library/Sounds/Glass.aiff",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
-            except Exception:
-                pass
-
-        self._event_loop.create_task(_play_sound())
-
-    def _timer_voice(self, name: str, label: str) -> None:
-        """Wake the voice assistant to announce a fired timer."""
-        if not self.voice_orchestrator:
-            self._timer_simple(name, label)
-            return
-
-        display_name = label or name
-        prompt = f"Timer '{display_name}' just fired."
-        if label and label != name:
-            prompt = f"Timer '{name}' just fired. Label: {label}"
-        self._event_loop.create_task(self.voice_orchestrator.notify(prompt))
+        if self.ctx:
+            self.ctx.loop.call_later(2.0, _revert)
 
     # --- Lifecycle ---
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """Start the daemon."""
         if self.running:
             return
@@ -530,45 +597,49 @@ class CentralHubDaemon:
         self.socket_server.on_message(self._handle_widget_message)
         self.socket_server.on_connect(self.click_manager.push_regions)
 
-        # Token usage service (optional — requires anthropic)
-        config = get_config()
-        if config.token_usage.enabled:
+        # Memory service (start backends — heavy imports run in executor)
+        if self.memory_service is not None:
             try:
-                from .services.token_usage import TokenUsageService
-
-                self.token_usage_service = TokenUsageService(poll_interval=config.token_usage.poll_interval)
-                self.token_usage_service.start()
-            except ImportError:
-                logger.info("requests not installed — token usage disabled")
+                await self.memory_service.start()
+                logger.info("DualMemoryService started")
+            except Exception:
+                logger.exception("Failed to start memory service")
+                self.memory_service = None
+                self._ingestion_pipeline = None
 
         # Wake word service (optional — requires nanobuddy)
-        if config.wake_word.enabled:
+        config = self.ctx.config
+        if config.voice.wake_word.enabled:
             try:
                 from .services.wake_word import WakeWordService
 
                 self.wake_word_service = WakeWordService(
                     state_store=self.state,
-                    config=config.wake_word,
-                    on_detected=self._on_wake_word_detected,
+                    config=config.voice.wake_word,
+                    bus=self.bus,
                 )
-                ww = config.wake_word
-                print(f"[Daemon] Starting wake word: model={ww.model} threshold={ww.threshold}", flush=True)
+                ww = config.voice.wake_word
+                logger.info("Starting wake word: model=%s threshold=%s rate=%s", ww.model, ww.threshold, ww.sample_rate)
                 self.wake_word_service.start()
+                # Fallback wake word handler — brief activation flash when voice
+                # pipeline is not initialized.  Overridden by
+                # VoiceCommandOrchestrator's own subscription when voice is active.
+                self.bus.on("wake_word:detected", self._fallback_wake_word)
             except ImportError:
                 logger.info("nanobuddy not installed — wake word disabled")
 
         # Display rendering
         self.display.start(self._get_display_state, state_store=self.state)
 
-        # Initial data refresh (blocking, runs once before Scheduler takes over)
-        self.refresh.refresh_all()
+        # Initial data refresh (fire-and-forget — Scheduler retries on 30s cadence)
+        self.ctx.loop.run_in_executor(None, self.refresh.refresh_all)
 
     def _start_scheduler(self) -> None:
         """Set up and start the unified Scheduler on the event loop.
 
         Called from run() after the event loop is captured.
         """
-        self.scheduler = Scheduler(self._event_loop)
+        self.scheduler = Scheduler(self.ctx)
 
         # Periodic data refresh (blocking HTTP I/O → executor)
         self.scheduler.register(
@@ -579,14 +650,6 @@ class CentralHubDaemon:
             blocking=True,
         )
 
-        # Staleness check (cheap, inline)
-        self.scheduler.register(
-            "staleness",
-            self._check_staleness,
-            active_interval=5,
-            idle_interval=30,
-        )
-
         # Health check — restart display thread if died (cheap, inline)
         self.scheduler.register(
             "health",
@@ -595,48 +658,65 @@ class CentralHubDaemon:
             idle_interval=30,
         )
 
-        # Thinking feed — poll transcript files for new thinking blocks
+        # Thinking feed — signal-driven transcript processing + lifecycle cleanup
         from .services.thinking_feed import get_session_manager
 
         session_mgr = get_session_manager()
+        session_mgr.connect(self.ctx)
+
+        # Lifecycle cleanup only (no file scanning) — relaxed interval
         self.scheduler.register(
-            "thinking_feed",
+            "thinking_feed_cleanup",
             session_mgr.poll_sessions,
-            active_interval=5,
-            idle_interval=30,
-            blocking=True,
+            active_interval=30,
+            idle_interval=60,
         )
 
         # FPS adjustment on mode change
         self.scheduler.on_mode_change(self._on_mode_change)
 
         # Timer service
-        self.bus = SignalBus(self._event_loop)
-        self.timer_service = TimerService(
-            bus=self.bus,
-            loop=self._event_loop,
-        )
+        self.timer_service = TimerService(ctx=self.ctx)
         self.timer_service.start()
-        self.bus.on("timer:fired", self._on_timer_fired)
+
+        from .services.timer_notifier import TimerNotifier
+
+        self._owned_services.append(
+            TimerNotifier(
+                ctx=self.ctx,
+                display=self.display,
+                voice_orchestrator_provider=lambda: self.voice_orchestrator,
+            )
+        )
 
         self.scheduler.start()
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop the daemon."""
-        if not self.running:
+        if self._stopped:
             return
 
+        self._stopped = True
         self.running = False
         # Kill any in-flight TTS immediately
         if self.voice_orchestrator:
             self.voice_orchestrator._kill_tts()
-        # Shut down voice agent — needs the event loop still running
-        if self.voice_agent and self._event_loop:
-            future = asyncio.run_coroutine_threadsafe(self.voice_agent.shutdown(), self._event_loop)
+        # Shut down all agents — we're inside the event loop, so await directly
+        for agent in self._agents.values():
             try:
-                future.result(timeout=5.0)
+                await asyncio.wait_for(agent.shutdown(), timeout=5.0)
             except Exception:
                 pass  # Best-effort — daemon is exiting anyway
+        # Stop channel manager
+        if self.channel_manager:
+            try:
+                await asyncio.wait_for(self.channel_manager.stop(), timeout=5.0)
+            except Exception:
+                pass
+
+        if self._staleness_handle is not None:
+            self._staleness_handle.cancel()
+            self._staleness_handle = None
 
         if self.timer_service:
             self.timer_service.stop()
@@ -648,9 +728,6 @@ class CentralHubDaemon:
         self.socket_server.stop()
         self.command_server.stop()
 
-        if self.token_usage_service:
-            self.token_usage_service.stop()
-
         if self.wake_word_service:
             self.wake_word_service.stop()
 
@@ -659,45 +736,128 @@ class CentralHubDaemon:
             self._mcp_task.cancel()
 
         # Stop memory service
-        if self.memory_service and self.memory_service._ready and self._event_loop:
+        if self.memory_service and self.memory_service._ready:
             try:
-                future = asyncio.run_coroutine_threadsafe(self.memory_service.stop(), self._event_loop)
-                future.result(timeout=5.0)
+                await asyncio.wait_for(self.memory_service.stop(), timeout=5.0)
             except Exception:
                 pass  # Best-effort — daemon is exiting anyway
 
     async def run(self) -> None:
         """Run the daemon until interrupted."""
-        self._event_loop = asyncio.get_running_loop()
-        self.start()
+        loop = asyncio.get_running_loop()
+        self.bus = SignalBus(loop)
+        self.ctx = AppContext(
+            loop=loop,
+            bus=self.bus,
+            state=self.state,
+            config=get_config(),
+        )
+        self._shutdown_event = asyncio.Event()
+
+        # Services that need AppContext — create here, before start()
+        self.context_accumulator = ContextAccumulator(
+            ctx=self.ctx,
+            home_slug=self._home_slug,
+        )
+
+        self.commands = CommandHandlers(
+            ctx=self.ctx,
+            session_tracker=self.session_tracker,
+            refresh=self.refresh,
+            command_server=self.command_server,
+            services={
+                "voice": lambda: self.voice_orchestrator,
+                "memory": lambda: self.memory_service,
+                "ingestion": lambda: self._ingestion_pipeline,
+                "agents": lambda: self._agents,
+            },
+        )
+
+        logger.info("Starting daemon services…")
+        await self.start()
+        logger.info("Daemon services started")
         self._start_scheduler()
+
+        self._init_agents()
         self._init_voice_pipeline()
+        self._init_wakeup()
 
-        # Start memory service (fire-and-forget)
-        config = get_config()
-        if self.memory_service is not None and config.memory.enabled:
-            asyncio.create_task(self.memory_service._safe_start(config.memory.to_dict()))
+        # Start channel manager (chat channels, gated behind channels extra)
+        await self._init_channel_manager()
 
-        # Start embedded MCP servers (standard + memory-enabled)
-        from .server import run_embedded
+        # Start embedded MCP servers — must be listening BEFORE eager-connect,
+        # otherwise CLI subprocesses hang trying to reach their MCP port.
+        from .mcp.server import run_embedded
 
-        self._mcp_task = asyncio.create_task(run_embedded(self, port=7777, memory_port=7778))
-        print("[Daemon] MCP :7777 (standard) :7778 (memory)", flush=True)
+        channel_ports = getattr(self, "_channel_ports", None)
+        voice_tools = self.ctx.config.voice.tools or None
+        mcp_ready = asyncio.Event()
+        mcp_error: list[BaseException] = []
+
+        def _on_mcp_done(task: asyncio.Task) -> None:
+            exc = task.exception() if not task.cancelled() else None
+            if exc is not None:
+                logger.error("MCP server task crashed: %s: %s", type(exc).__name__, exc)
+                mcp_error.append(exc)
+                mcp_ready.set()  # unblock the wait
+
+        logger.info("Starting MCP servers…")
+        mcp_cfg = self.ctx.config.mcp
+        self._mcp_task = asyncio.create_task(
+            run_embedded(
+                self,
+                port=mcp_cfg.standard_port,
+                memory_port=mcp_cfg.home_port,
+                channel_ports=channel_ports,
+                voice_tools_override=voice_tools,
+                ready=mcp_ready,
+            )
+        )
+        self._mcp_task.add_done_callback(_on_mcp_done)
 
         try:
-            # Event-driven — sleep indefinitely, all work happens via
-            # callbacks (scheduler timers, IPC handlers).
-            while self.running:
-                await asyncio.sleep(3600)
+            await asyncio.wait_for(mcp_ready.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.error("MCP servers failed to bind within 10s — check for port conflicts")
+            raise RuntimeError("MCP server startup timed out")
+
+        if mcp_error:
+            raise RuntimeError(f"MCP server failed to start: {mcp_error[0]}")
+
+        port_info = f":{mcp_cfg.standard_port} :{mcp_cfg.home_port}"
+        for _, cp in channel_ports or []:
+            port_info += f" :{cp}"
+        logger.info("MCP ports ready: %s", port_info)
+
+        # Eager-connect agents — MCP servers are listening, CLI won't hang
+        if self._agents:
+            agent_names = list(self._agents.keys())
+            logger.info("Connecting agents: %s", ", ".join(agent_names))
+            results = await asyncio.gather(
+                *(agent.connect_eager() for agent in self._agents.values()),
+                return_exceptions=True,
+            )
+            for name, result in zip(agent_names, results):
+                if isinstance(result, Exception):
+                    logger.warning("Agent %s eager-connect raised: %s", name, result)
+                else:
+                    logger.info("Agent %s eager-connect done", name)
+            logger.info("All agent connect_eager() calls completed")
+
+        logger.info("Daemon startup complete")
+        try:
+            await self._shutdown_event.wait()
         except KeyboardInterrupt:
             pass
         finally:
-            self.stop()
+            await self.stop()
 
 
 def main():
     """Entry point for daemon mode."""
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(name)s %(levelname)s: %(message)s")
+    from .core.log import setup_logging
+
+    setup_logging(Path("logs"))
     global _daemon_lock
 
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
@@ -710,6 +870,17 @@ def main():
 
         try:
             daemon = CentralHubDaemon()
+
+            def _handle_term(sig: int, frame: object) -> None:
+                logger.info("Received signal %s, shutting down…", signal.Signals(sig).name)
+                daemon.running = False
+                loop = daemon.ctx.loop if daemon.ctx else None
+                if loop and daemon._shutdown_event:
+                    loop.call_soon_threadsafe(daemon._shutdown_event.set)
+
+            signal.signal(signal.SIGTERM, _handle_term)
+            signal.signal(signal.SIGINT, _handle_term)
+
             asyncio.run(daemon.run())
         finally:
             _daemon_lock.release()

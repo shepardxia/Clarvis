@@ -5,108 +5,44 @@ Request:      {"method": "name", "params": {...}}  → response sent
 Notification: {"method": "name", "params": {...}, "notify": true}  → no response
 """
 
-from __future__ import annotations
-
 import json
 import os
 import socket
 import threading
 from typing import Any, Callable, Optional
 
+from .socket_base import UnixSocketServer
+
 COMMAND_SOCKET_PATH = "/tmp/clarvis-daemon.sock"
 
 
-class DaemonServer:
+class DaemonServer(UnixSocketServer):
     """
     Command server that runs inside the daemon.
     Handles requests from MCP and other clients.
     """
 
     def __init__(self, socket_path: str = COMMAND_SOCKET_PATH):
-        self.socket_path = socket_path
-        self.server_socket: socket.socket | None = None
-        self._running = False
-        self._accept_thread: threading.Thread | None = None
+        super().__init__(socket_path)
         self._handlers: dict[str, Callable[..., Any]] = {}
 
     def register(self, method: str, handler: Callable[..., Any]) -> None:
         """Register a method handler."""
         self._handlers[method] = handler
 
-    def start(self) -> None:
-        """Start the command server."""
-        if self._running:
-            return
-
-        # Clean up stale socket
-        if os.path.exists(self.socket_path):
-            os.unlink(self.socket_path)
-
-        self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind(self.socket_path)
-        self.server_socket.listen(5)
-        self.server_socket.settimeout(1.0)
-
-        self._running = True
-        self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
-        self._accept_thread.start()
-
-    def stop(self) -> None:
-        """Stop the command server."""
-        self._running = False
-
-        if self.server_socket:
-            try:
-                self.server_socket.close()
-            except Exception:
-                pass
-            self.server_socket = None
-
-        if self._accept_thread:
-            self._accept_thread.join(timeout=2.0)
-            self._accept_thread = None
-
-        if os.path.exists(self.socket_path):
-            try:
-                os.unlink(self.socket_path)
-            except Exception:
-                pass
-
-    def _accept_loop(self) -> None:
-        """Accept and handle connections."""
-        while self._running and self.server_socket:
-            try:
-                client, _ = self.server_socket.accept()
-                # Handle each client in a thread
-                threading.Thread(target=self._handle_client, args=(client,), daemon=True).start()
-            except socket.timeout:
-                continue
-            except OSError:
-                break
+    def _on_client_connected(self, client: socket.socket) -> None:
+        """Spawn a thread per client connection."""
+        threading.Thread(target=self._handle_client, args=(client,), daemon=True).start()
 
     def _handle_client(self, client: socket.socket) -> None:
         """Handle a single client connection."""
         try:
             client.settimeout(180.0)
-            buffer = b""
-
-            while True:
-                chunk = client.recv(4096)
-                if not chunk:
-                    break
-
-                buffer += chunk
-
-                # Process complete messages (newline-delimited)
-                while b"\n" in buffer:
-                    line, buffer = buffer.split(b"\n", 1)
-                    if line:
-                        response = self._process_request(line.decode("utf-8"))
-                        if response is not None:
-                            client.sendall(response.encode("utf-8") + b"\n")
-
-        except (socket.timeout, ConnectionResetError, BrokenPipeError):
+            for message in self.iter_messages(client):
+                response = self._process_request(message)
+                if response is not None:
+                    client.sendall(response.encode("utf-8") + b"\n")
+        except socket.timeout:
             pass
         finally:
             try:

@@ -5,30 +5,37 @@ Protocol: Newline-delimited JSON messages in both directions.
 - Widget → Daemon: results (have "method" key, e.g. "asr_result")
 """
 
-from __future__ import annotations
-
 import json
 import logging
-import os
 import socket
 import threading
 from typing import Callable
+
+try:
+    import orjson
+
+    def _serialize_frame(data: dict) -> bytes:
+        return orjson.dumps(data) + b"\n"
+except ImportError:
+
+    def _serialize_frame(data: dict) -> bytes:
+        return json.dumps(data).encode("utf-8") + b"\n"
+
+
+from ..core.socket_base import UnixSocketServer
 
 logger = logging.getLogger(__name__)
 
 SOCKET_PATH = "/tmp/clarvis-widget.sock"
 
 
-class WidgetSocketServer:
+class WidgetSocketServer(UnixSocketServer):
     """Bidirectional socket server for widget communication."""
 
     def __init__(self, socket_path: str = SOCKET_PATH):
-        self.socket_path = socket_path
-        self.server_socket: socket.socket | None = None
+        super().__init__(socket_path)
         self.clients: list[socket.socket] = []
         self._lock = threading.Lock()
-        self._running = False
-        self._accept_thread: threading.Thread | None = None
         self._read_threads: list[threading.Thread] = []
         self._message_callback: Callable[[dict], None] | None = None
         self._connect_callback: Callable[[], None] | None = None
@@ -41,33 +48,9 @@ class WidgetSocketServer:
         """Register callback invoked when a new widget client connects."""
         self._connect_callback = callback
 
-    def start(self) -> None:  # pragma: no cover
-        """Start the socket server and begin accepting connections."""
-        if self._running:
-            return
-
-        # Clean up stale socket file
-        if os.path.exists(self.socket_path):
-            os.unlink(self.socket_path)
-
-        # Create Unix socket
-        self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind(self.socket_path)
-        self.server_socket.listen(5)
-        self.server_socket.settimeout(1.0)
-
-        self._running = True
-
-        # Accept connections in background
-        self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
-        self._accept_thread.start()
-
     def stop(self) -> None:  # pragma: no cover
         """Stop the server and close all connections."""
-        self._running = False
-
-        # Close all client connections
+        # Close all client connections first
         with self._lock:
             for client in self.clients:
                 try:
@@ -76,78 +59,40 @@ class WidgetSocketServer:
                     pass
             self.clients.clear()
 
-        # Close server socket
-        if self.server_socket:
-            try:
-                self.server_socket.close()
-            except Exception:
-                pass
-            self.server_socket = None
-
-        # Wait for accept thread
-        if self._accept_thread:
-            self._accept_thread.join(timeout=2.0)
-            self._accept_thread = None
+        super().stop()
 
         # Wait for read threads
         for t in self._read_threads:
             t.join(timeout=1.0)
         self._read_threads.clear()
 
-        # Clean up socket file
-        if os.path.exists(self.socket_path):
+    def _on_client_connected(self, client: socket.socket) -> None:  # pragma: no cover
+        """Track client and start a reader thread."""
+        client.setblocking(True)
+        with self._lock:
+            self.clients.append(client)
+        t = threading.Thread(
+            target=self._read_from_client,
+            args=(client,),
+            daemon=True,
+        )
+        t.start()
+        self._read_threads.append(t)
+        if self._connect_callback:
             try:
-                os.unlink(self.socket_path)
+                self._connect_callback()
             except Exception:
-                pass
-
-    def _accept_loop(self) -> None:  # pragma: no cover
-        """Accept incoming connections and start read threads."""
-        while self._running and self.server_socket:
-            try:
-                client, _ = self.server_socket.accept()
-                client.setblocking(True)
-                with self._lock:
-                    self.clients.append(client)
-                # Start a read thread for this client
-                t = threading.Thread(
-                    target=self._read_from_client,
-                    args=(client,),
-                    daemon=True,
-                )
-                t.start()
-                self._read_threads.append(t)
-                if self._connect_callback:
-                    try:
-                        self._connect_callback()
-                    except Exception:
-                        logger.exception("Error in connect callback")
-            except socket.timeout:
-                continue
-            except OSError:
-                break
+                logger.exception("Error in connect callback")
 
     def _read_from_client(self, client: socket.socket) -> None:  # pragma: no cover
         """Read newline-delimited JSON messages from a connected widget."""
-        buffer = b""
-        try:
-            while self._running:
-                chunk = client.recv(4096)
-                if not chunk:
-                    break
-                buffer += chunk
-                while b"\n" in buffer:
-                    line, buffer = buffer.split(b"\n", 1)
-                    if not line:
-                        continue
-                    try:
-                        message = json.loads(line.decode("utf-8"))
-                        if self._message_callback and "method" in message:
-                            self._message_callback(message)
-                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.warning("Bad message from widget: %s", e)
-        except (ConnectionResetError, BrokenPipeError, OSError):
-            pass
+        for raw in self.iter_messages(client):
+            try:
+                message = json.loads(raw)
+                if self._message_callback and "method" in message:
+                    self._message_callback(message)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.warning("Bad message from widget: %s", e)
 
     def push_frame(self, frame_data: dict) -> int:  # pragma: no cover
         """Push a frame to all connected clients.
@@ -158,7 +103,7 @@ class WidgetSocketServer:
         if not self.clients:
             return 0
 
-        msg = json.dumps(frame_data).encode("utf-8") + b"\n"
+        msg = _serialize_frame(frame_data)
         sent_count = 0
         dead_clients = []
 

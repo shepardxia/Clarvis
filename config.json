@@ -21,38 +21,92 @@
     "enabled": false,
     "status": "thinking",
     "weather": "rain",
-    "context_percent": 75.0
-  },
-  "token_usage": {
-    "enabled": false,
-    "poll_interval": 120
-  },
-  "wake_word": {
-    "enabled": true,
-    "threshold": 0.75,
-    "vad_threshold": 0.5,
-    "patience": 5,
-    "input_device": null
-  },
-  "memory": {
-    "enabled": false,
-    "data_dir": "~/.clarvis/memory",
-    "default_dataset": "clarvis"
-  },
-  "spotify": {
-    "max_volume": 75
+    "weather_intensity": 0.5,
+    "wind_speed": 5.0,
+    "context_percent": 75.0,
+    "paused": false
   },
   "voice": {
     "enabled": true,
-    "asr_timeout": 4.0,
+    "asr_timeout": 6.0,
     "asr_language": "en-US",
-    "silence_timeout": 4.0,
+    "silence_timeout": 5.0,
     "tts_voice": "Fred",
     "tts_enabled": true,
-    "tts_speed": 170,
+    "tts_speed": 190,
     "text_linger": 3.0,
-    "model": "haiku",
+    "model": "sonnet",
     "max_thinking_tokens": 0,
-    "idle_timeout": 3600
+    "idle_timeout": 3600,
+    "tools": {
+      "spotify": true,
+      "timers": true,
+      "channels": true,
+      "prompt_response": true,
+      "stage_item": true,
+      "memory": true
+    },
+    "wake_word": {
+      "enabled": true,
+      "model": null,
+      "model_path": null,
+      "threshold": 0.75,
+      "vad_threshold": 0.5,
+      "patience": 5,
+      "sample_rate": 48000,
+      "input_device": null,
+      "capture_dir": "~/.clarvis/wake_captures",
+      "capture_seconds": 5.0
+    }
+  },
+  "memory": {
+    "enabled": true,
+    "data_dir": "~/.clarvis/memory",
+    "model": "claude-sonnet-4-6",
+    "default_dataset": "parletre",
+    "rate_limit_rpm": 30,
+    "data_per_batch": 5,
+    "datasets": {
+      "parletre": {
+        "visibility": "master",
+        "description": "The speaking-being (Lacan). Personal memory: Shepard's facts, Clarvis's observations, research, music taste. Clarvis only."
+      },
+      "agora": {
+        "visibility": "all",
+        "description": "The public square. Shared knowledge visible to all agents."
+      }
+    }
+  },
+  "music": {
+    "max_volume": 75
+  },
+  "channels": {
+    "agent_backend": "pi",
+    "model": "haiku",
+    "max_thinking_tokens": null,
+    "idle_timeout": null,
+    "tools": {
+      "spotify": true,
+      "timers": true,
+      "channels": false,
+      "prompt_response": false,
+      "stage_item": true,
+      "memory": false
+    },
+    "discord": {
+      "enabled": true,
+      "token": "",
+      "allow_from": [],
+      "gateway_url": "wss://gateway.discord.gg/?v=10&encoding=json",
+      "intents": 37377,
+      "tools": {
+        "spotify": false,
+        "timers": false,
+        "channels": false,
+        "prompt_response": false,
+        "stage_item": false,
+        "memory": true
+      }
+    }
   }
 }

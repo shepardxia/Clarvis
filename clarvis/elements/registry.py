@@ -2,11 +2,14 @@
 Element registry - discovers, loads, and caches YAML element definitions.
 """
 
+import logging
 import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 class ElementRegistry:
@@ -80,7 +83,7 @@ class ElementRegistry:
             return data
         except (yaml.YAMLError, IOError) as e:
             # Log but don't crash on bad files
-            print(f"Warning: Failed to load {file_path}: {e}")
+            logger.warning("Failed to load %s: %s", file_path, e)
             return None
 
     def _expand_sequences(self, data: dict) -> dict:
@@ -311,4 +314,4 @@ class ElementRegistry:
             try:
                 listener(kind, name)
             except Exception as e:
-                print(f"Warning: Listener error on {kind}/{name}: {e}")
+                logger.warning("Listener error on %s/%s: %s", kind, name, e)

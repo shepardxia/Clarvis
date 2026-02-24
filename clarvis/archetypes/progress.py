@@ -20,13 +20,17 @@ class ProgressArchetype(Archetype):
     Uses percentage-based caching for instant rendering of integer percentages.
     """
 
+    EMPTY_COLOR = 8
+    FILLED_COLOR = 15
+    CACHE_SNAP_THRESHOLD = 0.5
+
     def __init__(self, registry: ElementRegistry, width: int = 11):
         self.bar_width = width
         super().__init__(registry, "progress")
 
         # Pre-allocate bar matrices (chars and colors)
         self._chars = np.full((1, width), EMPTY, dtype=np.uint32)
-        self._colors = np.full((1, width), 8, dtype=np.uint8)  # Default gray
+        self._colors = np.full((1, width), self.EMPTY_COLOR, dtype=np.uint8)
 
         # Percentage cache: int(percent) -> (chars_matrix, colors_matrix)
         self._percent_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
@@ -58,8 +62,8 @@ class ProgressArchetype(Archetype):
         chars[0, :filled] = FILLED
 
         # Colors array (will be overwritten at render time with actual color)
-        colors = np.full((1, self.bar_width), 8, dtype=np.uint8)
-        colors[0, :filled] = 15  # Bright white for filled
+        colors = np.full((1, self.bar_width), self.EMPTY_COLOR, dtype=np.uint8)
+        colors[0, :filled] = self.FILLED_COLOR
 
         self._percent_cache[percent] = (chars, colors)
         return chars, colors
@@ -78,7 +82,7 @@ class ProgressArchetype(Archetype):
         int_percent = int(percent)
 
         # Use cached matrix for integer percentages
-        if int_percent == percent or abs(percent - int_percent) < 0.5:
+        if int_percent == percent or abs(percent - int_percent) < self.CACHE_SNAP_THRESHOLD:
             chars, colors = self._cache_percent(int_percent)
             # Update empty portion color
             filled = int(int_percent / 100 * self.bar_width)
@@ -91,5 +95,5 @@ class ProgressArchetype(Archetype):
             self._chars[:] = EMPTY
             self._chars[0, :filled] = FILLED
             self._colors[:] = color
-            self._colors[0, :filled] = 15
+            self._colors[0, :filled] = self.FILLED_COLOR
             layer.blit(x, y, self._chars, self._colors)

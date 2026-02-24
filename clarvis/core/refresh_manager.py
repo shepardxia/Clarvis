@@ -3,8 +3,6 @@
 Business logic only — scheduling is handled by the Scheduler.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -60,8 +58,8 @@ class RefreshManager:
 
     def __init__(
         self,
-        state: StateStore,
-        display_manager: DisplayManager,
+        state: "StateStore",
+        display_manager: "DisplayManager",
     ):
         self.state = state
         self.display = display_manager

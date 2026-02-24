@@ -1,12 +1,24 @@
 """Tracks Claude Code sessions with status and context history."""
 
-from __future__ import annotations
-
 import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .state import StateStore
+
+
+def _default_session() -> dict:
+    """Return a fresh session data dict with empty history."""
+    return {
+        "status_history": [],
+        "context_history": [],
+        "tool_history": [],
+        "tool_outcomes": [],
+        "last_status": "idle",
+        "last_context": 0.0,
+        "last_tool": "",
+        "last_seen": time.time(),
+    }
 
 
 class SessionTracker:
@@ -15,7 +27,7 @@ class SessionTracker:
     HISTORY_SIZE = 20
     TIMEOUT = 300  # 5 minutes
 
-    def __init__(self, state: StateStore):
+    def __init__(self, state: "StateStore"):
         self.state = state
         self.displayed_id: str | None = None
 
@@ -23,16 +35,7 @@ class SessionTracker:
         """Get or create session data."""
         sessions = self.state.get("sessions")
         if session_id not in sessions:
-            sessions[session_id] = {
-                "status_history": [],
-                "context_history": [],
-                "tool_history": [],
-                "tool_outcomes": [],
-                "last_status": "idle",
-                "last_context": 0.0,
-                "last_tool": "",
-                "last_seen": time.time(),
-            }
+            sessions[session_id] = _default_session()
             self.state.update("sessions", sessions)
         return sessions[session_id]
 
@@ -55,15 +58,7 @@ class SessionTracker:
     ) -> None:
         """Update session with new status, context, tool info, and outcome."""
         sessions = self.state.get("sessions")
-        session = sessions.get(session_id) or {
-            "status_history": [],
-            "context_history": [],
-            "tool_history": [],
-            "tool_outcomes": [],
-            "last_status": "idle",
-            "last_context": 0.0,
-            "last_tool": "",
-        }
+        session = sessions.get(session_id) or _default_session()
 
         session["last_seen"] = time.time()
 

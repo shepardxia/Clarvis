@@ -1,0 +1,65 @@
+{
+  "theme": {
+    "base": "modern",
+    "overrides": {}
+  },
+  "display": {
+    "grid_width": 29,
+    "grid_height": 12,
+    "corner_radius": 24,
+    "bg_alpha": 0.75,
+    "font_size": 14,
+    "font_name": "Courier",
+    "border_width": 2,
+    "pulse_speed": 0.1,
+    "avatar_x_offset": 0,
+    "avatar_y_offset": 0,
+    "bar_x_offset": 0,
+    "bar_y_offset": 0,
+    "fps": 5
+  },
+  "testing": {
+    "enabled": false,
+    "status": "idle",
+    "weather": "clear",
+    "weather_intensity": 0.5,
+    "wind_speed": 5.0,
+    "context_percent": 50.0,
+    "paused": false
+  },
+  "voice": {
+    "enabled": true,
+    "asr_timeout": 10.0,
+    "asr_language": "en-US",
+    "silence_timeout": 3.0,
+    "tts_voice": "Samantha",
+    "tts_enabled": true,
+    "tts_speed": 150,
+    "text_linger": 3.0,
+    "model": null,
+    "max_thinking_tokens": null,
+    "idle_timeout": 3600.0,
+    "wake_word": {
+      "enabled": false,
+      "model": null,
+      "model_path": null,
+      "threshold": 0.3,
+      "vad_threshold": 0.2,
+      "patience": 4,
+      "sample_rate": 48000,
+      "input_device": null
+    }
+  },
+  "music": {
+    "max_volume": 75
+  },
+  "memory": {
+    "enabled": false,
+    "data_dir": "~/.clarvis/memory",
+    "default_dataset": "clarvis"
+  },
+  "ai": {
+    "enabled": true,
+    "poll_interval": 120
+  }
+}

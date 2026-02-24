@@ -1,11 +1,7 @@
 """Named timer service with persistence and recurring support."""
 
-from __future__ import annotations
-
 import asyncio
-import json
 import logging
-import re
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -14,11 +10,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from clarvis.core.signals import SignalBus
+    from clarvis.core.context import AppContext
+
+import pytimeparse2 as pytimeparse
+
+from ..core.persistence import json_load_safe, json_save_atomic
 
 logger = logging.getLogger(__name__)
-
-_DURATION_RE = re.compile(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")
 
 
 def parse_duration(s: str) -> float:
@@ -39,27 +37,10 @@ def parse_duration(s: str) -> float:
     if not s:
         raise ValueError(f"Invalid duration: {s!r}")
 
-    # Raw numeric value -> seconds
-    try:
-        val = float(s)
-    except ValueError:
-        pass  # Not a plain number -- fall through to pattern match
-    else:
-        if val <= 0:
-            raise ValueError(f"Invalid duration: {s!r}")
-        return val
-
-    m = _DURATION_RE.match(s.lower())
-    if not m or not any(m.groups()):
+    result = pytimeparse.parse(s)
+    if result is None or result <= 0:
         raise ValueError(f"Invalid duration: {s!r}")
-
-    hours = int(m.group(1) or 0)
-    minutes = int(m.group(2) or 0)
-    seconds = int(m.group(3) or 0)
-    total = hours * 3600 + minutes * 60 + seconds
-    if total == 0:
-        raise ValueError(f"Invalid duration: {s!r}")
-    return float(total)
+    return float(result)
 
 
 @dataclass
@@ -72,7 +53,7 @@ class Timer:
     recurring: bool
     created_at: float
     label: str
-    trigger: str  # "simple" or "voice"
+    wake_clarvis: bool
 
 
 class TimerService:
@@ -85,12 +66,11 @@ class TimerService:
 
     def __init__(
         self,
-        bus: SignalBus,
-        loop: asyncio.AbstractEventLoop,
+        ctx: "AppContext",
         state_file: str = "~/.clarvis/timers.json",
     ) -> None:
-        self._bus = bus
-        self._loop = loop
+        self._bus = ctx.bus
+        self._loop = ctx.loop
         self._state_file = Path(state_file).expanduser()
         self._timers: dict[str, Timer] = {}
         self._handles: dict[str, asyncio.TimerHandle] = {}
@@ -102,7 +82,7 @@ class TimerService:
         duration: float,
         recurring: bool = False,
         label: str = "",
-        trigger: str = "simple",
+        wake_clarvis: bool = False,
     ) -> Timer:
         """Create or replace a named timer.
 
@@ -117,7 +97,7 @@ class TimerService:
             recurring=recurring,
             created_at=now,
             label=label,
-            trigger=trigger,
+            wake_clarvis=wake_clarvis,
         )
 
         with self._lock:
@@ -155,7 +135,7 @@ class TimerService:
                         "duration": t.duration,
                         "remaining": max(0.0, t.fire_at - now),
                         "recurring": t.recurring,
-                        "trigger": t.trigger,
+                        "wake_clarvis": t.wake_clarvis,
                         "created_at": datetime.fromtimestamp(t.created_at, tz=timezone.utc).isoformat(),
                     }
                 )
@@ -201,7 +181,7 @@ class TimerService:
             label=timer.label,
             recurring=timer.recurring,
             duration=timer.duration,
-            trigger=timer.trigger,
+            wake_clarvis=timer.wake_clarvis,
         )
         logger.info("Timer fired: %s", name)
 
@@ -209,11 +189,10 @@ class TimerService:
         with self._lock:
             if timer.recurring:
                 timer.fire_at = time.time() + timer.duration
-                self._persist()
                 reschedule_delay = timer.duration
             else:
                 self._timers.pop(name, None)
-                self._persist()
+            self._persist()
 
         # Schedule outside lock — _schedule writes _handles on the event loop
         if reschedule_delay is not None:
@@ -235,33 +214,25 @@ class TimerService:
 
     def _persist(self) -> None:
         """Save active timers to disk. Caller must hold ``_lock``."""
-        try:
-            self._state_file.parent.mkdir(parents=True, exist_ok=True)
-            data = [asdict(t) for t in self._timers.values()]
-            tmp = self._state_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=2))
-            tmp.replace(self._state_file)
-        except OSError:
-            logger.warning("Failed to persist timers", exc_info=True)
+        data = [asdict(t) for t in self._timers.values()]
+        json_save_atomic(self._state_file, data)
 
     def _load(self) -> None:
         """Load timers from disk. Graceful on missing/corrupt file."""
-        if not self._state_file.exists():
+        raw = json_load_safe(self._state_file)
+        if raw is None:
             return
-        try:
-            raw = json.loads(self._state_file.read_text())
-            with self._lock:
-                for entry in raw:
-                    timer = Timer(
-                        name=entry["name"],
-                        duration=entry["duration"],
-                        fire_at=entry["fire_at"],
-                        recurring=entry["recurring"],
-                        created_at=entry["created_at"],
-                        label=entry["label"],
-                        trigger=entry.get("trigger", "simple"),
-                    )
-                    self._timers[timer.name] = timer
-            logger.info("Loaded %d timer(s) from %s", len(self._timers), self._state_file)
-        except (json.JSONDecodeError, KeyError, TypeError):
-            logger.warning("Corrupt timers file %s, starting empty", self._state_file, exc_info=True)
+        with self._lock:
+            for entry in raw:
+                wake = entry.get("wake_clarvis", False)
+                timer = Timer(
+                    name=entry["name"],
+                    duration=entry["duration"],
+                    fire_at=entry["fire_at"],
+                    recurring=entry["recurring"],
+                    created_at=entry["created_at"],
+                    label=entry["label"],
+                    wake_clarvis=wake,
+                )
+                self._timers[timer.name] = timer
+        logger.info("Loaded %d timer(s) from %s", len(self._timers), self._state_file)

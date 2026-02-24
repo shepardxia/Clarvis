@@ -6,14 +6,22 @@ During compositing, the entire bounding box region overwrites lower layers,
 making layers fully opaque within their rendered area.
 """
 
-from __future__ import annotations
-
 from typing import Callable
 
 import numpy as np
 
 # Space character code - background fill
 SPACE = ord(" ")
+
+
+class LayerPriority:
+    """Named constants for render layer ordering."""
+
+    WEATHER = 0
+    AVATAR = 50
+    BAR = 80
+    MIC = 92
+    TEXT = 95
 
 
 class Layer:
@@ -217,5 +225,5 @@ class RenderPipeline:
             Color 0 means "use theme/default color".
         """
         self.render()
-        rows = ["".join(chr(c) for c in row) for row in self.out_chars]
+        rows = [row.tobytes().decode("utf-32-le") for row in self.out_chars]
         return rows, self.out_colors.tolist()

@@ -53,9 +53,6 @@ class FaceArchetype(Archetype):
         self.status = "idle"
         self.frame_index = 0
 
-        # Pre-allocated face matrix (for fallback/on-the-fly computation)
-        self._matrix = np.full((self.HEIGHT, self.WIDTH), SPACE, dtype=np.uint32)
-
         # State-based cache: status -> list of pre-computed frame matrices
         self._state_cache: dict[str, list[np.ndarray]] = {}
 
@@ -154,46 +151,22 @@ class FaceArchetype(Archetype):
         if self._frames:
             self.frame_index = (self.frame_index + 1) % len(self._frames)
 
-    def _get_eye_char(self, name: str) -> str:
-        """Get eye character for given name."""
-        elem = self._eyes.get(name, {})
-        return elem.get("char", "o")
+    def _elem(self, registry: dict, name: str, field: str, fallback):
+        """Look up a single field from a named element in a registry."""
+        return registry.get(name, {}).get(field, fallback)
 
-    def _get_eye_position(self, name: str) -> tuple[int, int, int]:
-        """Get eye position (left_pad, gap, right_pad) for given name."""
-        elem = self._eyes.get(name, {})
-        pos = elem.get("position", [3, 1, 3])
-        return tuple(pos)
-
-    def _get_mouth_char(self, name: str) -> str:
-        """Get mouth character for given name."""
-        elem = self._mouths.get(name, {})
-        return elem.get("char", "~")
-
-    def _get_border_char(self, status: str) -> str:
-        """Get border character for given status."""
-        elem = self._borders.get(status, {})
-        return elem.get("char", "-")
-
-    def _get_substrate_pattern(self, status: str) -> str:
-        """Get substrate pattern for given status."""
-        elem = self._substrates.get(status, {})
-        return elem.get("pattern", " .  .  . ")
-
-    def _resolve_char(self, value: str, getter_fn, fallback: str) -> str:
+    def _resolve_char(self, value: str, registry: dict, field: str, fallback: str) -> str:
         """Resolve a value to a character.
 
         If value is a single character, use it directly.
-        If value is a name, look it up via getter_fn.
+        If value is a name, look it up in *registry* under *field*.
         If lookup fails, use fallback.
         """
         if not value:
             return fallback
-        # Single character = direct use
         if len(value) == 1:
             return value
-        # Otherwise treat as element name
-        result = getter_fn(value)
+        result = self._elem(registry, value, field, fallback)
         return result if result else fallback
 
     def _get_corners(self, frame: dict) -> tuple[int, int, int, int]:
@@ -228,28 +201,28 @@ class FaceArchetype(Archetype):
         elif eyes_name == "looking_r":
             eyes_name = "looking_right"
 
-        eye_char = self._resolve_char(eyes_name, self._get_eye_char, "o")
+        eye_char = self._resolve_char(eyes_name, self._eyes, "char", "o")
         eye_code = ord(eye_char)
         if len(eyes_name) == 1:
             left, gap, right = 3, 1, 3
         else:
-            left, gap, right = self._get_eye_position(eyes_name)
+            left, gap, right = tuple(self._elem(self._eyes, eyes_name, "position", [3, 1, 3]))
 
         # === Mouth ===
         mouth_name = frame.get("mouth", "neutral")
-        mouth_char = self._resolve_char(mouth_name, self._get_mouth_char, "~")
+        mouth_char = self._resolve_char(mouth_name, self._mouths, "char", "~")
         mouth_code = ord(mouth_char)
 
         # === Border ===
         border_spec = frame.get("border", self.status)
-        border_char = self._resolve_char(border_spec, self._get_border_char, "-")
+        border_char = self._resolve_char(border_spec, self._borders, "char", "-")
         border_code = ord(border_char)
 
         # === Corners ===
         corner_tl, corner_tr, corner_bl, corner_br = self._get_corners(frame)
 
         # === Substrate ===
-        substrate = self._get_substrate_pattern(self.status)
+        substrate = self._elem(self._substrates, self.status, "pattern", " .  .  . ")
 
         # Row 0: top border
         m[0, 0] = corner_tl

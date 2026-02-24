@@ -5,15 +5,16 @@ https://github.com/bporterfield/watch-claude-think
 Licensed under MIT. Ported from TypeScript to Python for clarvis integration.
 """
 
-from __future__ import annotations
-
 import json
 import threading
-import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..core.context import AppContext
 
 
 class SessionStatus(Enum):
@@ -133,32 +134,20 @@ def is_session_stop_event(entry: dict) -> bool:
 
 
 def extract_project_from_path(file_path: Path) -> tuple[str, str]:
-    """
-    Extract project name and path from session file location.
+    """Extract project name and path from session file location.
 
-    Session files are at: ~/.claude/projects/{project-slug}/{session-id}.jsonl
-    Project slug is path with slashes replaced by dashes.
+    Delegates to the filesystem-aware ``extract_project_from_slug``
+    which handles hyphenated directory names correctly.
     """
-    # Parent directory is the project slug
+    from .context_accumulator import extract_project_from_slug
+
     project_slug = file_path.parent.name
-
-    # Convert slug back to path (dashes to slashes, strip leading dash)
-    if project_slug.startswith("-"):
-        project_path = "/" + project_slug[1:].replace("-", "/")
-    else:
-        project_path = project_slug.replace("-", "/")
-
-    # Project name is last component
-    project_name = Path(project_path).name or project_slug
-
-    return project_name, project_path
+    return extract_project_from_slug(project_slug)
 
 
 # Constants
-CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 IDLE_TIMEOUT_SECONDS = 600  # 10 minutes
 ENDED_GRACE_PERIOD_SECONDS = 30  # Keep ended sessions briefly for final queries
-RECENCY_CUTOFF_SECONDS = 3600  # Only consider session files modified in the last hour
 
 
 class SessionManager:  # pragma: no cover
@@ -176,29 +165,14 @@ class SessionManager:  # pragma: no cover
         self._lock = threading.Lock()
         self._known_files: dict[Path, float] = {}  # path -> last mtime
 
-    def start(self):
-        """Initial scan for existing session files."""
-        self._scan_existing_sessions()
+    def connect(self, ctx: "AppContext") -> None:
+        """Subscribe to hook:event for signal-driven transcript processing."""
+        self._ctx = ctx
+        ctx.bus.on("hook:event", self._on_hook_event)
 
-    def stop(self):
-        """Cleanup."""
-        pass
-
-    def _scan_existing_sessions(self):
-        """Scan for recently modified session files on startup."""
-        if not CLAUDE_PROJECTS_DIR.exists():
-            return
-
-        cutoff = _time.time() - RECENCY_CUTOFF_SECONDS
-        for jsonl_file in CLAUDE_PROJECTS_DIR.glob("*/*.jsonl"):
-            try:
-                mtime = jsonl_file.stat().st_mtime
-            except OSError:
-                continue
-            if mtime < cutoff:
-                continue
-            self._known_files[jsonl_file] = mtime
-            self._process_session_file(jsonl_file)
+    def _on_hook_event(self, signal: str, *, transcript_path: str = None, **_kw) -> None:
+        if transcript_path:
+            self._ctx.loop.run_in_executor(None, self.process_transcript, transcript_path)
 
     def _process_session_file(self, file_path: Path):
         """Process a session file, extracting new thinking blocks."""
@@ -249,27 +223,30 @@ class SessionManager:  # pragma: no cover
                 for block in blocks:
                     session.add_thought(block)
 
-    def poll_sessions(self) -> None:
-        """Poll for new/modified session files and clean up stale sessions.
+    def process_transcript(self, transcript_path: str) -> None:
+        """Process a single transcript file on demand (signal-driven).
 
-        Designed to be called periodically by the Scheduler. Replaces both
-        the watchdog Observer and the lifecycle thread.
+        Called when a hook event arrives with a transcript_path. Skips the
+        global directory scan — only processes the specific file that changed.
         """
-        # --- Poll for file changes (only recent files) ---
-        if CLAUDE_PROJECTS_DIR.exists():
-            cutoff = _time.time() - RECENCY_CUTOFF_SECONDS
-            for jsonl_file in CLAUDE_PROJECTS_DIR.glob("*/*.jsonl"):
-                try:
-                    mtime = jsonl_file.stat().st_mtime
-                except OSError:
-                    continue
-                if mtime < cutoff:
-                    continue
-                if mtime != self._known_files.get(jsonl_file):
-                    self._known_files[jsonl_file] = mtime
-                    self._process_session_file(jsonl_file)
+        path = Path(transcript_path)
+        if not path.exists() or path.suffix != ".jsonl":
+            return
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return
+        if mtime != self._known_files.get(path):
+            self._known_files[path] = mtime
+            self._process_session_file(path)
 
-        # --- Lifecycle cleanup ---
+    def poll_sessions(self) -> None:
+        """Clean up stale sessions.
+
+        Lifecycle-only — file processing is now signal-driven via
+        process_transcript(). Called periodically by Scheduler at a
+        relaxed interval.
+        """
         now = datetime.now()
         to_remove = []
 
@@ -355,5 +332,4 @@ def get_session_manager() -> SessionManager:  # pragma: no cover
     global _session_manager
     if _session_manager is None:
         _session_manager = SessionManager()
-        _session_manager.start()
     return _session_manager
