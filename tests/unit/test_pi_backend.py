@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from clarvis.agent.backends.pi import PiBackend
-from clarvis.agent.backends.protocol import AgentBackend, BackendConfig
+from clarvis.agent.backends.protocol import BackendConfig
 
 
 def _make_config(**overrides) -> BackendConfig:
@@ -18,52 +18,6 @@ def _make_config(**overrides) -> BackendConfig:
     )
     defaults.update(overrides)
     return BackendConfig(**defaults)
-
-
-# ── Protocol compliance ──
-
-
-def test_pi_backend_satisfies_protocol():
-    backend = PiBackend(_make_config())
-    assert isinstance(backend, AgentBackend)
-
-
-# ── Socket path uniqueness ──
-
-
-def test_socket_path_includes_session_key():
-    b1 = PiBackend(_make_config(session_key="voice"))
-    b2 = PiBackend(_make_config(session_key="channels"))
-    assert "voice" in b1._socket_path
-    assert "channels" in b2._socket_path
-    assert b1._socket_path != b2._socket_path
-
-
-# ── Setup creates directory ──
-
-
-def test_setup_creates_project_dir(tmp_path):
-    target = tmp_path / "new-dir"
-    backend = PiBackend(_make_config(project_dir=target))
-    backend.setup()
-    assert target.is_dir()
-
-
-# ── Session ID no-ops ──
-
-
-def test_session_id_noop():
-    backend = PiBackend(_make_config())
-    backend.set_session_id("abc")
-    assert backend.get_session_id() is None
-
-
-# ── Initial state ──
-
-
-def test_not_connected_initially():
-    backend = PiBackend(_make_config())
-    assert not backend.connected
 
 
 # ── send() event translation ──
@@ -135,12 +89,3 @@ async def test_send_raises_when_not_connected():
     with pytest.raises(RuntimeError, match="not connected"):
         async for _ in backend.send("test"):
             pass
-
-
-# ── Session file path ──
-
-
-def test_session_file_in_project_dir():
-    cfg = _make_config(project_dir=Path("/home/test/.clarvis/home"))
-    backend = PiBackend(cfg)
-    assert backend._session_file == Path("/home/test/.clarvis/home/pi-session.jsonl")

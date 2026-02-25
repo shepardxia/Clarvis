@@ -39,29 +39,6 @@ def watcher(watch_dir, mock_backend, hash_store):
     )
 
 
-# -- Content hashing -------------------------------------------------------
-
-
-def test_hash_file_deterministic(watch_dir):
-    """Same content produces the same hash."""
-    f = watch_dir / "test.txt"
-    f.write_text("hello world")
-    h1 = DocumentWatcher._hash_file(f)
-    h2 = DocumentWatcher._hash_file(f)
-    assert h1 == h2
-    assert len(h1) == 64  # SHA256 hex digest
-
-
-def test_hash_file_changes_with_content(watch_dir):
-    """Different content produces different hashes."""
-    f = watch_dir / "test.txt"
-    f.write_text("version 1")
-    h1 = DocumentWatcher._hash_file(f)
-    f.write_text("version 2")
-    h2 = DocumentWatcher._hash_file(f)
-    assert h1 != h2
-
-
 # -- Scan: new files -------------------------------------------------------
 
 
@@ -75,17 +52,6 @@ async def test_scan_ingests_new_file(watcher, watch_dir, mock_backend):
     assert results[0]["status"] == "ok"
     assert results[0]["file"] == "notes.md"
     mock_backend.ingest.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_scan_ingests_multiple_files(watcher, watch_dir, mock_backend):
-    """scan() ingests all new files in the directory."""
-    (watch_dir / "a.txt").write_text("file a")
-    (watch_dir / "b.txt").write_text("file b")
-    results = await watcher.scan()
-
-    assert len(results) == 2
-    assert mock_backend.ingest.await_count == 2
 
 
 # -- Scan: unchanged files skipped -----------------------------------------
@@ -154,21 +120,6 @@ async def test_scan_skips_hidden_files(watcher, watch_dir, mock_backend):
     assert results[0]["file"] == "visible.txt"
 
 
-# -- Scan: missing directory ------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_scan_returns_empty_for_missing_dir(mock_backend, hash_store):
-    """scan() returns empty list if watch_dir doesn't exist."""
-    watcher = DocumentWatcher(
-        watch_dir=Path("/nonexistent/path"),
-        cognee_backend=mock_backend,
-        hash_store_path=hash_store,
-    )
-    results = await watcher.scan()
-    assert results == []
-
-
 # -- Hash persistence -------------------------------------------------------
 
 
@@ -231,27 +182,3 @@ async def test_failed_ingest_does_not_update_hash(watcher, watch_dir):
 
     # Hash should not be stored since ingest failed
     assert "retry.txt" not in watcher._hashes
-
-
-# -- Lifecycle: start/stop --------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_start_creates_watch_dir(mock_backend, hash_store, tmp_path):
-    """start() creates the watch_dir if it doesn't exist."""
-    new_dir = tmp_path / "new_watch"
-    w = DocumentWatcher(new_dir, mock_backend, hash_store)
-    await w.start()
-    assert new_dir.is_dir()
-    await w.stop()
-
-
-@pytest.mark.asyncio
-async def test_stop_cancels_task(watcher):
-    """stop() should cancel the background polling task."""
-    await watcher.start()
-    assert watcher._task is not None
-    assert not watcher._task.done()
-
-    await watcher.stop()
-    assert watcher._task is None

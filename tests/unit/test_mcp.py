@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 from fastmcp import Client
 
+from clarvis.channels.memory_context import build_memory_grounding
 from clarvis.core.context import AppContext
 from clarvis.core.signals import SignalBus
 from clarvis.mcp.server import HOME_TOOLS, STANDARD_TOOLS, create_app
@@ -434,3 +435,113 @@ async def test_list_timers(memory_client):
     await memory_client.call_tool("set_timer", {"name": "a", "duration": "5m"})
     r = await memory_client.call_tool("list_timers", {})
     assert "a" in r.data
+
+
+# ── Memory grounding (moved from test_memory_context.py) ─────────
+
+
+@pytest.mark.asyncio
+async def test_build_memory_grounding_formats_context():
+    """Should format Hindsight recall result into <memory_context> block."""
+    backend = MagicMock()
+    backend.ready = True
+    backend.recall = AsyncMock(
+        return_value={
+            "results": [
+                {"content": "likes coffee", "fact_type": "world"},
+                {"content": "user is a developer", "fact_type": "world"},
+            ],
+            "entities": [{"name": "Shepard"}],
+        }
+    )
+
+    transcript = [{"role": "user", "content": "tell me about myself"}]
+    result = await build_memory_grounding(backend, "parletre", transcript)
+
+    assert result.startswith("<memory_context>")
+    assert result.endswith("</memory_context>")
+    assert "likes coffee" in result
+    assert "user is a developer" in result
+    assert "Shepard" in result
+
+
+@pytest.mark.asyncio
+async def test_build_memory_grounding_empty_when_not_ready():
+    """Should return empty string when backend is not ready."""
+    backend = MagicMock()
+    backend.ready = False
+
+    result = await build_memory_grounding(backend, "parletre", [])
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_build_memory_grounding_empty_when_none():
+    """Should return empty string when hindsight_backend is None."""
+    result = await build_memory_grounding(None, "parletre", [])
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_build_memory_grounding_empty_when_no_results():
+    """Should return empty string when recall returns no data."""
+    backend = MagicMock()
+    backend.ready = True
+    backend.recall = AsyncMock(
+        return_value={
+            "results": [],
+            "entities": [],
+        }
+    )
+
+    result = await build_memory_grounding(backend, "parletre", [])
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_build_memory_grounding_truncates_long_results():
+    """Should truncate grounding body to ~2000 chars."""
+    backend = MagicMock()
+    backend.ready = True
+    backend.recall = AsyncMock(
+        return_value={
+            "results": [{"content": "x" * 300, "fact_type": "world"} for _ in range(20)],
+            "entities": [],
+        }
+    )
+
+    result = await build_memory_grounding(backend, "parletre", [])
+    body = result.replace("<memory_context>\n", "").replace("\n</memory_context>", "")
+    assert len(body) <= 2003  # 2000 + "..."
+
+
+@pytest.mark.asyncio
+async def test_build_memory_grounding_handles_recall_error():
+    """Should return empty string on recall error."""
+    backend = MagicMock()
+    backend.ready = True
+    backend.recall = AsyncMock(return_value={"error": "boom"})
+
+    result = await build_memory_grounding(backend, "parletre", [])
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_build_memory_grounding_with_fact_types():
+    """Should show fact type prefixes in grounding."""
+    backend = MagicMock()
+    backend.ready = True
+    backend.recall = AsyncMock(
+        return_value={
+            "results": [
+                {"content": "likes metal", "fact_type": "opinion", "confidence": 0.9},
+                {"content": "works at MIT", "fact_type": "world"},
+            ],
+            "entities": [],
+        }
+    )
+
+    result = await build_memory_grounding(backend, "parletre", [])
+    assert "[opinion]" in result
+    assert "[world]" in result
+    assert "conf: 0.9" in result

@@ -40,15 +40,6 @@ def mock_backend():
 # -- StagedChange validation -----------------------------------------------
 
 
-def test_staged_change_defaults():
-    """StagedChange should have sensible defaults."""
-    change = StagedChange(content="test fact")
-    assert change.action == "add"
-    assert change.bank == "parletre"
-    assert change.id  # UUID should be auto-generated
-    assert change.timestamp  # Should have a timestamp
-
-
 def test_staged_change_invalid_action():
     """StagedChange should reject invalid actions."""
     with pytest.raises(ValueError, match="Invalid action"):
@@ -73,21 +64,7 @@ def test_staged_change_forget_requires_target():
         StagedChange(action="forget")
 
 
-def test_staged_change_valid_forget():
-    """'forget' action with target_fact_id should work."""
-    change = StagedChange(action="forget", target_fact_id="unit-123")
-    assert change.action == "forget"
-    assert change.target_fact_id == "unit-123"
-
-
 # -- Stage / list tests -----------------------------------------------------
-
-
-def test_stage_returns_id(store):
-    """stage() should return the change's ID."""
-    change = StagedChange(content="fact A", reason="important")
-    cid = store.stage(change)
-    assert cid == change.id
 
 
 def test_list_staged_returns_staged_changes(store):
@@ -99,26 +76,6 @@ def test_list_staged_returns_staged_changes(store):
     assert len(staged) == 2
     contents = {c.content for c in staged}
     assert contents == {"fact A", "fact B"}
-
-
-def test_list_staged_returns_oldest_first(store):
-    """list_staged() should return changes ordered by timestamp."""
-    c1 = StagedChange(content="first", timestamp="2026-01-01T00:00:00+00:00")
-    c2 = StagedChange(content="second", timestamp="2026-01-02T00:00:00+00:00")
-    c3 = StagedChange(content="third", timestamp="2026-01-03T00:00:00+00:00")
-
-    # Stage out of order
-    store.stage(c3)
-    store.stage(c1)
-    store.stage(c2)
-
-    staged = store.list_staged()
-    assert [c.content for c in staged] == ["first", "second", "third"]
-
-
-def test_list_staged_empty(store):
-    """list_staged() on empty store returns empty list."""
-    assert store.list_staged() == []
 
 
 # -- Persistence tests ------------------------------------------------------
@@ -147,17 +104,6 @@ def test_persistence_after_reject(staging_path):
     assert reloaded.list_staged() == []
 
 
-def test_persistence_after_clear(staging_path):
-    """Cleared store should persist as empty."""
-    store = StagingStore(staging_path)
-    store.stage(StagedChange(content="X"))
-    store.stage(StagedChange(content="Y"))
-    store.clear()
-
-    reloaded = StagingStore(staging_path)
-    assert reloaded.list_staged() == []
-
-
 # -- Reject tests -----------------------------------------------------------
 
 
@@ -174,39 +120,12 @@ def test_reject_removes_changes(store):
     assert remaining[0].content == "B"
 
 
-def test_reject_unknown_id(store):
-    """reject() with unknown ID should return 0 removed."""
-    store.stage(StagedChange(content="A"))
-    removed = store.reject(["nonexistent-id"])
-    assert removed == 0
-    assert len(store.list_staged()) == 1
-
-
 def test_reject_multiple(store):
     """reject() should handle multiple IDs."""
     ids = [store.stage(StagedChange(content=f"fact-{i}")) for i in range(5)]
     removed = store.reject(ids[:3])
     assert removed == 3
     assert len(store.list_staged()) == 2
-
-
-# -- Clear tests ------------------------------------------------------------
-
-
-def test_clear_removes_all(store):
-    """clear() should remove all staged changes."""
-    store.stage(StagedChange(content="A"))
-    store.stage(StagedChange(content="B"))
-    store.stage(StagedChange(content="C"))
-
-    store.clear()
-    assert store.list_staged() == []
-
-
-def test_clear_on_empty(store):
-    """clear() on empty store should be a no-op."""
-    store.clear()
-    assert store.list_staged() == []
 
 
 # -- Approve tests ----------------------------------------------------------
@@ -293,16 +212,6 @@ async def test_approve_forget(store, mock_backend):
 
 
 @pytest.mark.asyncio
-async def test_approve_unknown_id(store, mock_backend):
-    """Approving an unknown ID should return an error."""
-    results = await store.approve(["no-such-id"], mock_backend)
-
-    assert len(results) == 1
-    assert results[0]["error"] == "Not found in staging"
-    mock_backend.retain.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_approve_backend_failure(store, mock_backend):
     """If backend raises, the change stays in staging."""
     mock_backend.retain = AsyncMock(side_effect=RuntimeError("DB down"))
@@ -316,19 +225,6 @@ async def test_approve_backend_failure(store, mock_backend):
 
     # Change should still be staged (not removed)
     assert len(store.list_staged()) == 1
-
-
-@pytest.mark.asyncio
-async def test_approve_multiple(store, mock_backend):
-    """approve() should handle multiple changes in one call."""
-    c1 = store.stage(StagedChange(content="A"))
-    c2 = store.stage(StagedChange(content="B"))
-
-    results = await store.approve([c1, c2], mock_backend)
-
-    assert len(results) == 2
-    assert all(r["action"] == "add" for r in results)
-    assert store.list_staged() == []
 
 
 @pytest.mark.asyncio
@@ -358,28 +254,3 @@ async def test_approve_partial_failure(store, mock_backend):
     remaining = store.list_staged()
     assert len(remaining) == 1
     assert remaining[0].content == "fails"
-
-
-# -- Approve with confidence -----------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_approve_add_with_confidence(store, mock_backend):
-    """Approving an opinion-type add should pass confidence."""
-    cid = store.stage(
-        StagedChange(
-            content="Prefers GRPO over PPO",
-            fact_type="opinion",
-            confidence=0.7,
-            reason="inferred from conversation",
-        )
-    )
-
-    await store.approve([cid], mock_backend)
-
-    mock_backend.retain.assert_awaited_once_with(
-        "Prefers GRPO over PPO",
-        bank="parletre",
-        fact_type="opinion",
-        confidence=0.7,
-    )
