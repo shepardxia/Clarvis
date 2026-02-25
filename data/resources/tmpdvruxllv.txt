@@ -1,1 +1,0 @@
-I love building AI projects with Python and TypeScript. My favorite framework is FastMCP.
