@@ -185,23 +185,18 @@ class TimerService:
         )
         logger.info("Timer fired: %s", name)
 
-        reschedule_delay = None
         with self._lock:
             if timer.recurring:
                 timer.fire_at = time.time() + timer.duration
-                reschedule_delay = timer.duration
+                self._schedule(name, timer.duration)
             else:
                 self._timers.pop(name, None)
             self._persist()
 
-        # Schedule outside lock — _schedule writes _handles on the event loop
-        if reschedule_delay is not None:
-            self._schedule(name, reschedule_delay)
-
     def _schedule(self, name: str, delay: float) -> None:
         """Schedule a ``call_later`` handle. Must be called on the event loop.
 
-        Does NOT acquire ``_lock`` — callers must handle synchronization.
+        Caller must hold ``_lock`` — writes to ``_handles``.
         """
         handle = self._loop.call_later(delay, self._fire, name)
         self._handles[name] = handle

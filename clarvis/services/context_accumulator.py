@@ -119,7 +119,7 @@ class ContextAccumulator:
             return
         slug = Path(transcript_path).parent.name
         if slug == self._home_slug:
-            self.stage_session(session_id, transcript_path)
+            self._ctx.loop.run_in_executor(None, self.stage_session, session_id, transcript_path)
 
     # ------------------------------------------------------------------
     # Staging (called by daemon on Stop events)

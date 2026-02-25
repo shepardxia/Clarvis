@@ -53,7 +53,7 @@ async def get_context(ctx: Context = None) -> str:
 
     # Time (always refresh for accuracy)
     try:
-        time_dict = d.refresh.refresh_time()
+        time_dict = await loop.run_in_executor(None, d.refresh.refresh_time)
         ts = time_summary(time_dict, fmt="full")
         parts.append(ts or "time: unavailable")
     except Exception:

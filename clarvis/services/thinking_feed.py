@@ -6,6 +6,7 @@ Licensed under MIT. Ported from TypeScript to Python for clarvis integration.
 """
 
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,7 +14,11 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
+    import asyncio
+
     from ..core.context import AppContext
 
 
@@ -172,7 +177,13 @@ class SessionManager:  # pragma: no cover
 
     def _on_hook_event(self, signal: str, *, transcript_path: str = None, **_kw) -> None:
         if transcript_path:
-            self._ctx.loop.run_in_executor(None, self.process_transcript, transcript_path)
+            fut = self._ctx.loop.run_in_executor(None, self.process_transcript, transcript_path)
+            fut.add_done_callback(self._log_executor_error)
+
+    @staticmethod
+    def _log_executor_error(fut: "asyncio.Future") -> None:
+        if exc := fut.exception():
+            logger.exception("Error processing transcript", exc_info=exc)
 
     def _process_session_file(self, file_path: Path):
         """Process a session file, extracting new thinking blocks."""

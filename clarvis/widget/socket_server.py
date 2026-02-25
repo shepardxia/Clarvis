@@ -67,7 +67,11 @@ class WidgetSocketServer(UnixSocketServer):
         self._read_threads.clear()
 
     def _on_client_connected(self, client: socket.socket) -> None:  # pragma: no cover
-        """Track client and start a reader thread."""
+        """Track client and start a reader thread.
+
+        Called from the accept thread. The connect callback must be
+        thread-safe (socket I/O only, no event-loop access).
+        """
         client.setblocking(True)
         with self._lock:
             self.clients.append(client)

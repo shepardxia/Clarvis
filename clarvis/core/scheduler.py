@@ -8,7 +8,7 @@ atomically when mode changes.
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from .context import AppContext
@@ -43,7 +43,7 @@ class _Task:
         self.active_interval = active_interval
         self.idle_interval = idle_interval
         self.blocking = blocking
-        self.handle: Optional[asyncio.TimerHandle] = None
+        self.handle: asyncio.TimerHandle | None = None
 
     def interval_for(self, mode: Mode) -> float:
         return self.active_interval if mode == "active" else self.idle_interval
@@ -131,7 +131,11 @@ class Scheduler:
         logger.info("Scheduler started in %s mode with %d tasks", self._mode, len(self._tasks))
 
     def stop(self) -> None:
-        """Cancel all scheduled tasks."""
+        """Cancel all scheduled tasks.
+
+        Called during daemon shutdown. Safe without locking because
+        the event loop is cooperative — no concurrent ``_fire()`` calls.
+        """
         self._running = False
         for task in self._tasks.values():
             if task.handle is not None:

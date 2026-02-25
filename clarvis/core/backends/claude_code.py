@@ -61,7 +61,7 @@ class ClaudeCodeBackend:
         opts = self._build_options()
         sdk = _sdk()
         self._client = sdk.ClaudeSDKClient(opts)
-        t0 = asyncio.get_event_loop().time()
+        t0 = asyncio.get_running_loop().time()
         try:
             await asyncio.wait_for(self._client.connect(), timeout=30.0)
             self._connected = True
@@ -69,7 +69,7 @@ class ClaudeCodeBackend:
                 self._cli_pid = self._client._transport._process.pid
             except (AttributeError, TypeError):
                 self._cli_pid = None
-            elapsed = asyncio.get_event_loop().time() - t0
+            elapsed = asyncio.get_running_loop().time() - t0
             logger.info(
                 "ClaudeCodeBackend connected (session=%s, pid=%s) in %.1fs",
                 self._config.session_key,
@@ -77,7 +77,7 @@ class ClaudeCodeBackend:
                 elapsed,
             )
         except (asyncio.TimeoutError, Exception) as e:
-            elapsed = asyncio.get_event_loop().time() - t0
+            elapsed = asyncio.get_running_loop().time() - t0
             logger.warning(
                 "ClaudeCodeBackend connect failed for %s after %.1fs: %s: %s",
                 self._config.session_key,

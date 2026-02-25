@@ -43,6 +43,7 @@ class PiBackend:
         self._process: asyncio.subprocess.Process | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._stderr_task: asyncio.Task | None = None
         self._connected = False
         self._socket_path = f"/tmp/clarvis-pi-{config.session_key}.sock"
         self._session_file = config.project_dir / "pi-session.jsonl"
@@ -113,7 +114,7 @@ class PiBackend:
             raise RuntimeError("Bridge startup timed out (60s)")
 
         # Start forwarding stderr to logger
-        asyncio.ensure_future(self._forward_stderr())
+        self._stderr_task = asyncio.create_task(self._forward_stderr())
 
         # Connect Unix socket
         try:
@@ -136,6 +137,11 @@ class PiBackend:
         """Shut down bridge gracefully, then force-kill if needed."""
         if not self._connected:
             return
+
+        # Cancel stderr forwarder
+        if self._stderr_task and not self._stderr_task.done():
+            self._stderr_task.cancel()
+        self._stderr_task = None
 
         # Try graceful shutdown
         try:

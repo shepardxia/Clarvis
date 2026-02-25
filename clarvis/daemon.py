@@ -429,14 +429,14 @@ class CentralHubDaemon:
         pulse_secs = config.channels.wakeup.pulse_interval_minutes * 60
         self.scheduler.register(
             "wakeup_pulse",
-            lambda: asyncio.ensure_future(self._wakeup_manager.on_pulse()),
+            lambda: asyncio.create_task(self._wakeup_manager.on_pulse()),
             active_interval=pulse_secs,
             idle_interval=pulse_secs * 2,
         )
 
         # Subscribe to timer:fired for wake_clarvis timers
         self.bus.on(
-            "timer:fired", lambda sig, **kw: asyncio.ensure_future(self._wakeup_manager.on_timer_fired(sig, **kw))
+            "timer:fired", lambda sig, **kw: asyncio.create_task(self._wakeup_manager.on_timer_fired(sig, **kw))
         )
 
         logger.info(
