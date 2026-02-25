@@ -1,6 +1,0 @@
-kind: companion
-name: bird
-# Simple flying bird
-art: "\\v/"
-width: 3
-height: 1

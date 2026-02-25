@@ -1,0 +1,1 @@
+My SSH key passphrase is hunter2. I keep it in 1Password.

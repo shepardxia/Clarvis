@@ -18,7 +18,7 @@ from .events import InboundMessage, OutboundMessage
 from .state import ChannelState
 
 if TYPE_CHECKING:
-    from ..core.agent import Agent
+    from ..agent.agent import Agent
     from .registry import UserRegistry
 
 logger = logging.getLogger(__name__)
@@ -245,7 +245,7 @@ class ChannelManager:
                 transcript = read_recent_transcript(self._transcript_path)
                 grounding = await build_memory_grounding(
                     self._memory_service,
-                    "all",
+                    "agora",
                     transcript,
                 )
                 if grounding:

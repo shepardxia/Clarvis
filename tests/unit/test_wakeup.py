@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from clarvis.core.wakeup import WakeupManager
+from clarvis.services.wakeup import WakeupManager
 
 
 @pytest.fixture

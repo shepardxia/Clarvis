@@ -43,7 +43,6 @@
       "timers": true,
       "channels": true,
       "prompt_response": true,
-      "stage_item": true,
       "memory": true
     },
     "wake_word": {
@@ -63,9 +62,6 @@
     "enabled": true,
     "data_dir": "~/.clarvis/memory",
     "model": "claude-sonnet-4-6",
-    "default_dataset": "parletre",
-    "rate_limit_rpm": 30,
-    "data_per_batch": 5,
     "datasets": {
       "parletre": {
         "visibility": "master",
@@ -90,9 +86,9 @@
       "timers": true,
       "channels": false,
       "prompt_response": false,
-      "stage_item": true,
       "memory": false
     },
+    "admin_user_ids": ["650197363591348250"],
     "discord": {
       "enabled": true,
       "token": "",
@@ -104,7 +100,6 @@
         "timers": false,
         "channels": false,
         "prompt_response": false,
-        "stage_item": false,
         "memory": true
       }
     }

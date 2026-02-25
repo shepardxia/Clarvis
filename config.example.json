@@ -55,11 +55,6 @@
   },
   "memory": {
     "enabled": false,
-    "data_dir": "~/.clarvis/memory",
-    "default_dataset": "clarvis"
-  },
-  "ai": {
-    "enabled": true,
-    "poll_interval": 120
+    "data_dir": "~/.clarvis/memory"
   }
 }

@@ -9,7 +9,7 @@ import json
 import os
 import socket
 import threading
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from .socket_base import UnixSocketServer
 
@@ -50,7 +50,7 @@ class DaemonServer(UnixSocketServer):
             except Exception:
                 pass
 
-    def _process_request(self, request_str: str) -> Optional[str]:
+    def _process_request(self, request_str: str) -> str | None:
         """Process a JSON request. Returns response string, or None for notifications."""
         try:
             request = json.loads(request_str)

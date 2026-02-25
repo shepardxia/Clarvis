@@ -1,18 +1,15 @@
-"""Single source of truth for all Clarvis state with observer pattern."""
+"""Single source of truth for all Clarvis state."""
 
 import logging
 import threading
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
 
 class StateStore:
-    """
-    Central state store with observer pattern.
+    """Central state store.
 
-    All state changes go through this class. Observers are notified
-    when state changes, enabling push-based updates.
+    All state changes go through this class.
     """
 
     def __init__(self):
@@ -25,30 +22,9 @@ class StateStore:
             "voice_text": {},
             "mic": {},
         }
-        self._observers: list[Callable[[str, dict], None]] = []
         self._lock = threading.RLock()  # Reentrant for nested calls
         self._status_locked = False
         self._pre_lock_status: dict | None = None
-
-    def subscribe(self, callback: Callable[[str, dict], None]) -> Callable[[], None]:
-        """
-        Subscribe to state changes.
-
-        Args:
-            callback: Function called with (section, new_value) on changes
-
-        Returns:
-            Unsubscribe function
-        """
-        with self._lock:
-            self._observers.append(callback)
-
-        def unsubscribe():
-            with self._lock:
-                if callback in self._observers:
-                    self._observers.remove(callback)
-
-        return unsubscribe
 
     @property
     def status_locked(self) -> bool:
@@ -74,28 +50,18 @@ class StateStore:
                 self._state["status"] = self._pre_lock_status
                 self._pre_lock_status = None
 
-    def update(self, section: str, value: dict, notify: bool = True, force: bool = False) -> None:
-        """
-        Update a state section and notify observers.
+    def update(self, section: str, value: dict, force: bool = False) -> None:
+        """Update a state section.
 
         Args:
             section: State section name (status, sessions, weather, etc.)
             value: New value for the section
-            notify: Whether to notify observers (default True)
             force: Bypass status lock (used by voice pipeline)
         """
         with self._lock:
             if section == "status" and self._status_locked and not force:
                 return
             self._state[section] = value
-            observers = self._observers.copy()  # Copy to avoid mutation during iteration
-
-        if notify:
-            for observer in observers:
-                try:
-                    observer(section, value)
-                except Exception as e:
-                    logger.warning(f"Observer failed for section '{section}': {e}")
 
     def get(self, section: str) -> dict:
         """
@@ -111,16 +77,6 @@ class StateStore:
             data = self._state.get(section, {})
             # Return copy to prevent external mutation
             return data.copy() if isinstance(data, dict) else data
-
-    def get_all(self) -> dict[str, dict]:
-        """
-        Get a copy of all state.
-
-        Returns:
-            Copy of entire state dict
-        """
-        with self._lock:
-            return {k: v.copy() if isinstance(v, dict) else v for k, v in self._state.items()}
 
 
 # Global instance for singleton access

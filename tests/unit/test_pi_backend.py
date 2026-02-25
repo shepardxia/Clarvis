@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from clarvis.core.backends.pi import PiBackend
-from clarvis.core.backends.protocol import AgentBackend, BackendConfig
+from clarvis.agent.backends.pi import PiBackend
+from clarvis.agent.backends.protocol import AgentBackend, BackendConfig
 
 
 def _make_config(**overrides) -> BackendConfig:

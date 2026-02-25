@@ -40,6 +40,9 @@ def build_context_prefix(msg: "InboundMessage", registry: "UserRegistry") -> str
         extras = ", ".join(filter(None, [name_str, aff_str]))
         if extras:
             identity += f" ({extras})"
+        role = user.get("role", "user")
+        if role != "user":
+            identity += f" [{role}]"
         parts.append(identity)
 
     # Reply context

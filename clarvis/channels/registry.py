@@ -35,11 +35,13 @@ class UserRegistry:
         }
     """
 
-    def __init__(self, path: Path = _DEFAULT_PATH):
+    def __init__(self, path: Path = _DEFAULT_PATH, admin_user_ids: list[str] | None = None):
         self._path = path
         self._lock = RLock()
         self._data: dict[str, Any] = {"users": {}}
+        self._admin_user_ids: set[str] = set(admin_user_ids or [])
         self.load()
+        self._migrate_roles()
 
     def load(self) -> None:
         """Load registry from disk."""
@@ -108,16 +110,17 @@ class UserRegistry:
     def get_by_name(self, name: str) -> dict | None:
         """Look up a user by username key or any name in their names list.
 
-        Case-insensitive matching.
+        Case-insensitive matching.  The returned dict includes a
+        ``_username`` key with the registry username.
         """
         lower = name.lower()
         with self._lock:
             for username, profile in self._data.get("users", {}).items():
                 if username.lower() == lower:
-                    return dict(profile)
+                    return {**profile, "_username": username}
                 for n in profile.get("names", []):
                     if n.lower() == lower:
-                        return dict(profile)
+                        return {**profile, "_username": username}
         return None
 
     def register(
@@ -142,6 +145,8 @@ class UserRegistry:
             if channel and channel_user_id:
                 channels = profile.setdefault("channels", {})
                 channels[channel] = {"user_id": channel_user_id}
+            if "role" not in profile:
+                profile["role"] = self._role_for(profile)
             self.save()
 
     def unregister(self, channel: str, user_id: str) -> str | None:
@@ -183,3 +188,42 @@ class UserRegistry:
                 for name in profile.get("names", []):
                     mappings[name] = uid
         return mappings
+
+    def _migrate_roles(self) -> None:
+        """Assign roles to existing users that lack one. Saves once if any changed."""
+        changed = False
+        with self._lock:
+            for _username, profile in self._data.get("users", {}).items():
+                if "role" in profile:
+                    continue
+                profile["role"] = self._role_for(profile)
+                changed = True
+            if changed:
+                self.save()
+
+    def _role_for(self, profile: dict) -> str:
+        """Determine role based on whether any channel user_id is in admin set."""
+        for ch_info in profile.get("channels", {}).values():
+            if ch_info.get("user_id") in self._admin_user_ids:
+                return "admin"
+        return "user"
+
+    def get_role(self, channel: str, user_id: str) -> str | None:
+        """Look up a user's role by channel identity. Returns None if not registered."""
+        with self._lock:
+            for _username, profile in self._data.get("users", {}).items():
+                ch_info = profile.get("channels", {}).get(channel, {})
+                if ch_info.get("user_id") == user_id:
+                    return profile.get("role", "user")
+        return None
+
+    def set_role(self, username: str, role: str) -> bool:
+        """Set role by username. Returns False if user not found."""
+        lower = username.lower()
+        with self._lock:
+            for uname, profile in self._data.get("users", {}).items():
+                if uname.lower() == lower:
+                    profile["role"] = role
+                    self.save()
+                    return True
+        return False

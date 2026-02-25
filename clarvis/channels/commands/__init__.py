@@ -38,10 +38,14 @@ def _help_message() -> str:
         "  `!register <用户名> name <名字> org <组织>`\n"
         "  多个名字/组织用逗号分隔\n"
         "  例 / Example: `!register Zhong name 老钟, Simon org SRTP, Torque`\n\n"
-        "**其他 Other:**\n"
-        "  `!unregister` — 取消注册\n"
-        "  `!enable` / `!disable` — 开启/关闭本频道下的聊天\n"
-        "  `!status` — 查看已注册用户、组织和聊天"
+        "**查询 Info:**\n"
+        "  `!unregister` — 取消注册 / unregister\n"
+        "  `!status` — 查看用户、组织和聊天 / show users, orgs & chats\n"
+        "  `!whois <name>` — 查看用户信息 / look up user\n\n"
+        "**管理员 Admin only:**\n"
+        "  `!enable` / `!disable` — 开启/关闭聊天 / toggle chat\n"
+        "  `!addorg <name>` / `!removeorg <name>` — 管理组织 / manage orgs\n"
+        "  `!promote <user>` / `!demote <user>` — 管理权限 / manage roles"
     )
 
 

@@ -2,8 +2,8 @@
 
 import pytest
 
-from clarvis.core.session_tracker import SessionTracker
 from clarvis.core.state import StateStore
+from clarvis.services.session_tracker import SessionTracker
 
 
 @pytest.fixture

@@ -3,8 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from clarvis.agent.agent import SessionProfile
 from clarvis.channels.agent_factory import _create_backend, _get_backend_type
-from clarvis.core.agent import SessionProfile
 
 
 def _make_profile(**overrides) -> SessionProfile:
@@ -21,7 +21,7 @@ def _make_profile(**overrides) -> SessionProfile:
 def test_get_backend_type_defaults_to_claude_code():
     """Without config, defaults to claude-code."""
     with patch(
-        "clarvis.widget.config.get_config",
+        "clarvis.display.config.get_config",
         side_effect=Exception("no config"),
     ):
         assert _get_backend_type() == "claude-code"
@@ -32,7 +32,7 @@ def test_get_backend_type_reads_config():
     mock_cfg = MagicMock()
     mock_cfg.channels.agent_backend = "pi"
     with patch(
-        "clarvis.widget.config.get_config",
+        "clarvis.display.config.get_config",
         return_value=mock_cfg,
     ):
         assert _get_backend_type() == "pi"

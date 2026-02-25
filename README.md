@@ -145,7 +145,7 @@ Status Change
 Animations are defined in declarative YAML with composable sequences:
 
 ```yaml
-# clarvis/elements/animations/idle.yaml
+# clarvis/display/elements/animations/idle.yaml
 sequences:
   blink:
     - { eyes: "half", mouth: "smile" }
@@ -161,7 +161,7 @@ frames:
   - $rest
 ```
 
-**Shorthand system** — Write `eyes: "sparkle"` instead of `eyes: "✧"`. See [Animation Design Guide](clarvis/elements/animations/README.md).
+**Shorthand system** — Write `eyes: "sparkle"` instead of `eyes: "✧"`. See [Animation Design Guide](clarvis/display/elements/animations/README.md).
 
 ### Weather Particles
 

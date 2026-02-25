@@ -17,6 +17,7 @@ from ..core.context_helpers import (
 )
 from ._helpers import get_daemon, make_lifespan
 from .channel_tools import create_channel_server
+from .knowledge_tools import create_knowledge_server
 from .memory_tools import create_memory_server
 from .spotify_tools import create_spotify_server
 from .timer_tools import create_timer_server
@@ -157,14 +158,16 @@ def create_app(daemon, tool_config, get_session=None):
     if _enabled("channels") and getattr(daemon, "channel_manager", None) is not None:
         app.mount(create_channel_server(daemon))
 
-    # Memory — single path, driven entirely by tool_config
-    if daemon.memory_service is not None:
-        mem_cfg = tool_config.get("memory", False)
-        if mem_cfg:
-            visibility = "master"
-            if isinstance(mem_cfg, dict) and "visibility" in mem_cfg:
-                visibility = mem_cfg["visibility"]
+    # Memory + Knowledge — driven entirely by tool_config
+    mem_cfg = tool_config.get("memory", False)
+    if mem_cfg:
+        visibility = "master"
+        if isinstance(mem_cfg, dict) and "visibility" in mem_cfg:
+            visibility = mem_cfg["visibility"]
+        if daemon.hindsight_backend is not None:
             app.mount(create_memory_server(daemon, visibility=visibility))
+        if daemon.cognee_backend is not None:
+            app.mount(create_knowledge_server(daemon, visibility=visibility))
 
     return app
 

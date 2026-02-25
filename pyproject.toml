@@ -26,7 +26,22 @@ clarvis = "clarvis.daemon:main"
 
 [project.optional-dependencies]
 voice = ["claude-agent-sdk", "nanobuddy[detect]"]
-memory = ["graphiti-core[anthropic]>=0.28", "falkordblite>=0.8.0", "redis>=7.2", "memu-py>=1.4"]
+memory = [
+    "cognee[graphiti,anthropic]",
+    "falkordblite>=0.8.0",
+    "redis>=7.2",
+    "asyncpg>=0.29.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.17",
+    "pgvector>=0.3",
+    "psycopg2-binary>=2.9",
+    "greenlet>=3.2",
+    "pg0-embedded>=0.11.0",
+    "tiktoken>=0.12.0",
+    "langchain-text-splitters>=0.3.0",
+    "dateparser>=1.2",
+    "python-dateutil>=2.8",
+]
 music = ["clautify"]
 channels = ["httpx", "websockets"]
 particles = ["numba>=0.63.1"]

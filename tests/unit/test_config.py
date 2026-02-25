@@ -2,7 +2,7 @@
 
 import pytest
 
-from clarvis.widget.config import (
+from clarvis.display.config import (
     DatasetConfig,
     DisplayConfig,
     MemoryConfig,
@@ -59,12 +59,12 @@ def test_volume_out_of_range():
 
 
 def test_memory_config_datasets():
-    """New memory config has dataset visibility mapping."""
+    """Memory config has bank visibility mapping via hindsight.banks."""
     cfg = MemoryConfig()
-    assert "parletre" in cfg.datasets
-    assert "agora" in cfg.datasets
-    assert cfg.datasets["parletre"].visibility == "master"
-    assert cfg.datasets["agora"].visibility == "all"
+    assert "parletre" in cfg.hindsight.banks
+    assert "agora" in cfg.hindsight.banks
+    assert cfg.hindsight.banks["parletre"].visibility == "master"
+    assert cfg.hindsight.banks["agora"].visibility == "all"
     assert cfg.auto_ingest is True
     assert cfg.staleness_hours == 24
 

@@ -213,6 +213,72 @@ except Exception as e:
 "
         fi
         ;;
+    checkin)
+        # Interactive memory check-in session
+        # Step 1: Tell daemon to seed goals + prepare checkin
+        result=$(echo '{"method":"checkin","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null)
+        if [ -z "$result" ]; then
+            echo "Error: daemon not running (start with 'clarvis start')"
+            exit 1
+        fi
+        echo "$result" | .venv/bin/python -c "
+import sys, json
+try:
+    raw = json.load(sys.stdin)
+    r = raw.get('result', raw)
+    if 'error' in r:
+        print(f'Error: {r[\"error\"]}')
+        sys.exit(1)
+    seeded = r.get('goals_seeded', 0)
+    staged = r.get('staged_count', 0)
+    if seeded:
+        print(f'Seeded {seeded} goal(s).')
+    if staged:
+        print(f'{staged} staged change(s) pending review.')
+    else:
+        print('No staged changes pending.')
+    warn = r.get('memory_warning')
+    if warn:
+        print(f'Warning: {warn}')
+except Exception as e:
+    print(f'Error: {e}')
+    sys.exit(1)
+" || exit 1
+        # Step 2: Launch interactive Claude session at ~/.clarvis/home/
+        # Uses the checkin skill — Claude reads skills/ from the project dir
+        _checkin_dir="$HOME/.clarvis/home"
+        if [ ! -d "$_checkin_dir" ]; then
+            echo "Error: home directory not found: $_checkin_dir"
+            echo "Has the daemon started at least once?"
+            exit 1
+        fi
+        _backend=$(python3 -c "
+import json
+try:
+    c = json.load(open('config.json'))
+    print(c.get('channels', {}).get('agent_backend', 'claude-code'))
+except Exception:
+    print('claude-code')
+" 2>/dev/null)
+        echo ""
+        echo "Starting check-in session..."
+        echo "Tip: Ask Clarvis to run the checkin skill, or say 'let's do a check-in'"
+        echo ""
+        if [ "$_backend" = "pi" ]; then
+            cd "$_checkin_dir" || exit 1
+            exec pi --model "$(python3 -c "
+import json
+try:
+    c = json.load(open('$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")/config.json'))
+    print(c.get('channels', {}).get('model', '') or 'claude-sonnet-4-5')
+except Exception:
+    print('claude-sonnet-4-5')
+" 2>/dev/null)" --prompt "Let's do a memory check-in. Start by reviewing any staged changes, then review active goals."
+        else
+            cd "$_checkin_dir" || exit 1
+            exec claude --prompt "Let's do a memory check-in. Start by reviewing any staged changes, then review active goals."
+        fi
+        ;;
     new)
         rm -f "$HOME/.clarvis/home/session_id"
         rm -f "$HOME/.clarvis/home/pi-session.jsonl"
@@ -258,6 +324,7 @@ except Exception as e:
         echo "  remove org Remove an org"
         echo "  list org  List all orgs"
         echo "  rem       Consolidate memories (ingest active sessions into memory)"
+        echo "  checkin   Interactive memory check-in (review staged changes + goals)"
         echo "  new       Reset session — next voice/chat starts a fresh conversation"
         echo "  reload    Reload agent prompts (CLAUDE.md, skills, extensions)"
         ;;

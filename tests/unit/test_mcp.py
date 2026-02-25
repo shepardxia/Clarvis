@@ -1,7 +1,8 @@
 """Tests for the full MCP tool surface.
 
 Every tool is tested through Client(app).call_tool() — the same interface
-agents use. One file covers standard tools, spotify, memory, and timers.
+agents use. One file covers standard tools, spotify, memory, knowledge,
+and timers.
 """
 
 import asyncio
@@ -44,15 +45,51 @@ def mock_daemon(loop, tmp_path):
     daemon.refresh.refresh_weather.return_value = {"temperature": 32, "description": "clear"}
     daemon.refresh.refresh_time.return_value = {"timestamp": "2026-02-06T12:00:00", "timezone": "America/New_York"}
 
-    # memory service (DualMemoryService interface)
-    daemon.memory_service = MagicMock()
-    daemon.memory_service._ready = True
-    daemon.memory_service.add = AsyncMock(return_value={"status": "ok", "dataset": "parletre", "bytes": 10})
-    daemon.memory_service.search = AsyncMock(return_value=[{"fact": "test fact"}])
-    daemon.memory_service.forget = AsyncMock(return_value={"status": "ok", "deleted": "abc-123", "dataset": "parletre"})
-    # memU backend for visibility checks
-    daemon.memory_service._memu = MagicMock()
-    daemon.memory_service._memu.visible_datasets.return_value = ["parletre", "agora"]
+    # Hindsight backend (replaces old DualMemoryService)
+    daemon.hindsight_backend = MagicMock()
+    daemon.hindsight_backend.ready = True
+    daemon.hindsight_backend.visible_banks.return_value = ["parletre", "agora"]
+    daemon.hindsight_backend.retain = AsyncMock(return_value=[{"id": "fact-001", "fact_type": "world"}])
+    daemon.hindsight_backend.recall = AsyncMock(
+        return_value={
+            "results": [{"id": "fact-001", "content": "test fact", "fact_type": "world"}],
+            "entities": [],
+        }
+    )
+    daemon.hindsight_backend.update = AsyncMock(
+        return_value={"success": True, "old_id": "fact-001", "new_ids": ["fact-002"]}
+    )
+    daemon.hindsight_backend.forget = AsyncMock(return_value={"status": "ok"})
+    daemon.hindsight_backend.list_memories = AsyncMock(
+        return_value={"items": [{"id": "fact-001", "content": "a memory", "fact_type": "world"}], "total": 1}
+    )
+
+    # Cognee backend
+    daemon.cognee_backend = MagicMock()
+    daemon.cognee_backend.ready = True
+    daemon.cognee_backend.search = AsyncMock(return_value=[{"result": "knowledge result", "dataset_name": "knowledge"}])
+    daemon.cognee_backend.ingest = AsyncMock(return_value={"status": "ok", "dataset": "knowledge", "tags": []})
+    daemon.cognee_backend.list_entities = AsyncMock(
+        return_value=[{"id": "ent-001", "name": "Test Entity", "type": "Person"}]
+    )
+    daemon.cognee_backend.list_facts = AsyncMock(
+        return_value=[{"source_id": "ent-001", "target_id": "ent-002", "relationship": "knows", "properties": {}}]
+    )
+    daemon.cognee_backend.update_entity = AsyncMock(
+        return_value={"status": "ok", "entity_id": "ent-001", "updated_fields": ["name"]}
+    )
+    daemon.cognee_backend.merge_entities = AsyncMock(
+        return_value={"status": "ok", "survivor_id": "ent-001", "merged_count": 1}
+    )
+    daemon.cognee_backend.delete = AsyncMock(return_value={"status": "ok", "deleted_id": "ent-003"})
+    daemon.cognee_backend.build_communities = AsyncMock(return_value={"status": "ok"})
+
+    # Staging store
+    daemon.staging_store = MagicMock()
+    daemon.staging_store.list_staged.return_value = []
+
+    # Legacy compat
+    daemon.memory_service = None
 
     # context accumulator
     daemon.context_accumulator = MagicMock()
@@ -96,7 +133,7 @@ async def client(mock_daemon, mock_spotify):
 
 @pytest_asyncio.fixture
 async def memory_client(mock_daemon, mock_spotify):
-    """Home client (memory + prompt_response)."""
+    """Home client (memory + knowledge + prompt_response)."""
     app = create_app(daemon=mock_daemon, tool_config=HOME_TOOLS, get_session=lambda: mock_spotify)
     async with Client(app) as c:
         yield c
@@ -115,16 +152,33 @@ async def test_standard_tools_registered(client):
     assert "set_timer" not in names
     assert "prompt_response" not in names
     assert "memory_add" not in names
+    assert "knowledge_search" not in names
 
 
 @pytest.mark.asyncio
 async def test_memory_tools_registered(memory_client):
     tools = await memory_client.list_tools()
     names = {t.name for t in tools}
-    assert {"memory_add", "memory_search", "memory_forget"} <= names
+    assert {"memory_add", "memory_search", "memory_forget", "memory_update", "memory_list", "memory_staged"} <= names
     # No ctx leakage
     for t in tools:
         assert "ctx" not in t.inputSchema.get("properties", {}), f"ctx leaked in {t.name}"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_tools_registered(memory_client):
+    tools = await memory_client.list_tools()
+    names = {t.name for t in tools}
+    assert {
+        "knowledge_search",
+        "knowledge_ingest",
+        "knowledge_entities",
+        "knowledge_facts",
+        "knowledge_update",
+        "knowledge_merge",
+        "knowledge_delete",
+        "knowledge_communities",
+    } <= names
 
 
 # ── Core tools ──────────────────────────────────────────────────────
@@ -161,53 +215,25 @@ async def test_spotify_error(mock_daemon):
         assert "Connection failed" in r.data
 
 
-# ── Memory tools ────────────────────────────────────────────────────
+# ── Memory tools (Hindsight) ───────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_memory_add(memory_client):
-    r = await memory_client.call_tool("memory_add", {"data": "test fact"})
-    assert "Added" in r.content[0].text
+async def test_memory_add(memory_client, mock_daemon):
+    r = await memory_client.call_tool("memory_add", {"content": "test fact"})
+    text = r.content[0].text
+    assert "Retained" in text
+    mock_daemon.hindsight_backend.retain.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_memory_add_invalid_dataset(memory_client):
-    r = await memory_client.call_tool("memory_add", {"data": "x", "dataset": "bogus"})
-    assert "Error:" in r.content[0].text
-
-
-@pytest.mark.asyncio
-async def test_memory_add_file(memory_client, mock_daemon, tmp_path):
-    f = tmp_path / "notes.txt"
-    f.write_text("hello world")
-    r = await memory_client.call_tool("memory_add", {"file_path": str(f)})
-    assert "Added" in r.content[0].text
-    # File content should have been read and passed as text to .add()
-    mock_daemon.memory_service.add.assert_awaited_once()
-    call_args = mock_daemon.memory_service.add.call_args
-    assert call_args[0][0] == "hello world"  # file contents passed as first arg
-
-
-@pytest.mark.asyncio
-async def test_memory_add_file_not_found(memory_client):
-    r = await memory_client.call_tool("memory_add", {"file_path": "/nonexistent/file.txt"})
-    assert "Error:" in r.content[0].text
-    assert "not found" in r.content[0].text.lower()
-
-
-@pytest.mark.asyncio
-async def test_memory_add_both_data_and_file(memory_client, tmp_path):
-    f = tmp_path / "notes.txt"
-    f.write_text("hello")
-    r = await memory_client.call_tool("memory_add", {"data": "text", "file_path": str(f)})
-    assert "Error:" in r.content[0].text
-    assert "exactly one" in r.content[0].text.lower()
-
-
-@pytest.mark.asyncio
-async def test_memory_add_neither_data_nor_file(memory_client):
-    r = await memory_client.call_tool("memory_add", {})
-    assert "Error:" in r.content[0].text
+async def test_memory_add_with_type(memory_client, mock_daemon):
+    r = await memory_client.call_tool("memory_add", {"content": "a belief", "fact_type": "opinion", "confidence": 0.8})
+    text = r.content[0].text
+    assert "Retained" in text
+    call_kwargs = mock_daemon.hindsight_backend.retain.call_args[1]
+    assert call_kwargs.get("fact_type") == "opinion"
+    assert call_kwargs.get("confidence") == 0.8
 
 
 @pytest.mark.asyncio
@@ -217,9 +243,145 @@ async def test_memory_search(memory_client):
 
 
 @pytest.mark.asyncio
-async def test_memory_forget(memory_client):
-    r = await memory_client.call_tool("memory_forget", {"item_id": "abc-123", "dataset": "parletre"})
-    assert "ok" in r.content[0].text
+async def test_memory_search_restricted_bank(mock_daemon, mock_spotify):
+    """Masked agent (visibility=all) cannot search parletre."""
+    tool_config = {
+        "memory": {"visibility": "all"},
+        "spotify": True,
+        "timers": True,
+        "channels": True,
+        "prompt_response": True,
+    }
+    mock_daemon.hindsight_backend.visible_banks.return_value = ["agora"]
+    app = create_app(daemon=mock_daemon, tool_config=tool_config, get_session=lambda: mock_spotify)
+    async with Client(app) as c:
+        r = await c.call_tool("memory_search", {"query": "test", "bank": "parletre"})
+        assert "Error" in r.content[0].text
+        assert "not accessible" in r.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_memory_update(memory_client, mock_daemon):
+    r = await memory_client.call_tool("memory_update", {"fact_id": "fact-001", "content": "updated text"})
+    text = r.content[0].text
+    assert "Updated" in text
+    mock_daemon.hindsight_backend.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_memory_forget(memory_client, mock_daemon):
+    r = await memory_client.call_tool("memory_forget", {"fact_id": "fact-001"})
+    text = r.content[0].text
+    assert "Forgotten" in text
+    mock_daemon.hindsight_backend.forget.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_memory_list(memory_client):
+    r = await memory_client.call_tool("memory_list", {})
+    text = r.content[0].text
+    assert "a memory" in text
+
+
+@pytest.mark.asyncio
+async def test_memory_staged_empty(memory_client):
+    r = await memory_client.call_tool("memory_staged", {})
+    assert "No staged changes" in r.content[0].text
+
+
+# ── Knowledge tools (Cognee) ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_knowledge_search(memory_client):
+    r = await memory_client.call_tool("knowledge_search", {"query": "test"})
+    assert "knowledge result" in r.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_knowledge_ingest(memory_client, mock_daemon):
+    r = await memory_client.call_tool("knowledge_ingest", {"content_or_path": "some text"})
+    text = r.content[0].text
+    assert "Ingested" in text
+    mock_daemon.cognee_backend.ingest.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_entities(memory_client):
+    r = await memory_client.call_tool("knowledge_entities", {})
+    text = r.content[0].text
+    assert "Test Entity" in text
+
+
+@pytest.mark.asyncio
+async def test_knowledge_facts(memory_client):
+    r = await memory_client.call_tool("knowledge_facts", {})
+    text = r.content[0].text
+    assert "knows" in text
+
+
+@pytest.mark.asyncio
+async def test_knowledge_update(memory_client, mock_daemon):
+    r = await memory_client.call_tool("knowledge_update", {"entity_id": "ent-001", "fields": '{"name": "Updated"}'})
+    text = r.content[0].text
+    assert "Updated" in text
+    mock_daemon.cognee_backend.update_entity.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_merge(memory_client, mock_daemon):
+    r = await memory_client.call_tool("knowledge_merge", {"entity_ids": "ent-001, ent-002"})
+    text = r.content[0].text
+    assert "Merged" in text
+    mock_daemon.cognee_backend.merge_entities.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_delete(memory_client, mock_daemon):
+    r = await memory_client.call_tool("knowledge_delete", {"node_id": "ent-003"})
+    text = r.content[0].text
+    assert "Deleted" in text
+    mock_daemon.cognee_backend.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_communities(memory_client, mock_daemon):
+    r = await memory_client.call_tool("knowledge_communities", {})
+    text = r.content[0].text
+    assert "built" in text.lower()
+    mock_daemon.cognee_backend.build_communities.assert_awaited_once()
+
+
+# ── Visibility scoping ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_masked_agent_no_write_tools(mock_daemon, mock_spotify):
+    """Masked agents (visibility=all) only get search tools, no write."""
+    tool_config = {
+        "memory": {"visibility": "all"},
+        "spotify": False,
+        "timers": False,
+        "channels": True,
+        "prompt_response": False,
+    }
+    mock_daemon.hindsight_backend.visible_banks.return_value = ["agora"]
+    app = create_app(daemon=mock_daemon, tool_config=tool_config, get_session=lambda: mock_spotify)
+    async with Client(app) as c:
+        tools = await c.list_tools()
+        names = {t.name for t in tools}
+        assert "memory_search" in names
+        assert "knowledge_search" in names
+        # Write tools must NOT be present for masked agents
+        assert "memory_add" not in names
+        assert "memory_update" not in names
+        assert "memory_forget" not in names
+        assert "memory_list" not in names
+        assert "memory_staged" not in names
+        assert "knowledge_ingest" not in names
+        assert "knowledge_update" not in names
+        assert "knowledge_merge" not in names
+        assert "knowledge_delete" not in names
 
 
 # ── prompt_response ─────────────────────────────────────────────────

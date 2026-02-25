@@ -29,11 +29,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ...core.agent import Agent
+    from ...agent.agent import Agent
     from ...core.signals import SignalBus
     from ...core.state import StateStore
+    from ...display.socket_server import WidgetSocketServer
     from ...services.wake_word import WakeWordService
-    from ...widget.socket_server import WidgetSocketServer
     from .asr import ASRBackend
 
 logger = logging.getLogger(__name__)
@@ -240,7 +240,7 @@ class VoiceCommandOrchestrator:
 
     def _push_status_now(self, status: str) -> None:
         """Send a lightweight status-only frame for instant visual feedback."""
-        from ...core.colors import StatusColors
+        from ...display.colors import StatusColors
 
         color_def = StatusColors.get(status)
         self.socket.push_frame({"theme_color": list(color_def.rgb)})
@@ -580,7 +580,7 @@ class VoiceCommandOrchestrator:
         transcript = read_recent_transcript(transcript_path)
         return await build_memory_grounding(
             self.memory_service,
-            "master",
+            "parletre",
             transcript,
         )
 
@@ -711,7 +711,7 @@ class VoiceCommandOrchestrator:
 
     def _play_sound(self, sound: str = "Tink") -> None:
         """Play a macOS system sound (fire-and-forget)."""
-        from ...core.audio import play_system_sound
+        from ...display.audio import play_system_sound
 
         self._loop.create_task(play_system_sound(sound))
 

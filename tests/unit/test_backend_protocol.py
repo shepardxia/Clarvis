@@ -3,7 +3,7 @@
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from clarvis.core.backends.protocol import AgentBackend, BackendConfig
+from clarvis.agent.backends.protocol import AgentBackend, BackendConfig
 
 
 class FakeBackend:

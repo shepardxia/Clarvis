@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from ..core.context import AppContext
-    from ..core.display_manager import DisplayManager
+    from ..display.display_manager import DisplayManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class TimerNotifier:
             self._voice_notify(name, label)
 
     def _flash_and_sound(self, name: str, label: str) -> None:
-        from ..core.audio import play_system_sound
+        from ..display.audio import play_system_sound
 
         self._display.set_status("activated")
 

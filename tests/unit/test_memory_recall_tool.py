@@ -1,14 +1,12 @@
-"""Tests for the memory_recall MCP tool and its helpers."""
+"""Tests for the memory MCP tool helpers."""
 
 import json
 from pathlib import Path
 
-from clarvis.mcp.memory_tools import (
-    _format_recall_result,
-    _read_recent_transcript,
-)
+from clarvis.channels.memory_context import read_recent_transcript
+from clarvis.mcp.memory_tools import _fmt_facts
 
-# -- _read_recent_transcript ------------------------------------------------
+# -- read_recent_transcript ------------------------------------------------
 
 
 def test_read_recent_transcript_returns_messages(tmp_path: Path):
@@ -20,7 +18,7 @@ def test_read_recent_transcript_returns_messages(tmp_path: Path):
         + json.dumps({"sender": "clarvis", "content": "hello"})
         + "\n"
     )
-    result = _read_recent_transcript(path)
+    result = read_recent_transcript(path)
     assert len(result) == 2
     assert result[0] == {"role": "user", "content": "hi"}
     assert result[1] == {"role": "assistant", "content": "hello"}
@@ -28,76 +26,35 @@ def test_read_recent_transcript_returns_messages(tmp_path: Path):
 
 def test_read_recent_transcript_missing_file():
     """Should return empty list for non-existent file."""
-    result = _read_recent_transcript(Path("/tmp/nonexistent_xyz.jsonl"))
+    result = read_recent_transcript(Path("/tmp/nonexistent_xyz.jsonl"))
     assert result == []
 
 
-# -- _format_recall_result --------------------------------------------------
+# -- _fmt_facts ---------------------------------------------------------------
 
 
-def test_format_recall_result_with_full_data():
-    """Should format categories, items, facts, and next_step_query."""
-    result = {
-        "categories": [{"name": "personal", "summary": "user preferences"}],
-        "items": [
-            {"summary": "likes coffee", "memory_type": "profile"},
-            {"summary": "works on Clarvis", "memory_type": "knowledge"},
-        ],
-        "graphiti_facts": [{"fact": "user is a developer"}],
-        "next_step_query": "What tools does the user prefer?",
-    }
-    formatted = _format_recall_result(result)
-
-    assert "## Categories" in formatted
-    assert "personal" in formatted
-    assert "## Memory Items" in formatted
-    assert "[profile]" in formatted
-    assert "likes coffee" in formatted
-    assert "## Knowledge Graph Facts" in formatted
+def test_fmt_facts_with_data():
+    """Should format facts with IDs, types, and content."""
+    facts = [
+        {"id": "abc-12345678", "fact_type": "world", "content": "user is a developer"},
+        {"id": "def-12345678", "fact_type": "opinion", "content": "prefers Python", "confidence": 0.8},
+    ]
+    formatted = _fmt_facts(facts)
+    assert "[world]" in formatted
     assert "user is a developer" in formatted
-    assert "Suggested follow-up" in formatted
+    assert "[opinion]" in formatted
+    assert "prefers Python" in formatted
+    assert "confidence: 0.8" in formatted
+    assert "id:abc-1234567" in formatted
 
 
-def test_format_recall_result_empty():
-    """Should return 'No memories found.' when all sections empty."""
-    result = {
-        "categories": [],
-        "items": [],
-        "graphiti_facts": [],
-    }
-    assert _format_recall_result(result) == "No memories found."
+def test_fmt_facts_empty():
+    """Should return 'No results.' for empty list."""
+    assert _fmt_facts([]) == "No results."
 
 
-def test_format_recall_result_error():
-    """Should return error message on error result."""
-    result = {"error": "memU backend not started"}
-    formatted = _format_recall_result(result)
-    assert "Error:" in formatted
-    assert "memU backend not started" in formatted
-
-
-def test_format_recall_result_items_only():
-    """Should format correctly when only items are present."""
-    result = {
-        "categories": [],
-        "items": [{"summary": "a memory"}],
-        "graphiti_facts": [],
-    }
-    formatted = _format_recall_result(result)
-    assert "## Memory Items" in formatted
-    assert "a memory" in formatted
-    assert "## Categories" not in formatted
-    assert "## Knowledge Graph Facts" not in formatted
-
-
-def test_format_recall_result_graphiti_facts_only():
-    """Should format correctly when only graphiti facts present."""
-    result = {
-        "categories": [],
-        "items": [],
-        "graphiti_facts": [{"fact": "a fact"}, {"text": "another fact"}],
-    }
-    formatted = _format_recall_result(result)
-    assert "## Knowledge Graph Facts" in formatted
-    assert "a fact" in formatted
-    assert "another fact" in formatted
+def test_fmt_facts_missing_fields():
+    """Should handle facts with missing fields gracefully."""
+    facts = [{"id": "x", "content": "just content"}]
+    formatted = _fmt_facts(facts)
+    assert "just content" in formatted

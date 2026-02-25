@@ -21,21 +21,21 @@ from filelock import FileLock, Timeout
 
 from .core.command_handlers import CommandHandlers
 from .core.context import AppContext
-from .core.display_manager import DisplayManager
-from .core.hook_processor import HookProcessor
 from .core.ipc import DaemonServer
 from .core.persistence import json_load_safe
-from .core.refresh_manager import RefreshManager
 from .core.scheduler import Scheduler
-from .core.session_tracker import SessionTracker
 from .core.signals import SignalBus
 from .core.state import StateStore, get_state_store
+from .display.click_regions import ClickRegion, ClickRegionManager
+from .display.config import CONFIG_PATH, get_config
+from .display.display_manager import DisplayManager
+from .display.refresh_manager import RefreshManager
+from .display.renderer import FrameRenderer
+from .display.socket_server import WidgetSocketServer, get_socket_server
+from .hooks.hook_processor import HookProcessor
 from .services.context_accumulator import ContextAccumulator
+from .services.session_tracker import SessionTracker
 from .services.timer_service import TimerService
-from .widget.click_regions import ClickRegion, ClickRegionManager
-from .widget.config import CONFIG_PATH, get_config
-from .widget.renderer import FrameRenderer
-from .widget.socket_server import WidgetSocketServer, get_socket_server
 
 logger = logging.getLogger(__name__)
 
@@ -133,25 +133,80 @@ class CentralHubDaemon:
         self._wakeup_manager = None
         self._owned_services: list = []  # services with no other refs (prevent GC)
 
-        # Memory service (optional — requires graphiti + memu)
-        self.memory_service = None
-        self._ingestion_pipeline = None
+        # Memory backends (optional — requires hindsight + cognee)
+        self.memory_service = None  # Legacy compat — set to hindsight_backend for old refs
+        self.hindsight_backend = None
+        self.cognee_backend = None
+        self.staging_store = None
+        self.document_watcher = None
+        self.session_watcher = None
         if config.memory.enabled:
             try:
-                from .services.memory import DualMemoryService
-                from .services.memory.ingestion import IngestionPipeline
+                from .agent.memory.hindsight_backend import HindsightBackend
 
-                self.memory_service = DualMemoryService(
-                    data_dir=config.memory.data_dir,
-                    dataset_configs=config.memory.datasets,
-                    model=config.memory.model,
-                )
-                self._ingestion_pipeline = IngestionPipeline(
-                    state_dir=Path(config.memory.data_dir).expanduser(),
-                    memory_service=self.memory_service,
+                h_cfg = config.memory.hindsight
+                self.hindsight_backend = HindsightBackend(
+                    db_url=h_cfg.db_url,
+                    llm_provider=h_cfg.llm_provider,
+                    api_key=h_cfg.llm_api_key,
+                    model=h_cfg.llm_model,
+                    banks={name: {"visibility": dc.visibility} for name, dc in h_cfg.banks.items()},
                 )
             except ImportError:
-                logger.info("graphiti/memu not installed — memory disabled")
+                logger.info("hindsight not installed — conversational memory disabled")
+
+            try:
+                from .agent.memory.cognee_backend import CogneeBackend
+
+                c_cfg = config.memory.cognee
+                self.cognee_backend = CogneeBackend(
+                    db_host=c_cfg.db_host,
+                    db_port=c_cfg.db_port,
+                    db_name=c_cfg.db_name,
+                    db_username=c_cfg.db_username,
+                    db_password=c_cfg.db_password,
+                    graph_path=c_cfg.graph_path,
+                    llm_provider=c_cfg.llm_provider,
+                    llm_model=c_cfg.llm_model,
+                    llm_api_key=c_cfg.llm_api_key,
+                )
+            except ImportError:
+                logger.info("cognee not installed — knowledge graph disabled")
+
+            try:
+                from .agent.memory.staging import StagingStore
+
+                self.staging_store = StagingStore(
+                    path=Path(config.memory.staging_path).expanduser(),
+                )
+            except Exception:
+                logger.info("Failed to initialize staging store", exc_info=True)
+
+            # SessionWatcher — agent-driven transcript processing for retain skill
+            try:
+                from .agent.memory.session_watcher import SessionWatcher
+
+                data_dir = Path(config.memory.data_dir).expanduser()
+                self.session_watcher = SessionWatcher(
+                    sessions_dir=data_dir / "sessions",
+                    watermark_path=data_dir / "session_watcher_state.json",
+                )
+            except ImportError:
+                pass
+
+            if self.cognee_backend is not None:
+                try:
+                    from .agent.memory.document_watcher import DocumentWatcher
+
+                    d_cfg = config.memory.documents
+                    self.document_watcher = DocumentWatcher(
+                        watch_dir=Path(d_cfg.watch_dir),
+                        cognee_backend=self.cognee_backend,
+                        hash_store_path=Path(d_cfg.hash_store_path),
+                        poll_interval=d_cfg.poll_interval,
+                    )
+                except ImportError:
+                    logger.info("document_watcher deps not available")
         # Home project slug — only stage sessions from this project.
         # Encode path the same way Claude Code names its projects/ dirs:
         # replace "." → "-", then "/" → "-".
@@ -374,7 +429,7 @@ class CentralHubDaemon:
             silence_timeout=config.voice.silence_timeout,
             text_linger=config.voice.text_linger,
         )
-        self.voice_orchestrator.memory_service = self.memory_service
+        self.voice_orchestrator.memory_service = self.hindsight_backend
         # Orchestrator now self-subscribes to wake_word signals via bus;
         # remove the daemon fallback so both don't fire.
         if self.bus:
@@ -400,11 +455,11 @@ class CentralHubDaemon:
         if not voice_agent:
             return
 
-        from .core.wakeup import WakeupManager
-        from .services.consolidation import ConversationConsolidator
+        from .agent.memory.consolidation import ConversationConsolidator
+        from .services.wakeup import WakeupManager
 
         consolidator = ConversationConsolidator(
-            memory_service=self.memory_service,
+            memory_service=self.hindsight_backend,
             threshold=config.channels.wakeup.consolidation_threshold,
         )
 
@@ -420,7 +475,7 @@ class CentralHubDaemon:
         self._wakeup_manager = WakeupManager(
             agent=voice_agent,
             state_store=self.state,
-            memory_service=self.memory_service,
+            memory_service=self.hindsight_backend,
             consolidator=consolidator,
             get_spotify_session=_get_spotify_session,
         )
@@ -489,7 +544,7 @@ class CentralHubDaemon:
             )
             self._agents["channels"] = channel_agent
 
-            registry = UserRegistry()
+            registry = UserRegistry(admin_user_ids=config.channels.admin_user_ids)
             state = ChannelState()
 
             self.channel_manager = ChannelManager(
@@ -497,7 +552,7 @@ class CentralHubDaemon:
                 channels_config=channels_config,
                 registry=registry,
                 state=state,
-                memory_service=self.memory_service,
+                memory_service=self.hindsight_backend,
             )
             await self.channel_manager.start()
 
@@ -596,15 +651,30 @@ class CentralHubDaemon:
         self.socket_server.on_message(self._handle_widget_message)
         self.socket_server.on_connect(self.click_manager.push_regions)
 
-        # Memory service (start backends — heavy imports run in executor)
-        if self.memory_service is not None:
+        # Memory backends (start — heavy imports run in executor)
+        if self.hindsight_backend is not None:
             try:
-                await self.memory_service.start()
-                logger.info("DualMemoryService started")
+                await self.hindsight_backend.start()
+                logger.info("HindsightBackend started")
             except Exception:
-                logger.exception("Failed to start memory service")
-                self.memory_service = None
-                self._ingestion_pipeline = None
+                logger.exception("Failed to start Hindsight backend")
+                self.hindsight_backend = None
+
+        if self.cognee_backend is not None:
+            try:
+                await self.cognee_backend.start()
+                logger.info("CogneeBackend started")
+            except Exception:
+                logger.exception("Failed to start Cognee backend")
+                self.cognee_backend = None
+
+        if self.document_watcher is not None:
+            try:
+                await self.document_watcher.start()
+                logger.info("DocumentWatcher started")
+            except Exception:
+                logger.exception("Failed to start document watcher")
+                self.document_watcher = None
 
         # Wake word service (optional — requires nanobuddy)
         config = self.ctx.config
@@ -674,6 +744,34 @@ class CentralHubDaemon:
             )
         )
 
+        # Session watcher — periodic scan for unprocessed transcripts.
+        # Runs at idle cadence; retain skill processes the content.
+        if self.session_watcher is not None:
+            config = self.ctx.config
+            staleness_hours = config.memory.staleness_hours
+            # Check roughly every staleness_hours / 4, but cap at 1hr active / 6hr idle
+            scan_active = min(staleness_hours * 900, 3600)  # staleness_hours * 0.25 (in seconds), max 1h
+            scan_idle = min(staleness_hours * 3600, 21600)  # staleness_hours (in seconds), max 6h
+
+            async def _session_scan_check() -> None:
+                """Log pending sessions count for observability."""
+                try:
+                    pending = await self.session_watcher.scan()
+                    if pending:
+                        logger.info(
+                            "SessionWatcher: %d sessions with unprocessed content",
+                            len(pending),
+                        )
+                except Exception:
+                    logger.debug("SessionWatcher scan failed", exc_info=True)
+
+            self.scheduler.register(
+                "session_scan",
+                lambda: asyncio.create_task(_session_scan_check()),
+                active_interval=scan_active,
+                idle_interval=scan_idle,
+            )
+
         self.scheduler.start()
 
     async def stop(self) -> None:
@@ -720,12 +818,24 @@ class CentralHubDaemon:
         if self._mcp_task:
             self._mcp_task.cancel()
 
-        # Stop memory service
-        if self.memory_service and self.memory_service._ready:
+        # Stop memory backends
+        if self.document_watcher is not None:
             try:
-                await asyncio.wait_for(self.memory_service.stop(), timeout=5.0)
+                await asyncio.wait_for(self.document_watcher.stop(), timeout=5.0)
             except Exception:
-                pass  # Best-effort — daemon is exiting anyway
+                pass
+
+        if self.hindsight_backend is not None and self.hindsight_backend.ready:
+            try:
+                await asyncio.wait_for(self.hindsight_backend.stop(), timeout=5.0)
+            except Exception:
+                pass
+
+        if self.cognee_backend is not None and self.cognee_backend.ready:
+            try:
+                await asyncio.wait_for(self.cognee_backend.stop(), timeout=5.0)
+            except Exception:
+                pass
 
     async def run(self) -> None:
         """Run the daemon until interrupted."""
@@ -752,9 +862,11 @@ class CentralHubDaemon:
             command_server=self.command_server,
             services={
                 "voice": lambda: self.voice_orchestrator,
-                "memory": lambda: self.memory_service,
-                "ingestion": lambda: self._ingestion_pipeline,
+                "memory": lambda: self.hindsight_backend,
+                "cognee": lambda: self.cognee_backend,
+                "session_watcher": lambda: self.session_watcher,
                 "agents": lambda: self._agents,
+                "staging": lambda: self.staging_store,
             },
         )
 

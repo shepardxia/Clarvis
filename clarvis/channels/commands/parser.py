@@ -16,7 +16,20 @@ Examples::
 import re
 from typing import Any
 
-COMMANDS = {"register", "unregister", "enable", "disable", "status"}
+COMMANDS = {
+    "register",
+    "unregister",
+    "enable",
+    "disable",
+    "status",
+    "addorg",
+    "removeorg",
+    "whois",
+    "promote",
+    "demote",
+}
+
+_TARGET_COMMANDS = {"addorg", "removeorg", "whois", "promote", "demote"}
 
 _CLAUSE_KEYWORDS = {"name", "org"}
 
@@ -67,6 +80,13 @@ def parse(text: str) -> dict[str, Any]:
     # Simple commands — no arguments
     if command in {"unregister", "enable", "disable", "status"}:
         return {"command": command}
+
+    # Target commands — rest of line is the target
+    if command in _TARGET_COMMANDS:
+        target = " ".join(words[1:]).strip()
+        if not target:
+            raise ParseError(f"Usage: !{command} <name>")
+        return {"command": command, "target": target}
 
     # register <username> [name ...] [org ...]
     if len(words) < 2:

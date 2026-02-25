@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from clarvis.services.consolidation import ConversationConsolidator
+from clarvis.agent.memory.consolidation import ConversationConsolidator
 
 
 @pytest.fixture

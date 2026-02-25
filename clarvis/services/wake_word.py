@@ -7,7 +7,7 @@ Leaf dependency of channels.voice.orchestrator.
 import logging
 from typing import Any, Callable
 
-from ..widget.config import WakeWordConfig
+from ..display.config import WakeWordConfig
 
 logger = logging.getLogger(__name__)
 

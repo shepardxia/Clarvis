@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ...widget.socket_server import WidgetSocketServer
+    from ...display.socket_server import WidgetSocketServer
 
 logger = logging.getLogger(__name__)
 

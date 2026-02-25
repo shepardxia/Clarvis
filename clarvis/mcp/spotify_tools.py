@@ -8,7 +8,7 @@ import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, List
+from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
 from pydantic import Field
@@ -28,7 +28,7 @@ def _default_get_session():
         session = SpotifySession.from_config(eager=False)
         # Apply max volume from Clarvis config
         try:
-            from ..widget.config import get_config
+            from ..display.config import get_config
 
             session.max_volume = get_config().music.max_volume / 100
         except Exception:
@@ -287,7 +287,7 @@ def _fmt_library_list(result: dict, session) -> str:
             user_name = _dig(item, "item", "data", "ownerV2", "data", "name")
             break
 
-    buckets: dict[str, List[str]] = {
+    buckets: dict[str, list[str]] = {
         "My Playlists": [],
         "Albums": [],
         "Following": [],

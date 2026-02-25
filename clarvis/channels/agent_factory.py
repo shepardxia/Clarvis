@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def _get_backend_type() -> str:
     """Read agent_backend from config, defaulting to 'claude-code'."""
     try:
-        from ..widget.config import get_config
+        from ..display.config import get_config
 
         cfg = get_config()
         return cfg.channels.agent_backend
@@ -36,7 +36,7 @@ def _create_backend(
     Returns:
         An ``AgentBackend``-compatible instance.
     """
-    from ..core.backends.protocol import BackendConfig
+    from ..agent.backends.protocol import BackendConfig
 
     config = BackendConfig(
         session_key=profile.project_dir.name,  # "home" or "channels"
@@ -50,11 +50,11 @@ def _create_backend(
     )
 
     if backend_type == "pi":
-        from ..core.backends.pi import PiBackend
+        from ..agent.backends.pi import PiBackend
 
         return PiBackend(config)
     else:
-        from ..core.backends.claude_code import ClaudeCodeBackend
+        from ..agent.backends.claude_code import ClaudeCodeBackend
 
         return ClaudeCodeBackend(config, force_new=force_new)
 
@@ -69,7 +69,7 @@ def _create_agent(
     force_new: bool = False,
 ):
     """Shared agent construction: profile → backend → Agent → ensure_project_dir."""
-    from ..core.agent import VOICE_ALLOWED_TOOLS, Agent, SessionProfile
+    from ..agent.agent import VOICE_ALLOWED_TOOLS, Agent, SessionProfile
 
     profile = SessionProfile(
         project_dir=project_dir,

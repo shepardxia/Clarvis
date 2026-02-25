@@ -1,0 +1,297 @@
+"""Tests for GoalSeeder — seed cross-session goals from YAML."""
+
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
+
+import pytest
+
+from clarvis.agent.memory.goals import (
+    DEFAULT_SEED_GOALS_YAML,
+    GoalSeeder,
+    scaffold_checkin_files,
+)
+
+# -- Fixtures ---------------------------------------------------------------
+
+
+@pytest.fixture()
+def seed_yaml(tmp_path: Path) -> Path:
+    """Write default seed goals YAML to a temp file."""
+    path = tmp_path / "seed_goals.yaml"
+    path.write_text(DEFAULT_SEED_GOALS_YAML, encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def empty_yaml(tmp_path: Path) -> Path:
+    """Write an empty YAML file."""
+    path = tmp_path / "empty.yaml"
+    path.write_text("{}", encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def bad_yaml(tmp_path: Path) -> Path:
+    """Write invalid YAML content."""
+    path = tmp_path / "bad.yaml"
+    path.write_text("goals: not_a_list", encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mock_backend():
+    """Mocked HindsightBackend for goal tests."""
+    backend = MagicMock()
+    type(backend).ready = PropertyMock(return_value=True)
+    backend.retain = AsyncMock(return_value=[{"id": "goal-1", "fact_type": "opinion"}])
+    backend.recall = AsyncMock(return_value={"results": []})
+    return backend
+
+
+@pytest.fixture()
+def mock_backend_with_goals():
+    """Mocked HindsightBackend that already has goals."""
+    backend = MagicMock()
+    type(backend).ready = PropertyMock(return_value=True)
+    backend.retain = AsyncMock(return_value=[{"id": "goal-1", "fact_type": "opinion"}])
+    backend.recall = AsyncMock(
+        return_value={
+            "results": [
+                {
+                    "id": "existing-goal",
+                    "fact_type": "opinion",
+                    "content": "[Goal] Some existing goal (status: active)",
+                }
+            ]
+        }
+    )
+    return backend
+
+
+# -- YAML loading tests -----------------------------------------------------
+
+
+def test_load_seed_goals_reads_yaml(seed_yaml, mock_backend):
+    """GoalSeeder should parse the seed goals YAML correctly."""
+    seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend)
+    goals = seeder._load_seed_goals()
+
+    assert len(goals) == 5
+    assert goals[0]["description"].startswith("Keep the document knowledge graph clean")
+    assert goals[0]["status"] == "active"
+    assert goals[0]["confidence"] == 0.8
+
+
+def test_load_seed_goals_missing_file(tmp_path, mock_backend):
+    """GoalSeeder should return empty list if file doesn't exist."""
+    seeder = GoalSeeder(seed_path=tmp_path / "nonexistent.yaml", backend=mock_backend)
+    goals = seeder._load_seed_goals()
+    assert goals == []
+
+
+def test_load_seed_goals_missing_goals_key(empty_yaml, mock_backend):
+    """GoalSeeder should return empty list if 'goals' key is missing."""
+    seeder = GoalSeeder(seed_path=empty_yaml, backend=mock_backend)
+    goals = seeder._load_seed_goals()
+    assert goals == []
+
+
+def test_load_seed_goals_not_a_list(bad_yaml, mock_backend):
+    """GoalSeeder should return empty list if 'goals' is not a list."""
+    seeder = GoalSeeder(seed_path=bad_yaml, backend=mock_backend)
+    goals = seeder._load_seed_goals()
+    assert goals == []
+
+
+def test_load_seed_goals_malformed_yaml(tmp_path, mock_backend):
+    """GoalSeeder should handle malformed YAML gracefully."""
+    path = tmp_path / "malformed.yaml"
+    path.write_text("{{{{invalid yaml", encoding="utf-8")
+    seeder = GoalSeeder(seed_path=path, backend=mock_backend)
+    goals = seeder._load_seed_goals()
+    assert goals == []
+
+
+# -- seed_if_needed tests ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_seed_if_needed_creates_goals(seed_yaml, mock_backend):
+    """seed_if_needed should retain each goal when none exist yet."""
+    seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend)
+    seeded = await seeder.seed_if_needed()
+
+    assert len(seeded) == 5
+    assert mock_backend.retain.await_count == 5
+
+    # Verify first goal was retained correctly
+    first_call = mock_backend.retain.call_args_list[0]
+    assert "[Goal]" in first_call.args[0]
+    assert "knowledge graph" in first_call.args[0]
+    assert first_call.kwargs["bank"] == "parletre"
+    assert first_call.kwargs["fact_type"] == "opinion"
+    assert first_call.kwargs["confidence"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_seed_if_needed_skips_when_goals_exist(seed_yaml, mock_backend_with_goals):
+    """seed_if_needed should not retain anything if goals already exist."""
+    seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend_with_goals)
+    seeded = await seeder.seed_if_needed()
+
+    assert seeded == []
+    mock_backend_with_goals.retain.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_seed_if_needed_skips_when_backend_not_ready(seed_yaml):
+    """seed_if_needed should return empty list if backend is not ready."""
+    backend = MagicMock()
+    type(backend).ready = PropertyMock(return_value=False)
+
+    seeder = GoalSeeder(seed_path=seed_yaml, backend=backend)
+    seeded = await seeder.seed_if_needed()
+
+    assert seeded == []
+
+
+@pytest.mark.asyncio
+async def test_seed_if_needed_skips_when_no_file(tmp_path, mock_backend):
+    """seed_if_needed should return empty list if seed file doesn't exist."""
+    seeder = GoalSeeder(seed_path=tmp_path / "nope.yaml", backend=mock_backend)
+    seeded = await seeder.seed_if_needed()
+
+    assert seeded == []
+    mock_backend.recall.assert_not_awaited()  # Shouldn't even check
+
+
+@pytest.mark.asyncio
+async def test_seed_if_needed_handles_retain_failure(seed_yaml, mock_backend):
+    """seed_if_needed should continue past individual retain failures."""
+    call_count = 0
+
+    async def flaky_retain(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("DB error")
+        return [{"id": f"goal-{call_count}", "fact_type": "opinion"}]
+
+    mock_backend.retain = AsyncMock(side_effect=flaky_retain)
+
+    seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend)
+    seeded = await seeder.seed_if_needed()
+
+    # 5 goals total, 1 fails, 4 succeed
+    assert len(seeded) == 4
+    assert mock_backend.retain.await_count == 5
+
+
+@pytest.mark.asyncio
+async def test_seed_if_needed_handles_recall_failure(seed_yaml, mock_backend):
+    """seed_if_needed should proceed with seeding if recall check fails."""
+    mock_backend.recall = AsyncMock(side_effect=RuntimeError("recall broken"))
+
+    seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend)
+    seeded = await seeder.seed_if_needed()
+
+    # Should still seed (assumes no goals exist when check fails)
+    assert len(seeded) == 5
+
+
+@pytest.mark.asyncio
+async def test_seeded_goals_have_correct_structure(seed_yaml, mock_backend):
+    """Each seeded goal should have description, status, confidence, and facts."""
+    seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend)
+    seeded = await seeder.seed_if_needed()
+
+    for goal in seeded:
+        assert "description" in goal
+        assert "status" in goal
+        assert "confidence" in goal
+        assert "facts" in goal
+        assert goal["status"] == "active"
+        assert isinstance(goal["confidence"], float)
+        assert isinstance(goal["facts"], list)
+
+
+@pytest.mark.asyncio
+async def test_seed_skips_goals_without_description(tmp_path, mock_backend):
+    """Goals without a description should be skipped."""
+    path = tmp_path / "incomplete.yaml"
+    path.write_text(
+        "goals:\n"
+        "  - status: active\n"
+        "    confidence: 0.5\n"
+        "  - description: 'Valid goal'\n"
+        "    status: active\n"
+        "    confidence: 0.7\n",
+        encoding="utf-8",
+    )
+
+    seeder = GoalSeeder(seed_path=path, backend=mock_backend)
+    seeded = await seeder.seed_if_needed()
+
+    assert len(seeded) == 1
+    assert seeded[0]["description"] == "Valid goal"
+
+
+# -- scaffold_checkin_files tests -------------------------------------------
+
+
+def test_scaffold_creates_files(tmp_path):
+    """scaffold_checkin_files should create both files in empty directory."""
+    home = tmp_path / "home"
+    home.mkdir()
+
+    created = scaffold_checkin_files(home)
+
+    assert created["seed_goals.yaml"] is True
+    assert created["skills/checkin.md"] is True
+    assert (home / "seed_goals.yaml").exists()
+    assert (home / "skills" / "checkin.md").exists()
+
+    # Verify content is correct
+    seed_content = (home / "seed_goals.yaml").read_text()
+    assert "goals:" in seed_content
+    assert "knowledge graph" in seed_content
+
+    skill_content = (home / "skills" / "checkin.md").read_text()
+    assert "Check-in Skill" in skill_content
+    assert "Phase 1" in skill_content
+
+
+def test_scaffold_skips_existing_files(tmp_path):
+    """scaffold_checkin_files should not overwrite existing files."""
+    home = tmp_path / "home"
+    home.mkdir()
+
+    # Pre-create files with custom content
+    seed = home / "seed_goals.yaml"
+    seed.write_text("custom: true", encoding="utf-8")
+
+    skills_dir = home / "skills"
+    skills_dir.mkdir()
+    skill = skills_dir / "checkin.md"
+    skill.write_text("# Custom checkin", encoding="utf-8")
+
+    created = scaffold_checkin_files(home)
+
+    assert created["seed_goals.yaml"] is False
+    assert created["skills/checkin.md"] is False
+
+    # Verify original content preserved
+    assert seed.read_text() == "custom: true"
+    assert skill.read_text() == "# Custom checkin"
+
+
+def test_scaffold_creates_parent_directories(tmp_path):
+    """scaffold_checkin_files should create parent dirs as needed."""
+    home = tmp_path / "deep" / "nested" / "home"
+
+    created = scaffold_checkin_files(home)
+
+    assert created["seed_goals.yaml"] is True
+    assert created["skills/checkin.md"] is True
+    assert (home / "seed_goals.yaml").exists()
+    assert (home / "skills" / "checkin.md").exists()

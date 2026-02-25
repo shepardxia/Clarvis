@@ -36,8 +36,10 @@ class CommandHandlers:
         svc = services or {}
         self._get_voice_orchestrator = svc.get("voice", lambda: None)
         self._get_memory_service = svc.get("memory", lambda: None)
-        self._get_ingestion_pipeline = svc.get("ingestion", lambda: None)
+        self._get_cognee_backend = svc.get("cognee", lambda: None)
+        self._get_session_watcher = svc.get("session_watcher", lambda: None)
         self._get_agents = svc.get("agents", lambda: {})
+        self._get_staging_store = svc.get("staging", lambda: None)
 
     def register_all(self) -> None:
         """Register all command handlers with the IPC server."""
@@ -64,6 +66,8 @@ class CommandHandlers:
 
         # Memory
         reg("memory_ingest", self.memory_ingest)
+        reg("session_scan", self.session_scan)
+        reg("checkin", self.checkin)
 
         # Agent management
         reg("reload_agents", self.reload_agents)
@@ -219,22 +223,25 @@ class CommandHandlers:
         return {"status": "ok", "reloaded": reloaded, "errors": errors}
 
     def memory_ingest(self, **kwargs) -> dict:
-        """Trigger manual memory ingestion (called by `clarvis rem`)."""
+        """Trigger manual memory ingestion (called by `clarvis rem`).
+
+        Scans for unprocessed transcript content via SessionWatcher, then
+        retains each chunk in HindsightBackend.
+        """
         import asyncio
 
-        pipeline = self._get_ingestion_pipeline()
-        mem_svc = self._get_memory_service()
-        if not pipeline or not mem_svc:
+        watcher = self._get_session_watcher()
+        hindsight = self._get_memory_service()  # HindsightBackend
+        if not watcher or not hindsight:
             return {"error": "Memory service not available"}
 
-        if not mem_svc.ready:
+        if not hindsight.ready:
             return {"error": "Memory service not started"}
 
         # Find active sessions to ingest
         sessions = self.session_tracker.list_all()
         if not sessions:
-            # Check staleness as fallback info
-            stale = pipeline.is_stale()
+            stale = watcher.is_stale()
             return {"status": "ok", "ingested": 0, "stale": stale}
 
         ingested = 0
@@ -247,16 +254,111 @@ class CommandHandlers:
                 continue
             try:
                 result = asyncio.run_coroutine_threadsafe(
-                    pipeline.ingest_session(
+                    watcher.ingest_session(
                         session_key,
                         transcript,
                         dataset="parletre",
                     ),
                     loop,
                 ).result(timeout=30)
-                if result.get("status") == "ok":
+
+                if result.get("status") == "pending":
+                    # Retain the content in Hindsight
+                    content = result["new_content"]
+                    asyncio.run_coroutine_threadsafe(
+                        hindsight.retain(content, bank="parletre"),
+                        loop,
+                    ).result(timeout=60)
+                    # Mark as processed after successful retain
+                    watcher.mark_processed(session_key, result["byte_offset"])
                     ingested += 1
+                # "skipped" status means no new content — nothing to do
             except Exception as exc:
                 errors.append(str(exc))
 
         return {"status": "ok", "ingested": ingested, "errors": errors}
+
+    def session_scan(self, **kwargs) -> dict:
+        """Scan for unprocessed session transcripts (SessionWatcher).
+
+        Returns pending sessions with new content for the retain skill
+        to process.  Does not call any memory backend directly.
+        """
+        import asyncio
+
+        watcher = self._get_session_watcher()
+        if not watcher:
+            return {"error": "Session watcher not available"}
+
+        loop = self.ctx.loop
+        try:
+            pending = asyncio.run_coroutine_threadsafe(
+                watcher.scan(),
+                loop,
+            ).result(timeout=30)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        # Serialize Path objects for JSON transport
+        results = []
+        for sess in pending:
+            results.append(
+                {
+                    "session_id": sess["session_id"],
+                    "path": str(sess["path"]),
+                    "new_content": sess["new_content"],
+                    "message_count": sess["message_count"],
+                    "byte_offset": sess["byte_offset"],
+                    "last_timestamp": sess.get("last_timestamp"),
+                }
+            )
+
+        return {
+            "status": "ok",
+            "pending_count": len(results),
+            "sessions": results,
+            "stale": watcher.is_stale(),
+        }
+
+    def checkin(self, **kwargs) -> dict:
+        """Prepare for interactive checkin session (called by `clarvis checkin`).
+
+        Scaffolds checkin files (skill prompt + seed goals YAML) if missing,
+        seeds goals into Hindsight if needed (first-run), then returns status
+        so the CLI can launch an interactive Claude session with the checkin skill.
+        """
+        import asyncio
+        from pathlib import Path
+
+        from clarvis.agent.memory.goals import GoalSeeder, scaffold_checkin_files
+
+        hindsight = self._get_memory_service()
+        staging = self._get_staging_store()
+
+        result: dict = {"status": "ok", "goals_seeded": 0, "staged_count": 0}
+
+        # Scaffold checkin files (seed_goals.yaml, skills/checkin.md)
+        home_dir = Path.home() / ".clarvis" / "home"
+        scaffolded = scaffold_checkin_files(home_dir)
+        result["scaffolded"] = scaffolded
+
+        # Seed goals if needed
+        if hindsight and hindsight.ready:
+            try:
+                seed_path = home_dir / "seed_goals.yaml"
+                seeder = GoalSeeder(seed_path=seed_path, backend=hindsight)
+                seeded = asyncio.run_coroutine_threadsafe(
+                    seeder.seed_if_needed(),
+                    self.ctx.loop,
+                ).result(timeout=30)
+                result["goals_seeded"] = len(seeded)
+            except Exception as exc:
+                result["goals_error"] = str(exc)
+        else:
+            result["memory_warning"] = "Memory service not available"
+
+        # Report staged changes count
+        if staging:
+            result["staged_count"] = len(staging.list_staged())
+
+        return result
