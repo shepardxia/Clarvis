@@ -657,20 +657,6 @@ class CentralHubDaemon:
             idle_interval=30,
         )
 
-        # Thinking feed — signal-driven transcript processing + lifecycle cleanup
-        from .services.thinking_feed import get_session_manager
-
-        session_mgr = get_session_manager()
-        session_mgr.connect(self.ctx)
-
-        # Lifecycle cleanup only (no file scanning) — relaxed interval
-        self.scheduler.register(
-            "thinking_feed_cleanup",
-            session_mgr.poll_sessions,
-            active_interval=30,
-            idle_interval=60,
-        )
-
         # FPS adjustment on mode change
         self.scheduler.on_mode_change(self._on_mode_change)
 

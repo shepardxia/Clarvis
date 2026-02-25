@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from .context import AppContext
 
-from ..services.thinking_feed import get_session_manager
 from .ipc import DaemonServer
 from .refresh_manager import RefreshManager
 from .session_tracker import SessionTracker
@@ -56,9 +55,6 @@ class CommandHandlers:
         reg("refresh_time", self.refresh.refresh_time)
         reg("refresh_location", self.refresh_location)
         reg("refresh_all", self.refresh_all)
-
-        # Thinking context
-        reg("get_thinking_context", self.get_thinking_context)
 
         # Voice context
         reg("get_voice_context", self.get_voice_context)
@@ -138,26 +134,6 @@ class CommandHandlers:
         """Refresh all data sources."""
         self.refresh.refresh_all()
         return "ok"
-
-    # --- Thinking context ---
-
-    def get_thinking_context(self, limit: int = 500) -> dict:
-        """Get latest thinking context from active sessions."""
-        manager = get_session_manager()
-        latest = manager.get_latest_thought()
-        if not latest:
-            return {"context": None, "session_id": None}
-
-        text = latest.get("text", "")
-        if len(text) > limit:
-            text = text[-limit:]
-
-        return {
-            "context": text,
-            "session_id": latest.get("session_id"),
-            "project": latest.get("project"),
-            "timestamp": latest.get("timestamp"),
-        }
 
     # --- Voice context ---
 
