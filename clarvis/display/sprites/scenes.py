@@ -19,6 +19,9 @@ class SceneManager:
         self.registry = SpriteRegistry()
         self._out_chars = np.full((height, width), SPACE, dtype=np.uint32)
         self._out_colors = np.zeros((height, width), dtype=np.uint8)
+        # Pre-allocated scratch buffers for transparent sprite compositing
+        self._scratch_chars = np.full((height, width), SPACE, dtype=np.uint32)
+        self._scratch_colors = np.zeros((height, width), dtype=np.uint8)
 
     def add(self, sprite: Sprite) -> None:
         self.registry.add(sprite)
@@ -42,10 +45,12 @@ class SceneManager:
                 continue
 
             if sprite.transparent:
-                # Render into scratch, then merge non-SPACE
+                # Render into pre-allocated scratch, then merge non-SPACE
                 b = sprite.bbox
-                scratch_c = np.full((self.height, self.width), SPACE, dtype=np.uint32)
-                scratch_k = np.zeros((self.height, self.width), dtype=np.uint8)
+                scratch_c = self._scratch_chars
+                scratch_k = self._scratch_colors
+                scratch_c.fill(SPACE)
+                scratch_k.fill(0)
                 sprite.render(scratch_c, scratch_k)
                 region = scratch_c[b.y : b.y2, b.x : b.x2]
                 mask = region != SPACE

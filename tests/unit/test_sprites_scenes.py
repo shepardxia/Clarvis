@@ -119,6 +119,23 @@ class TestSceneManagerTick:
         assert rows[0][0] == "A"
 
 
+class TestSceneManagerScratchArrays:
+    def test_scratch_arrays_exist_with_correct_shape(self):
+        scene = SceneManager(10, 5)
+        assert scene._scratch_chars.shape == (5, 10)
+        assert scene._scratch_colors.shape == (5, 10)
+
+    def test_scratch_arrays_reused_across_renders(self):
+        scene = SceneManager(5, 3)
+        scene.add(TransparentSprite(0, 0, priority=10))
+        scene.render()
+        id_c = id(scene._scratch_chars)
+        id_k = id(scene._scratch_colors)
+        scene.render()
+        assert id(scene._scratch_chars) == id_c
+        assert id(scene._scratch_colors) == id_k
+
+
 class TestSceneManagerToGrid:
     def test_to_grid_shape(self):
         scene = SceneManager(8, 4)

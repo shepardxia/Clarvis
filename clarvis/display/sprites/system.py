@@ -12,10 +12,10 @@ from ..archetypes import FaceArchetype, ProgressArchetype, WeatherArchetype
 from ..archetypes.weather import BoundingBox
 from ..colors import StatusColors
 from ..elements.registry import ElementRegistry
-from ..pipeline import SPACE, Layer
+from ..pipeline import Layer
 from .cel import Cel
 from .control import Control
-from .core import BBox, Sprite
+from .core import SPACE, BBox, Sprite
 from .reel import Reel, ReelMode
 from .scenes import SceneManager
 
@@ -79,7 +79,7 @@ class WeatherSandbox(Sprite):
         height: int,
         priority: int = WEATHER,
     ):
-        super().__init__(priority=priority, transparent=True)
+        super().__init__(priority=priority, transparent=False)
         self._width = width
         self._height = height
         self._archetype = WeatherArchetype(registry, width, height)
@@ -135,7 +135,7 @@ class CelestialCel(Sprite):
     """Sun/moon ASCII art positioned by hour. A simple sprite, not a full Cel."""
 
     SUN_ART = ["\\|/", "-o-", "/|\\"]
-    MOON_ART = [" _ ", "(') ", " ~ "]
+    MOON_ART = [" _ ", "(')", " ~ "]
     CELESTIAL_WIDTH = 3
     CELESTIAL_HEIGHT = 3
     CELESTIAL_MARGIN = 1

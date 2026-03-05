@@ -46,6 +46,11 @@ class TestFaceCel:
 
 
 class TestWeatherSandbox:
+    def test_is_opaque(self):
+        scene = build_default_scene(width=43, height=17)
+        weather = next(s for s in scene.registry.alive() if isinstance(s, WeatherSandbox))
+        assert weather.transparent is False
+
     def test_tick_no_crash(self):
         scene = build_default_scene(width=43, height=17)
         weather = next(s for s in scene.registry.alive() if isinstance(s, WeatherSandbox))
@@ -66,6 +71,12 @@ class TestWeatherSandbox:
 
 
 class TestCelestialCel:
+    def test_art_width_consistency(self):
+        for line in CelestialCel.SUN_ART:
+            assert len(line) == CelestialCel.CELESTIAL_WIDTH
+        for line in CelestialCel.MOON_ART:
+            assert len(line) == CelestialCel.CELESTIAL_WIDTH
+
     def test_renders_sun_during_day(self):
         scene = build_default_scene(width=43, height=17)
         celestial = next(s for s in scene.registry.alive() if isinstance(s, CelestialCel))
