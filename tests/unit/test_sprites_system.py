@@ -44,6 +44,37 @@ class TestFaceCel:
         face.tick(status="reading")
         assert face._current_animation == "reading"
 
+    def test_face_has_border_chars(self):
+        """Face frame should contain border characters like ╭ and │."""
+        scene = build_default_scene(width=43, height=17)
+        face = next(s for s in scene.registry.alive() if isinstance(s, FaceCel))
+        out_c = np.full((17, 43), SPACE, dtype=np.uint32)
+        out_k = np.zeros((17, 43), dtype=np.uint8)
+        face.render(out_c, out_k)
+        b = face.bbox
+        region = out_c[b.y : b.y2, b.x : b.x2]
+        chars = {chr(c) for c in region.flat if c != SPACE}
+        assert "╭" in chars or "┌" in chars  # top-left corner
+        assert "│" in chars  # vertical edge
+
+    def test_different_statuses_different_frames(self):
+        """Different statuses should produce different frame content."""
+        scene = build_default_scene(width=43, height=17)
+        face = next(s for s in scene.registry.alive() if isinstance(s, FaceCel))
+        b = face.bbox
+
+        out1 = np.full((17, 43), SPACE, dtype=np.uint32)
+        face.set_status("idle")
+        face.render(out1, np.zeros((17, 43), dtype=np.uint8))
+        region1 = out1[b.y : b.y2, b.x : b.x2].copy()
+
+        out2 = np.full((17, 43), SPACE, dtype=np.uint32)
+        face.set_status("thinking")
+        face.render(out2, np.zeros((17, 43), dtype=np.uint8))
+        region2 = out2[b.y : b.y2, b.x : b.x2].copy()
+
+        assert not np.array_equal(region1, region2)
+
 
 class TestWeatherSandbox:
     def test_is_opaque(self):
@@ -129,6 +160,19 @@ class TestBarSprite:
         bar = next(s for s in scene.registry.alive() if isinstance(s, BarSprite))
         bar.tick(context_percent=75.0)
         assert bar._percent == 75.0
+
+    def test_bar_at_50_has_filled_and_empty(self):
+        """Bar at 50% should have both # (filled) and - (empty) chars."""
+        scene = build_default_scene(width=43, height=17)
+        bar = next(s for s in scene.registry.alive() if isinstance(s, BarSprite))
+        bar.tick(context_percent=50.0)
+        out_c = np.full((17, 43), SPACE, dtype=np.uint32)
+        out_k = np.zeros((17, 43), dtype=np.uint8)
+        bar.render(out_c, out_k)
+        b = bar.bbox
+        row = out_c[b.y, b.x : b.x2]
+        assert ord("#") in row
+        assert ord("-") in row
 
 
 class TestMicControl:
