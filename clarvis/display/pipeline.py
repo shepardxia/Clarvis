@@ -5,8 +5,6 @@ Provides blit, put, and put_text operations with bounding box tracking.
 Used by archetypes and system sprites as a rendering surface.
 """
 
-from typing import Callable
-
 import numpy as np
 
 # Space character code - background fill
@@ -22,14 +20,12 @@ class Layer:
         priority: int,
         width: int,
         height: int,
-        render_func: Callable[["Layer"], None] | None = None,
         transparent: bool = False,
     ):
         self.name = name
         self.priority = priority
         self.width = width
         self.height = height
-        self.render_func = render_func
         self.transparent = transparent
 
         # NumPy arrays for vectorized operations
