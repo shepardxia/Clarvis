@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
+
+pytest.importorskip("asyncpg", reason="asyncpg not installed (memory extra required)")
+
 from fastmcp import Client
 
 from clarvis.mcp.server import HOME_TOOLS, create_app

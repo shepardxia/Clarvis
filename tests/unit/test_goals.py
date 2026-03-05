@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
+pytest.importorskip("asyncpg", reason="asyncpg not installed (memory extra required)")
+
 from clarvis.agent.memory.goals import (
     DEFAULT_SEED_GOALS_YAML,
     GoalSeeder,
