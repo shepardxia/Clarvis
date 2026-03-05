@@ -233,6 +233,8 @@ async def test_prompt_response_signal(memory_client, mock_daemon):
     mock_daemon.bus.on("voice:prompt_reply", lambda sig, **kw: received.append(True))
     r = await memory_client.call_tool("prompt_response", {})
     assert "Listening" in r.data
+    # Signal delivers via call_soon_threadsafe on background loop — yield
+    await asyncio.sleep(0.1)
     assert received, "voice:prompt_reply signal was not emitted"
 
 
