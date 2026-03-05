@@ -7,6 +7,7 @@ that uses a single shared agent for all online channels.
 import asyncio
 import json
 import logging
+import os
 from contextlib import aclosing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,7 +118,7 @@ class ChannelManager:
 
                     config = DiscordConfig(
                         enabled=True,
-                        token=ch_cfg.get("token", ""),
+                        token=os.environ.get("DISCORD_BOT_TOKEN") or ch_cfg.get("token", ""),
                         allow_from=ch_cfg.get("allow_from", []),
                         gateway_url=ch_cfg.get(
                             "gateway_url",
