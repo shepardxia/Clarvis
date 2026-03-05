@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip("cognee", reason="cognee not installed (memory extra required)")
+
 from clarvis.agent.memory.cognee_backend import CogneeBackend
 
 # -- Fixtures ---------------------------------------------------------------

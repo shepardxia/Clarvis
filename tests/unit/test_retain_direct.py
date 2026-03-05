@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip("asyncpg", reason="asyncpg not installed (memory extra required)")
+
 from clarvis.vendor.hindsight.engine.retain.orchestrator import retain_direct
 from clarvis.vendor.hindsight.engine.retain.types import (
     EntityRef,
