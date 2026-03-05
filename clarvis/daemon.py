@@ -30,8 +30,8 @@ from .display.click_regions import ClickRegion, ClickRegionManager
 from .display.config import CONFIG_PATH, get_config
 from .display.display_manager import DisplayManager
 from .display.refresh_manager import RefreshManager
-from .display.renderer import FrameRenderer
 from .display.socket_server import WidgetSocketServer, get_socket_server
+from .display.sprites.system import MicControl, build_default_scene
 from .hooks.hook_processor import HookProcessor
 from .services.context_accumulator import ContextAccumulator
 from .services.session_tracker import SessionTracker
@@ -213,8 +213,8 @@ class CentralHubDaemon:
         self._stopped = False
         self._shutdown_event: asyncio.Event | None = None
 
-        # Display manager with pre-warmed renderer
-        renderer = FrameRenderer(
+        # Display manager with sprite scene
+        scene = build_default_scene(
             width=config.display.grid_width,
             height=config.display.grid_height,
             avatar_x_offset=config.display.avatar_x_offset,
@@ -227,7 +227,7 @@ class CentralHubDaemon:
         self.socket_server = socket_server or get_socket_server()
         self.click_manager = ClickRegionManager(self.socket_server)
         self.display = DisplayManager(
-            renderer=renderer,
+            scene=scene,
             socket_server=self.socket_server,
             fps=self.display_fps,
         )
@@ -564,9 +564,11 @@ class CentralHubDaemon:
 
     def _register_mic_region(self) -> None:
         """Register the mic-toggle click region and update state."""
-        row, col, width = self.display.renderer.mic_icon_position()
-        region = ClickRegion("mic_toggle", row=row, col=col, width=width, height=1)
-        self.click_manager.register(region, self._toggle_voice)
+        mic_sprites = self.display.scene.registry.by_type(MicControl)
+        if mic_sprites:
+            row, col, w, h = mic_sprites[0].click_region()
+            region = ClickRegion("mic_toggle", row=row, col=col, width=w, height=h)
+            self.click_manager.register(region, self._toggle_voice)
         self.state.update(
             "mic",
             {
