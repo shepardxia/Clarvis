@@ -22,17 +22,9 @@ logger = logging.getLogger(__name__)
 _BRIDGE_DIR = Path(__file__).resolve().parents[1] / "pi-bridge"
 
 
-def _load_env() -> dict[str, str]:
-    """Load .env from the Clarvis project root if present."""
-    env = dict(os.environ)
-    if not env.get("ANTHROPIC_API_KEY"):
-        dotenv = Path(__file__).resolve().parents[3] / ".env"
-        if dotenv.exists():
-            for line in dotenv.read_text().splitlines():
-                if line.strip() and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    env.setdefault(k.strip(), v.strip())
-    return env
+def _subprocess_env() -> dict[str, str]:
+    """Snapshot os.environ for subprocess use (already loaded by core.env)."""
+    return dict(os.environ)
 
 
 class PiBackend:
@@ -68,7 +60,7 @@ class PiBackend:
         self.setup()
 
         # Build env for the bridge process
-        env = _load_env()
+        env = _subprocess_env()
         env["PI_BRIDGE_SOCKET"] = self._socket_path
         env["PI_BRIDGE_CWD"] = str(self._config.project_dir)
         env["PI_BRIDGE_SESSION_FILE"] = str(self._session_file)

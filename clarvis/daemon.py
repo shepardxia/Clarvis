@@ -930,8 +930,10 @@ class CentralHubDaemon:
 
 def main():
     """Entry point for daemon mode."""
+    from .core.env import load_dotenv
     from .core.log import setup_logging
 
+    load_dotenv()  # .env → os.environ before anything reads env vars
     setup_logging(Path("logs"))
     global _daemon_lock
 
