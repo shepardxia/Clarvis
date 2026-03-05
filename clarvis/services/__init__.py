@@ -1,4 +1,4 @@
-"""External services - weather/location, activity monitoring, memory."""
+"""External services - weather, timers, session tracking, memory maintenance."""
 
 from .weather import WeatherData, fetch_weather, get_location
 

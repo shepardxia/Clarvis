@@ -52,6 +52,7 @@ class DaemonServer(UnixSocketServer):
 
     def _process_request(self, request_str: str) -> str | None:
         """Process a JSON request. Returns response string, or None for notifications."""
+        is_notify = False
         try:
             request = json.loads(request_str)
             method = request.get("method")
@@ -92,14 +93,15 @@ class DaemonClient:
         """Check if daemon is running by testing socket connection."""
         if not os.path.exists(self.socket_path):
             return False
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(1.0)
             sock.connect(self.socket_path)
-            sock.close()
             return True
         except (ConnectionRefusedError, FileNotFoundError, OSError):
             return False
+        finally:
+            sock.close()
 
     def call(self, method: str, **params) -> Any:
         """
@@ -154,15 +156,3 @@ class DaemonClient:
                 sock.close()
             except Exception:
                 pass
-
-
-# Global client instance for convenience
-_client_instance: DaemonClient | None = None
-
-
-def get_daemon_client() -> DaemonClient:
-    """Get or create global daemon client."""
-    global _client_instance
-    if _client_instance is None:
-        _client_instance = DaemonClient()
-    return _client_instance

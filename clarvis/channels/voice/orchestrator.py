@@ -11,11 +11,11 @@ the StateStore status, so the display always reflects the pipeline state.
 
 IPC protocol
 ────────────
-Four message types flow between the orchestrator and the Swift widget.
-Each is a frozen dataclass with to_message() / from_message() methods
-that document the contract and catch field-name typos at the Python
-boundary.  Swift keeps dynamic JSON parsing — see the protocol reference
-comment in ClarvisWidget/main.swift.
+Two message types flow between the orchestrator and the Swift widget.
+Each is a frozen dataclass with a to_message() method that documents
+the contract and catches field-name typos at the Python boundary.
+Swift keeps dynamic JSON parsing — see the protocol reference comment
+in ClarvisWidget/main.swift.
 """
 
 import asyncio
@@ -25,7 +25,6 @@ import time
 from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -104,27 +103,6 @@ class StopASRCommand:
 
     def to_message(self) -> dict[str, Any]:
         return {"method": "stop_asr"}
-
-
-@dataclass(frozen=True)
-class ShowResponseCommand:
-    """Orchestrator -> Widget: display (partial) response text."""
-
-    text: str
-
-    def to_message(self) -> dict[str, Any]:
-        return {
-            "method": "show_response",
-            "params": {"text": self.text},
-        }
-
-
-@dataclass(frozen=True)
-class ClearResponseCommand:
-    """Orchestrator -> Widget: remove the response overlay."""
-
-    def to_message(self) -> dict[str, Any]:
-        return {"method": "clear_response"}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -571,17 +549,11 @@ class VoiceCommandOrchestrator:
 
     async def _build_memory_grounding(self) -> str:
         """Build memory grounding block for voice session start."""
-        from clarvis.channels.memory_context import (
-            build_memory_grounding,
-            read_recent_transcript,
-        )
+        from clarvis.memory.ground import build_memory_context
 
-        transcript_path = Path.home() / ".clarvis" / "channels" / "transcript.jsonl"
-        transcript = read_recent_transcript(transcript_path)
-        return await build_memory_grounding(
+        return await build_memory_context(
             self.memory_service,
-            "parletre",
-            transcript,
+            "master",
         )
 
     # ------------------------------------------------------------------

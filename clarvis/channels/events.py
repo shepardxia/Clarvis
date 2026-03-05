@@ -21,11 +21,6 @@ class InboundMessage:
     media: list[str] = field(default_factory=list)  # Media URLs
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data
 
-    @property
-    def session_key(self) -> str:
-        """Unique key for session identification."""
-        return f"{self.channel}:{self.chat_id}"
-
 
 @dataclass
 class OutboundMessage:
@@ -34,6 +29,4 @@ class OutboundMessage:
     channel: str
     chat_id: str
     content: str
-    reply_to: str | None = None
-    media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)

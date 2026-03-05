@@ -40,20 +40,20 @@ def bad_yaml(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def mock_backend():
-    """Mocked HindsightBackend for goal tests."""
+    """Mocked HindsightStore for goal tests."""
     backend = MagicMock()
     type(backend).ready = PropertyMock(return_value=True)
-    backend.retain = AsyncMock(return_value=[{"id": "goal-1", "fact_type": "opinion"}])
+    backend.store_facts = AsyncMock(return_value=["goal-1", "goal-2", "goal-3", "goal-4", "goal-5"])
     backend.recall = AsyncMock(return_value={"results": []})
     return backend
 
 
 @pytest.fixture()
 def mock_backend_with_goals():
-    """Mocked HindsightBackend that already has goals."""
+    """Mocked HindsightStore that already has goals."""
     backend = MagicMock()
     type(backend).ready = PropertyMock(return_value=True)
-    backend.retain = AsyncMock(return_value=[{"id": "goal-1", "fact_type": "opinion"}])
+    backend.store_facts = AsyncMock(return_value=["goal-1"])
     backend.recall = AsyncMock(
         return_value={
             "results": [
@@ -73,30 +73,32 @@ def mock_backend_with_goals():
 
 @pytest.mark.asyncio
 async def test_seed_if_needed_creates_goals(seed_yaml, mock_backend):
-    """seed_if_needed should retain each goal when none exist yet."""
+    """seed_if_needed should store all goals as FactInput objects."""
     seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend)
     seeded = await seeder.seed_if_needed()
 
     assert len(seeded) == 5
-    assert mock_backend.retain.await_count == 5
+    mock_backend.store_facts.assert_awaited_once()
 
-    # Verify first goal was retained correctly
-    first_call = mock_backend.retain.call_args_list[0]
-    assert "[Goal]" in first_call.args[0]
-    assert "knowledge graph" in first_call.args[0]
-    assert first_call.kwargs["bank"] == "parletre"
-    assert first_call.kwargs["fact_type"] == "opinion"
-    assert first_call.kwargs["confidence"] == 0.8
+    # Verify FactInput objects were constructed correctly
+    call_args = mock_backend.store_facts.call_args
+    fact_inputs = call_args.args[0]
+    assert len(fact_inputs) == 5
+    assert "[Goal]" in fact_inputs[0].fact_text
+    assert "knowledge graph" in fact_inputs[0].fact_text
+    assert fact_inputs[0].fact_type == "opinion"
+    assert fact_inputs[0].confidence == 0.8
+    assert call_args.kwargs.get("bank") == "parletre"
 
 
 @pytest.mark.asyncio
 async def test_seed_if_needed_skips_when_goals_exist(seed_yaml, mock_backend_with_goals):
-    """seed_if_needed should not retain anything if goals already exist."""
+    """seed_if_needed should not store anything if goals already exist."""
     seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend_with_goals)
     seeded = await seeder.seed_if_needed()
 
     assert seeded == []
-    mock_backend_with_goals.retain.assert_not_awaited()
+    mock_backend_with_goals.store_facts.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -112,25 +114,16 @@ async def test_seed_if_needed_skips_when_backend_not_ready(seed_yaml):
 
 
 @pytest.mark.asyncio
-async def test_seed_if_needed_handles_retain_failure(seed_yaml, mock_backend):
-    """seed_if_needed should continue past individual retain failures."""
-    call_count = 0
-
-    async def flaky_retain(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
-            raise RuntimeError("DB error")
-        return [{"id": f"goal-{call_count}", "fact_type": "opinion"}]
-
-    mock_backend.retain = AsyncMock(side_effect=flaky_retain)
+async def test_seed_if_needed_handles_store_failure(seed_yaml, mock_backend):
+    """seed_if_needed should return empty on store_facts failure."""
+    mock_backend.store_facts = AsyncMock(side_effect=RuntimeError("DB error"))
 
     seeder = GoalSeeder(seed_path=seed_yaml, backend=mock_backend)
     seeded = await seeder.seed_if_needed()
 
-    # 5 goals total, 1 fails, 4 succeed
-    assert len(seeded) == 4
-    assert mock_backend.retain.await_count == 5
+    # Batch store failed, no goals seeded
+    assert seeded == []
+    mock_backend.store_facts.assert_awaited_once()
 
 
 # -- scaffold_checkin_files tests -------------------------------------------

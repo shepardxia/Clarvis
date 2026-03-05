@@ -23,8 +23,8 @@ def _fmt_size(n: int) -> str:
 def build_context_prefix(msg: "InboundMessage", registry: "UserRegistry") -> str:
     """Build a conditional context prefix from metadata + registry.
 
-    Only includes fields with actual data. Returns empty string if
-    no enrichment is available.
+    Only includes fields with actual data. Always returns at least
+    a channel/timestamp header line.
     """
     ts = msg.timestamp.strftime("%Y-%m-%d %H:%M %Z")
     parts: list[str] = [f"[{msg.channel} {ts}]"]

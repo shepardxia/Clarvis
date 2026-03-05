@@ -130,28 +130,28 @@ class CentralHubDaemon:
         self.voice_orchestrator = None
         self.channel_manager = None
         self.context_accumulator = None
+        self.memory_maintenance = None
         self._wakeup_manager = None
         self._owned_services: list = []  # services with no other refs (prevent GC)
 
         # Memory backends (optional — requires hindsight + cognee)
-        self.memory_service = None  # Legacy compat — set to hindsight_backend for old refs
-        self.hindsight_backend = None
+        self.hindsight_store = None  # HindsightStore (Level 2 interface)
+        self.hindsight_backend = None  # Compat alias — points to hindsight_store
+        self.memory_store = None  # Compat alias — used by mcp/memory_tools.py
         self.cognee_backend = None
-        self.staging_store = None
         self.document_watcher = None
-        self.session_watcher = None
+        self.transcript_reader = None
         if config.memory.enabled:
             try:
-                from .agent.memory.hindsight_backend import HindsightBackend
+                from .memory.store import HindsightStore
 
                 h_cfg = config.memory.hindsight
-                self.hindsight_backend = HindsightBackend(
+                self.hindsight_store = HindsightStore(
                     db_url=h_cfg.db_url,
-                    llm_provider=h_cfg.llm_provider,
-                    api_key=h_cfg.llm_api_key,
-                    model=h_cfg.llm_model,
                     banks={name: {"visibility": dc.visibility} for name, dc in h_cfg.banks.items()},
                 )
+                self.hindsight_backend = self.hindsight_store  # Compat alias for mcp/server.py
+                self.memory_store = self.hindsight_store  # Compat alias for mcp/memory_tools.py
             except ImportError:
                 logger.info("hindsight not installed — conversational memory disabled")
 
@@ -173,22 +173,12 @@ class CentralHubDaemon:
             except ImportError:
                 logger.info("cognee not installed — knowledge graph disabled")
 
+            # TranscriptReader — reads session transcripts on demand for retain
             try:
-                from .agent.memory.staging import StagingStore
-
-                self.staging_store = StagingStore(
-                    path=Path(config.memory.staging_path).expanduser(),
-                )
-            except Exception:
-                logger.info("Failed to initialize staging store", exc_info=True)
-
-            # SessionWatcher — agent-driven transcript processing for retain skill
-            try:
-                from .agent.memory.session_watcher import SessionWatcher
+                from .agent.memory.transcript_reader import TranscriptReader
 
                 data_dir = Path(config.memory.data_dir).expanduser()
-                self.session_watcher = SessionWatcher(
-                    sessions_dir=data_dir / "sessions",
+                self.transcript_reader = TranscriptReader(
                     watermark_path=data_dir / "session_watcher_state.json",
                 )
             except ImportError:
@@ -231,6 +221,8 @@ class CentralHubDaemon:
             avatar_y_offset=config.display.avatar_y_offset,
             bar_x_offset=config.display.bar_x_offset,
             bar_y_offset=config.display.bar_y_offset,
+            mic_x_offset=config.display.mic_x_offset,
+            mic_y_offset=config.display.mic_y_offset,
         )
         self.socket_server = socket_server or get_socket_server()
         self.click_manager = ClickRegionManager(self.socket_server)
@@ -429,7 +421,7 @@ class CentralHubDaemon:
             silence_timeout=config.voice.silence_timeout,
             text_linger=config.voice.text_linger,
         )
-        self.voice_orchestrator.memory_service = self.hindsight_backend
+        self.voice_orchestrator.memory_service = self.hindsight_store
         # Orchestrator now self-subscribes to wake_word signals via bus;
         # remove the daemon fallback so both don't fire.
         if self.bus:
@@ -455,13 +447,7 @@ class CentralHubDaemon:
         if not voice_agent:
             return
 
-        from .agent.memory.consolidation import ConversationConsolidator
         from .services.wakeup import WakeupManager
-
-        consolidator = ConversationConsolidator(
-            memory_service=self.hindsight_backend,
-            threshold=config.channels.wakeup.consolidation_threshold,
-        )
 
         # Lazy Spotify session getter (same as MCP tools use)
         def _get_spotify_session():
@@ -475,8 +461,7 @@ class CentralHubDaemon:
         self._wakeup_manager = WakeupManager(
             agent=voice_agent,
             state_store=self.state,
-            memory_service=self.hindsight_backend,
-            consolidator=consolidator,
+            memory_service=self.hindsight_store,
             get_spotify_session=_get_spotify_session,
         )
 
@@ -495,9 +480,8 @@ class CentralHubDaemon:
         )
 
         logger.info(
-            "WakeupManager active (pulse=%dm, consolidation_threshold=%d)",
+            "WakeupManager active (pulse=%dm)",
             config.channels.wakeup.pulse_interval_minutes,
-            config.channels.wakeup.consolidation_threshold,
         )
 
     async def _init_channel_manager(self) -> None:
@@ -536,7 +520,6 @@ class CentralHubDaemon:
             # Single shared agent for all online channels
             channel_agent = create_channel_agent(
                 event_loop=self.ctx.loop,
-                tools_config=tools_cfg,
                 model=config.channels.model or config.voice.model,
                 max_thinking_tokens=config.channels.max_thinking_tokens or config.voice.max_thinking_tokens,
                 force_new=self._force_new,
@@ -552,7 +535,7 @@ class CentralHubDaemon:
                 channels_config=channels_config,
                 registry=registry,
                 state=state,
-                memory_service=self.hindsight_backend,
+                memory_service=self.hindsight_store,
             )
             await self.channel_manager.start()
 
@@ -652,13 +635,15 @@ class CentralHubDaemon:
         self.socket_server.on_connect(self.click_manager.push_regions)
 
         # Memory backends (start — heavy imports run in executor)
-        if self.hindsight_backend is not None:
+        if self.hindsight_store is not None:
             try:
-                await self.hindsight_backend.start()
-                logger.info("HindsightBackend started")
+                await self.hindsight_store.start()
+                logger.info("HindsightStore started")
             except Exception:
-                logger.exception("Failed to start Hindsight backend")
-                self.hindsight_backend = None
+                logger.exception("Failed to start HindsightStore")
+                self.hindsight_store = None
+                self.hindsight_backend = None  # Keep compat aliases in sync
+                self.memory_store = None
 
         if self.cognee_backend is not None:
             try:
@@ -744,32 +729,13 @@ class CentralHubDaemon:
             )
         )
 
-        # Session watcher — periodic scan for unprocessed transcripts.
-        # Runs at idle cadence; retain skill processes the content.
-        if self.session_watcher is not None:
-            config = self.ctx.config
-            staleness_hours = config.memory.staleness_hours
-            # Check roughly every staleness_hours / 4, but cap at 1hr active / 6hr idle
-            scan_active = min(staleness_hours * 900, 3600)  # staleness_hours * 0.25 (in seconds), max 1h
-            scan_idle = min(staleness_hours * 3600, 21600)  # staleness_hours (in seconds), max 6h
-
-            async def _session_scan_check() -> None:
-                """Log pending sessions count for observability."""
-                try:
-                    pending = await self.session_watcher.scan()
-                    if pending:
-                        logger.info(
-                            "SessionWatcher: %d sessions with unprocessed content",
-                            len(pending),
-                        )
-                except Exception:
-                    logger.debug("SessionWatcher scan failed", exc_info=True)
-
+        # Memory maintenance — periodic reflect (retains internally)
+        if self.memory_maintenance is not None:
             self.scheduler.register(
-                "session_scan",
-                lambda: asyncio.create_task(_session_scan_check()),
-                active_interval=scan_active,
-                idle_interval=scan_idle,
+                "memory_maintenance",
+                lambda: asyncio.create_task(self.memory_maintenance.maintenance_tick()),
+                active_interval=900,  # 15 min when active
+                idle_interval=3600,  # 60 min when idle
             )
 
         self.scheduler.start()
@@ -825,9 +791,9 @@ class CentralHubDaemon:
             except Exception:
                 pass
 
-        if self.hindsight_backend is not None and self.hindsight_backend.ready:
+        if self.hindsight_store is not None and self.hindsight_store.ready:
             try:
-                await asyncio.wait_for(self.hindsight_backend.stop(), timeout=5.0)
+                await asyncio.wait_for(self.hindsight_store.stop(), timeout=5.0)
             except Exception:
                 pass
 
@@ -855,6 +821,19 @@ class CentralHubDaemon:
             home_slug=self._home_slug,
         )
 
+        # Memory maintenance — automated retain + reflect (requires memory enabled)
+        if self.hindsight_store is not None and self.transcript_reader is not None:
+            from .channels.agent_factory import create_master_agent
+            from .services.memory_maintenance import MemoryMaintenanceService
+
+            self.memory_maintenance = MemoryMaintenanceService(
+                ctx=self.ctx,
+                store=self.hindsight_store,
+                context_accumulator=self.context_accumulator,
+                transcript_reader=self.transcript_reader,
+                agent_factory=lambda: create_master_agent(event_loop=self.ctx.loop, force_new=True),
+            )
+
         self.commands = CommandHandlers(
             ctx=self.ctx,
             session_tracker=self.session_tracker,
@@ -862,11 +841,10 @@ class CentralHubDaemon:
             command_server=self.command_server,
             services={
                 "voice": lambda: self.voice_orchestrator,
-                "memory": lambda: self.hindsight_backend,
+                "memory": lambda: self.hindsight_store,
                 "cognee": lambda: self.cognee_backend,
-                "session_watcher": lambda: self.session_watcher,
                 "agents": lambda: self._agents,
-                "staging": lambda: self.staging_store,
+                "maintenance": lambda: self.memory_maintenance,
             },
         )
 

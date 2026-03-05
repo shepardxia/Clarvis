@@ -6,6 +6,7 @@ Runs as a polling loop on the asyncio event loop.
 """
 
 import asyncio
+import fnmatch
 import hashlib
 import logging
 from pathlib import Path
@@ -21,7 +22,10 @@ _SKIP_PATTERNS = {".*", "__pycache__", "*.pyc", ".DS_Store"}
 
 def _should_skip(path: Path) -> bool:
     """Return True if *path* should be skipped (hidden files, caches, etc.)."""
-    return path.name.startswith(".") or path.name in _SKIP_PATTERNS
+    # Skip files inside hidden directories (e.g. .git/config)
+    if any(part.startswith(".") for part in path.parts):
+        return True
+    return any(fnmatch.fnmatch(path.name, pat) for pat in _SKIP_PATTERNS)
 
 
 class DocumentWatcher:

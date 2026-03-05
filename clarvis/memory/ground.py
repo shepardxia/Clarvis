@@ -1,0 +1,259 @@
+"""Memory grounding — build <memory_context> blocks for system prompt injection.
+
+Composes session-start context from multiple layers in priority order:
+
+1. **Authored grounding files** — curated prose in ``~/.clarvis/home/grounding/*.md``,
+   written by Clarvis during checkin (personality, directives, user profile, etc.).
+2. **Core mental models** — always included (tagged ``core``).
+3. **Bank stats** — compact summary of memory state.
+4. **Recent facts** — latest experiences and world knowledge for recency signal.
+5. **Recent observations** — consolidated insights from reflection.
+6. **Extra mental models** — fill remaining token budget.
+
+Falls back to mental-models-only if no grounding files exist (pre-first-checkin).
+"""
+
+import logging
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from clarvis.memory.store import HindsightStore
+
+logger = logging.getLogger(__name__)
+
+# Rough chars-per-token estimate for budget calculations.
+_CHARS_PER_TOKEN = 4
+_DEFAULT_TOKEN_BUDGET = 4096
+
+
+async def build_memory_context(
+    store: "HindsightStore",
+    visibility: str,
+    *,
+    token_budget: int = _DEFAULT_TOKEN_BUDGET,
+    grounding_dir: Path | str | None = None,
+) -> str:
+    """Build <memory_context> block from grounding files + Hindsight data.
+
+    Composes from multiple sources in priority order:
+
+    1. **Authored grounding files** — curated prose from ``grounding_dir``
+       (``*.md`` files in sorted order). Written by Clarvis during checkin.
+    2. **Core mental models** — always included (tagged ``core``).
+    3. **Bank stats** — compact summary of memory state.
+    4. **Recent facts** — latest experiences and world knowledge.
+    5. **Recent observations** — consolidated insights from reflection.
+    6. **Extra mental models** — fill remaining token budget.
+
+    Falls back to mental-models-only if no grounding files exist (pre-first-checkin).
+
+    Args:
+        store: HindsightStore instance.
+        visibility: "master" or "all" -- determines bank access.
+        token_budget: Approximate token budget for the entire block.
+        grounding_dir: Directory containing authored ``*.md`` grounding files.
+            Defaults to ``~/.clarvis/home/grounding/``.
+
+    Returns:
+        Formatted ``<memory_context>`` string for system prompt injection.
+        Empty string if store is not ready and no grounding files exist.
+    """
+    if grounding_dir is None:
+        grounding_dir = Path.home() / ".clarvis" / "home" / "grounding"
+    else:
+        grounding_dir = Path(grounding_dir).expanduser()
+
+    char_budget = token_budget * _CHARS_PER_TOKEN
+    sections: list[str] = []
+    chars_used = 0
+
+    # ── 1. Authored grounding files (highest priority) ───────────
+    grounding_text = _read_grounding_files(grounding_dir)
+    if grounding_text:
+        sections.append(grounding_text)
+        chars_used += len(grounding_text)
+
+    # ── 2–4. Hindsight data (mental models + stats) ──────────────
+    if store is not None and store.ready:
+        try:
+            banks = store.visible_banks(visibility)
+        except Exception:
+            logger.debug("Failed to get visible banks", exc_info=True)
+            banks = []
+
+        for bank in banks:
+            bank_lines = await _build_bank_section(
+                store,
+                bank,
+                char_budget,
+                chars_used,
+            )
+            if bank_lines:
+                section = f"### {bank}\n\n" + "\n\n".join(bank_lines)
+                sections.append(section)
+                chars_used += len(section)
+
+    if not sections:
+        return ""
+
+    body = "\n\n".join(sections)
+    return f"<memory_context>\n{body}\n</memory_context>"
+
+
+def _read_grounding_files(grounding_dir: Path) -> str:
+    """Read all ``*.md`` files from grounding directory, sorted by name.
+
+    Returns concatenated content, or empty string if directory doesn't exist
+    or contains no markdown files.
+    """
+    if not grounding_dir.is_dir():
+        return ""
+
+    parts: list[str] = []
+    for md_file in sorted(grounding_dir.glob("*.md")):
+        try:
+            content = md_file.read_text(encoding="utf-8").strip()
+            if content:
+                parts.append(content)
+        except Exception:
+            logger.debug("Failed to read grounding file %s", md_file, exc_info=True)
+
+    return "\n\n".join(parts)
+
+
+async def _build_bank_section(
+    store: "HindsightStore",
+    bank: str,
+    char_budget: int,
+    chars_used: int,
+) -> list[str]:
+    """Build formatted lines for a single bank.
+
+    Priority order: core models → stats → recent facts → recent observations
+    → extra models (fills remaining budget).
+    """
+    bank_lines: list[str] = []
+
+    # Core models — always included.
+    core_models: list[dict] = []
+    try:
+        core_models = await store.list_mental_models(
+            bank,
+            tags=["core"],
+            tags_match="any",
+        )
+    except Exception:
+        logger.debug("Failed to list core models for bank %s", bank, exc_info=True)
+
+    for model in core_models:
+        entry = _format_model(model)
+        if entry:
+            bank_lines.append(entry)
+            chars_used += len(entry)
+
+    # Bank stats — compact summary.
+    try:
+        stats = await store.get_bank_stats(bank)
+        if stats:
+            stat_parts = [f"{k}: {v}" for k, v in stats.items()]
+            stat_line = f"*Stats: {', '.join(stat_parts)}*"
+            if chars_used + len(stat_line) <= char_budget:
+                bank_lines.append(stat_line)
+                chars_used += len(stat_line)
+    except Exception:
+        logger.debug("Failed to get stats for bank %s", bank, exc_info=True)
+
+    # Recent facts — latest experiences and world knowledge.
+    try:
+        result = await store.list_facts(bank, limit=10)
+        facts = result.get("items", []) if isinstance(result, dict) else []
+        if facts:
+            fact_lines = [_format_fact(f) for f in facts]
+            fact_lines = [x for x in fact_lines if x]
+            if fact_lines:
+                block = "**Recent facts**\n" + "\n".join(fact_lines)
+                if chars_used + len(block) <= char_budget:
+                    bank_lines.append(block)
+                    chars_used += len(block)
+    except Exception:
+        logger.debug("Failed to list facts for bank %s", bank, exc_info=True)
+
+    # Recent observations — consolidated insights.
+    try:
+        observations = await store.list_observations(bank, limit=5)
+        if observations:
+            obs_lines = [_format_observation(o) for o in observations]
+            obs_lines = [x for x in obs_lines if x]
+            if obs_lines:
+                block = "**Recent observations**\n" + "\n".join(obs_lines)
+                if chars_used + len(block) <= char_budget:
+                    bank_lines.append(block)
+                    chars_used += len(block)
+    except Exception:
+        logger.debug("Failed to list observations for bank %s", bank, exc_info=True)
+
+    # Extra models — fill remaining budget.
+    try:
+        all_models = await store.list_mental_models(bank, limit=50)
+    except Exception:
+        logger.debug("Failed to list models for bank %s", bank, exc_info=True)
+        all_models = []
+
+    core_ids = {m.get("id") for m in core_models}
+    for model in all_models:
+        if model.get("id") in core_ids:
+            continue
+        entry = _format_model(model)
+        if not entry:
+            continue
+        if chars_used + len(entry) > char_budget:
+            break
+        bank_lines.append(entry)
+        chars_used += len(entry)
+
+    return bank_lines
+
+
+def _format_model(model: dict) -> str:
+    """Format a single mental model dict into a readable block.
+
+    Returns empty string if the model has no usable content.
+    """
+    name = model.get("name", "").strip()
+    content = model.get("content", "").strip()
+
+    if not content:
+        return ""
+
+    tags = model.get("tags") or []
+    tag_str = f" [{', '.join(tags)}]" if tags else ""
+
+    header = f"**{name}**{tag_str}" if name else ""
+    if header:
+        return f"{header}\n{content}"
+    return content
+
+
+def _format_fact(fact: dict) -> str:
+    """Format a single fact as a compact one-liner for grounding context."""
+    text = fact.get("text", "").strip()
+    if not text:
+        return ""
+    fact_type = fact.get("fact_type", "")
+    date = fact.get("occurred_start") or fact.get("mentioned_at") or ""
+    if date:
+        date = date[:10]  # YYYY-MM-DD
+    prefix = f"[{fact_type}]" if fact_type else ""
+    suffix = f" ({date})" if date else ""
+    return f"- {prefix} {text}{suffix}".strip()
+
+
+def _format_observation(obs: dict) -> str:
+    """Format a single observation as a compact one-liner for grounding context."""
+    text = obs.get("text", "").strip()
+    if not text:
+        return ""
+    count = obs.get("proof_count", 1)
+    suffix = f" (x{count})" if count and count > 1 else ""
+    return f"- {text}{suffix}"

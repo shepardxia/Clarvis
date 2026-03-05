@@ -194,9 +194,10 @@ class TimerService:
             self._persist()
 
     def _schedule(self, name: str, delay: float) -> None:
-        """Schedule a ``call_later`` handle. Must be called on the event loop.
+        """Schedule a ``call_later`` handle.
 
-        Caller must hold ``_lock`` — writes to ``_handles``.
+        Must be called on the event loop thread (event loop callbacks are
+        serialized, so no additional locking is needed for ``_handles``).
         """
         handle = self._loop.call_later(delay, self._fire, name)
         self._handles[name] = handle

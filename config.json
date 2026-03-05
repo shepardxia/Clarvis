@@ -3,8 +3,8 @@
     "base": "c64"
   },
   "display": {
-    "grid_width": 43,
-    "grid_height": 17,
+    "grid_width": 32,
+    "grid_height": 12,
     "corner_radius": 30,
     "bg_alpha": 0.8,
     "font_size": 14,
@@ -12,10 +12,12 @@
     "border_width": 2,
     "pulse_speed": 0.05,
     "fps": 3,
-    "avatar_x_offset": 13,
+    "avatar_x_offset": 8,
     "avatar_y_offset": 3,
     "bar_x_offset": 0,
-    "bar_y_offset": 3
+    "bar_y_offset": 3,
+    "mic_x_offset": -1,
+    "mic_y_offset": -2
   },
   "testing": {
     "enabled": false,
@@ -47,7 +49,7 @@
     },
     "wake_word": {
       "enabled": true,
-      "model": null,
+      "model": "r7_ebf",
       "model_path": null,
       "threshold": 0.75,
       "vad_threshold": 0.5,

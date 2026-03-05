@@ -238,15 +238,21 @@ The hierarchy is kept shallow — a few base classes, with diversity coming from
 
 ### 2.1 Base Types (Python classes)
 
+See **section 3 (Implementation Pattern Taxonomy)** for the full class hierarchy derived from rendering mechanics. Summary:
+
 ```
 Sprite (base)
-├── InteractiveSprite       — Registers click regions, handles on_click
-├── WeatherSprite           — Wraps WeatherArchetype (Numba JIT particle physics)
-├── FaceSprite              — Wraps FaceArchetype (pre-computed status animation)
-└── BarSprite               — Wraps ProgressArchetype (context bar)
+├── Cel                     — YAML-driven frame animation (pre-drawn ASCII art)
+├── Reel                    — Text content + viewport + temporal effects (scroll/reveal/marquee)
+├── Sandbox                 — Programmable computational simulations (agent-defined rules)
+├── Control                 — Click regions + action dispatch
+├── PostFx                  — Post-processing on composited output
+├── FaceSprite              — System wrapper (FaceArchetype)
+├── WeatherSprite           — System wrapper (WeatherArchetype)
+└── BarSprite               — System wrapper (ProgressArchetype)
 ```
 
-Most sprite diversity comes from **configuration**, not subclassing. A `Sprite` with `behavior: wander` and creature frames IS a creature. A `Sprite` with `engine: automaton` and agent-defined rules IS generative art. The base `Sprite` + its behavior + its rendering config determines what it is.
+Most sprite diversity comes from **configuration**, not subclassing. A `Cel` with `behavior: wander` and creature frames IS a creature. A `Sandbox` with `engine: automaton` and agent-defined rules IS generative art. 5 implementation modules cover all ~50 sprite ideas.
 
 ### 2.2 System Sprites
 
@@ -255,7 +261,7 @@ Auto-created at startup, survive `clear()`, special internal machinery.
 - **WeatherSprite** — Numba JIT particle physics, full-grid, exclusion zones
 - **FaceSprite** — pre-computed numpy matrices, status-driven animation
 - **BarSprite** — percentage-cached progress bar
-- **MicButton** — InteractiveSprite, toggle wake word listening
+- **MicButton** — Control, toggle wake word listening
 
 ### 2.3 Programmable Engines — Agent as Programmer
 
@@ -312,58 +318,41 @@ Agent sets: feed rate, kill rate, diffusion rates. Turing patterns emerge — sp
 **Sandpile Engine** (`engine: sandpile`)
 Agent drops grains at positions. Avalanches cascade. Beautiful fractal patterns emerge from simple toppling rules.
 
-**Sorting Visualizer** (`engine: sorter`)
-Agent provides an array. Sprite animates the chosen algorithm step by step (bubble, merge, quick, heap). Bar chart visualization.
-
 ### 2.4 Reactive / Data-Driven Sprites
 
 Sprites that breathe with Claude's activity and real-world context:
 
 - **Heartbeat** — EKG trace pulsing with activity rate. Flatlines during idle, spikes during intense tool use, arrhythmia on errors. Configurable chars (`─╲╱─`).
-- **Token river** — actual characters from what Claude is processing, flowing like a stream. Speed = thinking intensity. The river IS the content.
 - **Thought bubbles** — `○◯` float upward from the face when thinking, containing word fragments. Pop and vanish at the top. Spawn rate = thinking intensity.
 - **Error lightning** — test failures / errors crack lightning across the grid. Afterglow traces fade over several frames. Triggered by `hook:event` errors.
-- **Code rain** — identifiers and symbols from the *actual file being edited* falling vertically. Not generic Matrix green — real code from the session.
-- **Dependency constellation** — files as stars, imports as dim connecting lines. Grows during session. Agent can highlight clusters.
-- **Git bonsai** — commit graph as a growing tree. Branches are literal branches. Merges weave. New commits add leaves. Persistent across sessions.
-- **Memory web** — knowledge graph entities as floating labeled nodes, edges pulse when recalled. Agent highlights clusters via configure().
-- **Word cloud** — words from recent conversations at sizes proportional to frequency. Drifts slowly. Frequent words grow, rare words shrink.
-- **Conversation depth** — abstract side-bar showing context depth. Not the progress bar — a core sample showing geological layers of the conversation.
+- *Stashed: Token river, code rain (content pipeline complexity, privacy), git bonsai (complex git parsing), memory web (needs graph layout), word cloud (collision avoidance at 43x17)*
 
 ### 2.5 Living World Sprites
 
 The face lives in a world with life, physics, and ecology:
 
 - **Creatures** (YAML-defined) — cat, bird, fish, butterfly, firefly, spider, snake, frog. Multi-frame ASCII art + behavior (wander, patrol, drift, lifecycle). Agent spawns them.
-- **Ecosystem** — predator/prey dynamics. Rabbits multiply, foxes chase them, grass grows. Population oscillates. Agent defines species and rules via configure().
 - **Vine/ivy** — grows along grid edges frame by frame. Tendrils branch, creep, flower. Gets trimmed when sprites spawn nearby. Regrows over idle time.
 - **Campfire** — flickering particle flame with rising sparks and curling smoke. Warmth glow radius.
 - **Aquarium** — fish swimming, bubbles rising, seaweed swaying. The face becomes underwater.
-- **Ant highway** — ants following pheromone trails between agent-placed food sources. Trail intensity visualized.
-- **Bioluminescent deep** — dark grid with glowing creatures pulsing. Jellyfish, anglerfish. Agent defines species.
 - **Shadow** — face casts a shadow whose angle tracks sun/moon position. Lengthens at dawn/dusk.
 - **Rain puddles** — water pools at bottom during real rain weather. Ripples from new drops. Evaporates when cleared.
 - **Snowdrift** — snow accumulates against the face and bottom during snow. Melts when weather changes.
 - **Cobwebs** — form in unused corners over idle time. Cleared by activity. Spread if idle for hours.
-- **Coral reef** — fractal growth structures. Fish dart between branches. Agent defines growth rules.
-- **Wind chimes** — decorative hanging elements, sway amplitude = real wind speed.
-- **Moss** — cellular automaton that spreads across empty space. Displaced by other sprites spawning.
-- **Tidal pool** — water level oscillates with sine wave. Creatures appear at low tide.
+- *Stashed: Ecosystem (depends on creatures), ant highway (complex pathfinding), bioluminescent deep (niche theme), coral reef (complex growth), moss (overlaps vine/ivy)*
 
 ### 2.6 Music-Reactive Sprites
 
 Beyond lyrics — sprites that feel the music:
 
 - **Lyrics** — Spotify-synced, current line highlighted, optional translation, scrolling context.
-- **Playback controls** — ⏮ ⏯ ⏭ as clickable InteractiveSprites. Show track progress.
+- **Playback controls** — ⏮ ⏯ ⏭ as clickable Controls. Show track progress.
 - **Now-playing ticker** — horizontal marquee: "Artist — Track Name".
 - **Spectrum analyzer** — frequency bars bouncing. Agent defines bar count, char gradient, color.
-- **Piano roll** — horizontal note bars scrolling left, melody structure visible.
 - **Vinyl record** — spinning `(( o ))` with track name. RPM synced to BPM.
 - **Beat grid** — 16-step drum pattern, highlighting current beat position.
-- **Sound ribbon** — continuous waveform flowing across grid.
-- **Genre landscape** — abstract terrain shifting with genre (jagged=metal, smooth=jazz, chaotic=experimental).
 - **BPM pendulum** — visual metronome ticking at song tempo.
+- *Stashed: Piano roll (complex note data parsing)*
 
 ### 2.7 Typography / Text Art Sprites
 
@@ -371,8 +360,6 @@ Beyond lyrics — sprites that feel the music:
 - **Kanji study** — large decorative character with readings and meaning. Agent picks.
 - **Quote reveal** — text appears character by character, hangs, dissolves. Agent picks quotes.
 - **Cipher stream** — encrypted-looking noise slowly decoding to a message. Agent sets message.
-- **Graffiti** — stylized ASCII lettering appearing, aging, overwritten.
-- **Rosetta stone** — same word in multiple writing systems.
 - **ASCII clock** — large decorative clock. Styles: seven-segment, dot-matrix, binary, sundial.
 - **Typewriter** — text appearing with mechanical cadence. Carriage return animation.
 
@@ -382,11 +369,7 @@ Beyond lyrics — sprites that feel the music:
 - **Controls cluster** — group of buttons (playback, volume, settings).
 - **Tamagotchi mode** — the face IS a pet. Happiness tracks interaction frequency. Gets hungry when ignored. Agent defines mood rules.
 - **Maze runner** — procedural maze with a dot solving it. Agent defines parameters.
-- **Mini snake** — tiny autonomous snake game. Agent can influence direction.
-- **Etch-a-sketch** — agent moves cursor to draw. Persists until "shaken."
 - **Fortune cookie** — cracks open with animation, reveals agent-written wisdom.
-- **Progress quest** — fake RPG leveling up from real coding activity. Pure comedy.
-- **Dice roller** — animated dice roll for decision-making. Agent triggers.
 
 ### 2.9 Meta / Self-Referential Sprites
 
@@ -395,7 +378,6 @@ Beyond lyrics — sprites that feel the music:
 - **Dream mode** — during long idle, face "sleeps" and "dreams" — surreal sprite compositions cycle.
 - **Boot sequence** — retro POST/boot animation on startup before normal scene loads.
 - **Glitch** — intentional visual artifacts (shifted rows, corrupted chars, color noise). Aesthetic chaos.
-- **Horoscope** — daily zodiac reading for the project. Completely fabricated by agent.
 
 ### System vs Dynamic Sprites
 
@@ -404,11 +386,337 @@ Beyond lyrics — sprites that feel the music:
 
 ---
 
-## 3. YAML Sprite Definitions
+## 3. Implementation Pattern Taxonomy
+
+The sprite catalog (section 2) organizes ideas by *domain* — music, living world, typography. But implementation doesn't care about domain. A scrolling lyrics panel and a now-playing ticker are the same code with different data. A vine growing along edges and a cellular automaton are both grid-state sprites with step functions. The real modules emerge from **rendering mechanics**, not from what the sprite "is about."
+
+This section identifies the implementation patterns that generalize across all kept+stashed sprites, and maps them to concrete modules.
+
+### 3.1 Pattern Map
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Sprite (base)                                │
+│  identity, position, priority, lifecycle, state_attributes      │
+│  + Behavior (composition axis: static/drift/wander/patrol/...)  │
+├─────────────┬───────────┬──────────────┬───────────┬────────────┤
+│     Cel     │   Reel    │   Sandbox    │  Control  │   PostFx   │
+│             │           │              │           │            │
+│ YAML frames │ text +    │ numpy state +│ click     │ post-      │
+│ + animation │ viewport +│ step func +  │ region +  │ processing │
+│ cycle       │ temporal  │ char map     │ action    │ on output  │
+│             │ effect    │              │           │            │
+├─────────────┼───────────┼──────────────┼───────────┼────────────┤
+│ creatures   │ lyrics    │ automaton    │ buttons   │ glitch     │
+│ vinyl       │ ticker    │ particles    │ playback  │ debugger   │
+│ pendulum    │ quote     │ lsystem      │ mic       │            │
+│ concrete    │ cipher    │ boids        │ controls  │            │
+│ kanji       │ typewriter│ waves        │           │            │
+│ fortune     │ boot seq  │ react-diff   │           │            │
+│ plant       │ clock     │ sandpile     │           │            │
+│             │           │ vine/cobweb  │           │            │
+│             │           │ maze runner  │           │            │
+└─────────────┴───────────┴──────────────┴───────────┴────────────┘
+
+Cross-cutting concerns (not sprite subclasses):
+  DataSource  — adapters for StateStore, time, Spotify, hooks, git
+  Emitter     — meta-behavior that spawns child sprites at a rate
+  Scene       — YAML-defined sprite compositions + trigger system
+```
+
+### 3.2 Pattern A: Cel — YAML-Driven Frame Animation
+
+**Mechanic**: Load multi-frame ASCII art from YAML. Animation sequences cycle frames by tick counter. Position controlled by behavior plugin. The workhorse for any sprite that "looks like something."
+
+**Sprites it covers**:
+- Creatures (cat, bird, fish, butterfly, firefly, spider, snake, frog) — frames + wander/drift/patrol behavior
+- Vinyl record — rotating frames synced to BPM
+- BPM pendulum — swing animation frames
+- Concrete poetry — shaped text as a static frame
+- Kanji study — large character frame + metadata
+- Fortune cookie — multi-phase frames (closed → cracking → open)
+- Plant — lifecycle phases (seed → sprout → grown)
+- Shadow — angle-dependent frame selection
+- Campfire — base flame frames (sparks/smoke can be a child particle emitter)
+
+**Module**: `sprites/cel.py`
+- Loads `frames:` dict from YAML (name → ASCII art string, parsed to numpy uint32 matrix)
+- `animation:` dict maps animation names to frame sequence lists (reuse ElementRegistry's shorthand expansion: `$blink`, `*3`)
+- `tick()`: advance animation counter, select frame
+- `render_to()`: blit current frame matrix at (x, y) with color
+- Integrates with `Behavior` for movement
+
+**Key infrastructure**: YAML frame parsing (already exists in FaceArchetype/ElementRegistry), animation sequence expansion, frame matrix pre-computation.
+
+### 3.3 Pattern B: Reel — Text Content with Temporal Effects
+
+**Mechanic**: Text content rendered within a viewport with a temporal effect (scrolling, character-by-character reveal, horizontal marquee, or static display). Different data sources feed the same rendering machinery.
+
+**Sprites it covers**:
+- Lyrics — vertical scroll, highlight current line, content from Spotify
+- Now-playing ticker — horizontal marquee, content from Spotify
+- Quote reveal — char-by-char reveal + dissolve, content from agent
+- Cipher stream — noise→decode transition, content from agent
+- Typewriter — char reveal with carriage-return cadence, content from agent
+- Boot sequence — line-by-line reveal, scripted content
+- ASCII clock — static formatted, content from system time
+- Beat grid — step highlight, content from Spotify beat position
+- Heartbeat — 1D waveform trace chars, content from activity rate
+- *Stashed: Code rain (vertical cascade), piano roll (horizontal scroll), word cloud*
+
+**Module**: `sprites/reel.py`
+- `mode` enum: `SCROLL` | `REVEAL` | `MARQUEE` | `STATIC`
+- `content`: text buffer (string or list of lines)
+- `viewport`: width × height window into content
+- `SCROLL`: offset advances per tick, optional line highlight. Direction: vertical or horizontal.
+- `REVEAL`: cursor advances through content (char/word/line granularity), optional hold + dissolve
+- `MARQUEE`: horizontal loop with configurable speed
+- `STATIC`: just render text, refresh on data change
+- `set_content(text)`: update the text buffer (called by data source or agent)
+
+**Key infrastructure**: Text wrapping/clipping to viewport, reveal cursor tracking, dissolve mask (random char decay), highlight styling (color change for current line/word).
+
+### 3.4 Pattern C: Sandbox — Programmable Computational Grid
+
+**Mechanic**: numpy state array + per-tick step function + state→char mapping. The agent programs the sandbox by providing rules, parameters, and initial conditions via config. This is the generalization of all "simulation" sprites.
+
+**Sprites it covers**:
+- Cellular automaton — grid rules (birth/survive/states/neighborhood)
+- Reaction-diffusion — feed/kill/diffusion rates → Turing patterns
+- Sandpile — toppling rules, grain drops
+- Wave interference — source superposition, char gradient
+- L-System — string rewriting + turtle rendering
+- Boids — N-body flocking with steering weights
+- Particles — emitters + forces + lifetime (generalized weather)
+- Vine/ivy — edge-growth automaton with trim-on-proximity events
+- Cobwebs — idle-growth automaton with activity-clearing events
+- Snowdrift — weather-driven accumulation + melt
+- Rain puddles — weather-driven pooling + ripple + evaporation
+- Maze runner — procedural maze gen (CA) + pathfinding dot
+- Spectrum analyzer — frequency bars (vertical particles or bar chart)
+- *Stashed: Token river, ecosystem, ant highway, bioluminescent, coral reef, moss*
+
+**Module**: `sprites/sandbox/`
+```
+sandbox/
+├── base.py          — Sandbox base: state array, step(), char_map, configure()
+├── registry.py      — Engine type registry (name → engine class)
+├── automaton.py     — Cellular automaton (1D/2D, arbitrary rules, Numba JIT)
+├── particles.py     — Particle system (SoA arrays, emitters, forces, Numba JIT)
+├── lsystem.py       — L-System (string rewrite + turtle render, no JIT needed)
+├── boids.py         — Flocking (N-body forces, Numba JIT)
+├── waves.py         — Wave interference (source superposition, per-cell eval)
+├── reaction_diffusion.py — Turing patterns (Laplacian convolution, Numba JIT)
+└── sandpile.py      — Avalanche dynamics (toppling rules)
+```
+
+**Sandbox base interface**:
+```python
+class Sandbox(Sprite):
+    engine_type: str
+    state: np.ndarray           # engine-specific shape
+    char_map: dict[int, str]    # state value → display char
+    width: int
+    height: int
+
+    def configure(self, **config): ...   # agent reprograms rules
+    def step(self): ...                  # one simulation tick
+    def render_to(self, out_chars, out_colors): ...  # state → chars → blit
+```
+
+**Growth sprites** (vine, cobweb, snowdrift, puddles) are sandboxes with **event hooks** — they subscribe to SignalBus events (`hook:event`, `weather.changed`) that trigger growth/decay in their grid state. Same `step()` mechanic, just with external stimuli added.
+
+**Numba JIT**: automaton, particles, boids, reaction-diffusion benefit from JIT. Others (lsystem, waves, sandpile) are fast enough without. The existing WeatherArchetype JIT functions serve as the template — SoA arrays, `@njit(cache=True)`, Python bridge for layer writes.
+
+### 3.5 Pattern D: Control — Click Regions
+
+**Mechanic**: Renders a label/icon. Registers bounding box with widget's ClickRegionManager. Dispatches action callback on click.
+
+**Sprites it covers**:
+- Buttons (generic label + action)
+- Playback controls (⏮ ⏯ ⏭)
+- Mic toggle
+- Controls cluster (group of buttons)
+- Tamagotchi interactions (pet/feed)
+
+**Module**: `sprites/control.py`
+- `label`: display text
+- `action`: callback identifier (string → handler function mapping)
+- `on_spawn()`: register click region
+- `on_death()`: deregister click region
+- `on_click()`: dispatch action
+
+Controls clusters are just multiple Controls spawned together by a scene definition. No special compound class needed.
+
+### 3.6 Pattern E: PostFx — Post-Processing
+
+**Mechanic**: Runs *after* all normal sprites render. Operates on the composited output arrays. Injects visual artifacts, overlays debug info, or applies global transformations.
+
+**Sprites it covers**:
+- Glitch — shifted rows, corrupted chars, color noise
+- Sprite debugger — bounding box overlay, priority labels
+- Error lightning — grid-wide flash + afterglow fade (alternative: could be particle-based)
+- Dream mode — global color shift / blur during idle sleep
+
+**Module**: `sprites/postfx.py`
+- `PostFx(Sprite)` with `render_post(out_chars, out_colors)` instead of `render_to()`
+- SceneManager calls `render_post()` in a second pass after normal sprite compositing
+- PostFx sprites see the final composited output and can modify it in-place
+
+### 3.7 Cross-Cutting: Data Sources
+
+Not a sprite subclass — a composition concern. Many sprites need external data (Spotify track info, system time, activity rate, weather state). Rather than each sprite polling independently:
+
+**Module**: `sprites/sources.py`
+- `DataSource` protocol: `poll() → dict`, `subscribe(callback)`
+- Adapters: `StateStoreSource` (reads StateStore sections), `SpotifySource` (track/lyrics/beat), `TimeSource` (clock), `HookSource` (activity rate from hook events)
+- Sprites that need data hold a `source` reference. SceneManager ticks sources alongside sprites.
+- Reel's `set_content()` is called by its source adapter when data changes
+- Sandbox's event hooks use source callbacks
+
+This prevents N sprites each independently polling Spotify or reading StateStore.
+
+### 3.8 Cross-Cutting: Emitter
+
+A meta-behavior, not a sprite subclass. Any sprite can be an emitter — it spawns child sprites at a configurable rate within an area.
+
+- Emitter config: `sprite_def` (YAML reference), `rate` (spawn probability per tick), `max_children`, `area` (spawn region)
+- Children are normal sprites (Cels, usually) with lifetime
+- Emitter tracks children, culls dead ones, respawns up to max
+- Used by: firefly swarms, thought bubbles, sparkle effects, campfire sparks
+
+This could be a `Behavior` subclass or a mixin on Sprite. It's orthogonal to how the sprite renders.
+
+### 3.9 Cross-Cutting: Scene & Trigger Orchestration
+
+The scene/trigger system is the management layer above sprites.
+
+**Module**: `sprites/scenes.py`
+- Scene YAML loading (sprite compositions)
+- Scene lifecycle (load → active → unload, tracking which sprites belong to which scene)
+- Trigger evaluation (event → action mapping, cooldown)
+- Dream mode / scene rotation are orchestrators that load/unload scenes on timers
+
+### 3.10 System Wrappers
+
+Thin adapter sprites wrapping existing heavy archetypes. They adapt the existing `FaceArchetype`, `WeatherArchetype`, and `ProgressArchetype` to the `Sprite` interface without reimplementing their internals.
+
+**Module**: `sprites/system.py`
+- `FaceSprite` — delegates tick/render to `FaceArchetype`, exposes status-based animation
+- `WeatherSprite` — delegates to `WeatherArchetype` (Numba JIT particles), reports exclusion zones
+- `BarSprite` — delegates to `ProgressArchetype` (percentage cache)
+
+These are migration shims. As the sandbox system matures, weather could migrate to `ParticleSandbox` and the face to `Cel`, but there's no rush — the wrappers work.
+
+### 3.11 Summary: Idea → Pattern Mapping
+
+| Sprite Idea | Pattern | Module |
+|---|---|---|
+| **Creatures** (cat, bird, fish, butterfly, firefly, spider, snake, frog) | Cel | `cel` + behaviors |
+| **Plant** | Cel | `cel` + lifecycle behavior |
+| **Vine/ivy**, **Cobwebs** | Sandbox (grid) | `sandbox/automaton` + event hooks |
+| **Campfire** | Cel + Emitter | `cel` (base flame) + emitter (sparks) |
+| **Aquarium** | Scene composition | `scenes` (fish + bubbles + seaweed) |
+| **Shadow** | Cel | `cel` (angle-selected frame) + data source |
+| **Rain puddles**, **Snowdrift** | Sandbox (grid) | `sandbox/automaton` + weather event hooks |
+| **Lyrics** | Reel (scroll) | `reel` + Spotify source |
+| **Playback controls** | Control | `control` |
+| **Now-playing ticker** | Reel (marquee) | `reel` + Spotify source |
+| **Spectrum analyzer** | Sandbox (particles/bars) | `sandbox/particles` or `reel` |
+| **Vinyl record** | Cel | `cel` (rotating frames) |
+| **Beat grid** | Reel (static, highlight) | `reel` + Spotify source |
+| **BPM pendulum** | Cel | `cel` (swing animation) |
+| **Concrete poetry** | Cel | `cel` (shaped text as frame) |
+| **Kanji study** | Cel + Reel | `cel` (main char) + `reel` (readings) |
+| **Quote reveal** | Reel (reveal) | `reel` |
+| **Cipher stream** | Reel (reveal) | `reel` (noise→decode mode) |
+| **ASCII clock** | Reel (static) | `reel` + time source |
+| **Typewriter** | Reel (reveal) | `reel` |
+| **Buttons**, **Controls cluster** | Control | `control` |
+| **Tamagotchi mode** | Cel + data source | `cel` (mood faces) + state machine |
+| **Maze runner** | Sandbox (grid) | `sandbox/automaton` (gen) + pathfinding |
+| **Fortune cookie** | Cel → Reel | `cel` (crack animation) → `reel` (reveal) |
+| **Heartbeat** | Reel (waveform) | `reel` (1D trace) + activity source |
+| **Thought bubbles** | Emitter + Cel | emitter + `cel` (bubble chars) |
+| **Error lightning** | PostFx or Sandbox | `postfx` (grid flash) or `sandbox/particles` |
+| **Cellular automaton** | Sandbox (grid) | `sandbox/automaton` |
+| **Particle system** | Sandbox (particles) | `sandbox/particles` |
+| **L-System** | Sandbox | `sandbox/lsystem` |
+| **Boids** | Sandbox (agents) | `sandbox/boids` |
+| **Wave interference** | Sandbox (field) | `sandbox/waves` |
+| **Reaction-diffusion** | Sandbox | `sandbox/reaction_diffusion` |
+| **Sandpile** | Sandbox (grid) | `sandbox/sandpile` |
+| **Sprite debugger** | PostFx | `postfx` |
+| **Glitch** | PostFx | `postfx` |
+| **Boot sequence** | Reel (reveal) | `reel` |
+| **Dream mode** | Scene orchestration | `scenes` (timer-driven scene cycling) |
+| **Canvas replay** | PostFx | `postfx` (snapshot ring buffer overlay) |
+
+### 3.12 Module Dependency Graph
+
+```
+sprites/
+├── core.py              ← everything depends on this
+│   (Sprite, SpriteRegistry)
+├── behaviors.py         ← cel, sandbox
+│   (Static, Drift, Wander, Patrol, Lifecycle)
+├── cel.py               ← YAML creature/object definitions
+├── reel.py              ← agent/source provides content, no YAML needed
+├── control.py           ← depends on ClickRegionManager
+├── postfx.py            ← runs post-compositing
+├── system.py            ← wraps existing archetypes
+├── sources.py           ← adapters, used by reel + sandbox
+├── scenes.py            ← orchestration layer above all sprites
+│   (SceneManager, Scene, Trigger)
+└── sandbox/
+    ├── base.py          ← extends Sprite
+    ├── registry.py      ← engine type lookup
+    ├── automaton.py     ← Numba JIT
+    ├── particles.py     ← Numba JIT (generalized weather)
+    ├── lsystem.py
+    ├── boids.py         ← Numba JIT
+    ├── waves.py
+    ├── reaction_diffusion.py  ← Numba JIT
+    └── sandpile.py
+```
+
+### 3.13 Revised Class Hierarchy
+
+The old hierarchy (section 2.1) was organized by what things *are*. The implementation hierarchy is organized by *how they render*:
+
+```
+Sprite (base)
+├── Cel                   — YAML-driven frame animation + behavior
+├── Reel                  — text content + viewport + temporal effect
+├── Sandbox               — programmable computational simulation
+│   ├── AutomatonSandbox
+│   ├── ParticleSandbox
+│   ├── LSystemSandbox
+│   ├── BoidsSandbox
+│   ├── WaveSandbox
+│   ├── ReactionDiffusionSandbox
+│   └── SandpileSandbox
+├── Control               — click region + action dispatch
+├── PostFx                — post-processing on composited output
+├── FaceSprite            — system wrapper (FaceArchetype)
+├── WeatherSprite         — system wrapper (WeatherArchetype)
+└── BarSprite             — system wrapper (ProgressArchetype)
+
+Composition axes (not subclasses):
+  Behavior                — movement/lifecycle plugins (attached to any sprite)
+  DataSource              — external data adapters (feed content to any sprite)
+  Emitter                 — child sprite spawning (behavior on any sprite)
+```
+
+**5 real implementation modules** (Cel, Reel, Sandbox, Control, PostFx) cover **all ~50 sprite ideas**. Everything else is config, YAML definitions, data source wiring, or scene composition. This is the leverage of the abstraction — diversity from configuration, not from class explosion.
+
+---
+
+## 4. YAML Sprite Definitions
 
 Extend the existing `ElementRegistry` with new element kinds. Auto-discovered via directory naming.
 
-### 3.1 Creature/Object Definitions
+### 4.1 Creature/Object Definitions
 
 ```yaml
 # elements/sprites/cat.yaml
@@ -520,7 +828,7 @@ frames:
     ---
 ```
 
-### 3.2 Generative Art Definitions
+### 4.2 Generative Art Definitions
 
 ```yaml
 # elements/sprites/game_of_life.yaml
@@ -538,7 +846,7 @@ config:
   wrap: true
 ```
 
-### 3.3 Info Widget Definitions
+### 4.3 Info Widget Definitions
 
 ```yaml
 # elements/sprites/clock.yaml
@@ -555,7 +863,7 @@ color: 244               # dim gray
 
 ---
 
-## 4. Scene Definitions (VGDL Domain/Level Split)
+## 5. Scene Definitions (VGDL Domain/Level Split)
 
 Scenes are compositions of sprites — like VGDL levels but for the canvas.
 
@@ -662,7 +970,7 @@ Scenes track which sprites they spawned, so `unload_scene("now_playing")` remove
 
 ---
 
-## 5. Trigger System
+## 6. Trigger System
 
 Context triggers auto-manage sprites based on events. Declared in scene YAML or registered programmatically.
 
@@ -727,9 +1035,9 @@ triggers:
 
 ---
 
-## 6. Rendering & Compositing
+## 7. Rendering & Compositing
 
-### 6.1 Core Rendering Flow
+### 7.1 Core Rendering Flow
 
 ```
 SceneManager.tick()
@@ -745,28 +1053,28 @@ SceneManager.render(out_chars, out_colors)
             → if opaque: overwrite entire bounding box (clears behind)
 ```
 
-### 6.2 Sprite Rendering Methods
+### 7.2 Sprite Rendering Methods
 
 Each sprite renders differently based on its type:
 
-- **AsciiArt/Creature**: blit pre-parsed frame matrix at (x, y)
-- **TextBlock**: word-wrap text into width, put_text per line
-- **GenArt**: blit algorithm output grid (numpy array)
+- **Cel**: blit pre-parsed frame matrix at (x, y)
+- **Reel**: word-wrap text into width, put_text per line
+- **Sandbox**: blit simulation output grid (numpy array)
 - **Weather**: full-grid particle rendering (Numba JIT path, existing code)
 - **Face**: blit pre-computed 11x5 matrix (existing code)
 - **Bar**: blit pre-computed 1xN matrix (existing code)
 - **Interactive**: render label text + register click region with widget
 - **Emitter**: manage child sprite lifecycle (spawn/track/cull)
 
-### 6.3 Exclusion Zones
+### 7.3 Exclusion Zones
 
 Opaque sprites register their bounding boxes. The weather sprite queries these to avoid rendering particles behind opaque elements (face, controls, etc.). This is the existing exclusion zone pattern generalized — any opaque sprite contributes to the exclusion set.
 
-### 6.4 Click Regions
+### 7.4 Click Regions
 
-`InteractiveSprite` subclasses register click regions with the widget's `ClickRegionManager` when spawned, and deregister when killed. Click events from the widget route to the sprite's `on_click()` handler via the SceneManager.
+`Control` subclasses register click regions with the widget's `ClickRegionManager` when spawned, and deregister when killed. Click events from the widget route to the sprite's `on_click()` handler via the SceneManager.
 
-### 6.5 Integration with Existing DisplayManager
+### 7.5 Integration with Existing DisplayManager
 
 The `DisplayManager` rendering loop stays as-is. It calls into the `SceneManager` instead of manually orchestrating individual archetypes:
 
@@ -792,7 +1100,7 @@ The existing `RenderPipeline` with its `Layer` objects may be simplified or repl
 
 ---
 
-## 7. MCP Canvas Tools
+## 8. MCP Canvas Tools
 
 New tool sub-server `canvas_tools.py`, following existing patterns (`create_tool_server` from `_helpers.py`).
 
@@ -867,7 +1175,7 @@ async def canvas_draw(
     priority: Annotated[int, Field(description="Draw priority (0=back, 100=front)")] = 30,
     ctx: Context = None,
 ) -> str:
-    """Quick-draw text at a position. Creates or updates a TextBlock sprite."""
+    """Quick-draw text at a position. Creates or updates a Reel sprite."""
 ```
 
 ### Tool Design Notes
@@ -879,7 +1187,7 @@ async def canvas_draw(
 
 ---
 
-## 8. Agent Curation Model
+## 9. Agent Curation Model
 
 ### How the Agent Interacts with the Canvas
 
@@ -904,18 +1212,18 @@ The agent does NOT need to be awake for the canvas to be alive. Triggers, behavi
 
 ---
 
-## 9. Programmable Engine Architecture
+## 10. Programmable Engine Architecture
 
-### 9.1 The Core Idea: Agent as Programmer
+### 10.1 The Core Idea: Agent as Programmer
 
 Pre-defined algorithm classes are screensavers. The real power is that the agent **programs** the engine — providing rules, parameters, initial conditions, and character mappings as structured data via `canvas_spawn()` config. The sprite is the runtime; the agent is the programmer.
 
 Each engine type follows the WeatherArchetype pattern internally (numpy arrays, optional Numba JIT), but accepts its program from the agent at spawn time and can be reconfigured via `canvas_configure()`.
 
-### 9.2 Engine Interface
+### 10.2 Engine Interface
 
 ```python
-class EngineSprite(Sprite):
+class Sandbox(Sprite):
     """Base for agent-programmable computational sprites."""
 
     engine: str             # engine type name
@@ -932,7 +1240,7 @@ class EngineSprite(Sprite):
         """Map state to characters, blit to output."""
 ```
 
-### 9.3 Engine Types
+### 10.3 Engine Types
 
 **Cellular Automaton** (`engine: automaton`)
 - Agent defines: `rules` (birth/survive sets, arbitrary — not just Conway's), `neighborhood` (moore/von_neumann/hex/custom offset list), `states` (number of cell states), `chars` (per-state char), `seed` (random density, named pattern, or explicit grid), `wrap` (bool), `1d` mode (scrolls downward).
@@ -961,10 +1269,7 @@ class EngineSprite(Sprite):
 **Sandpile** (`engine: sandpile`)
 - Agent drops grains via configure(). Avalanches cascade by toppling rules. Fractal patterns.
 
-**Sorting Visualizer** (`engine: sorter`)
-- Agent provides: `values` (array), `algorithm` (bubble/merge/quick/heap), `chars` (bar chars). Steps one comparison per tick.
-
-### 9.4 What Makes This Not a Screensaver
+### 10.4 What Makes This Not a Screensaver
 
 The agent can:
 1. **Invent rules** — `{"birth": [3,5,7], "survive": [1,4]}` is a CA nobody has named. The agent experiments.
@@ -974,10 +1279,10 @@ The agent can:
 5. **Direct draw + engine hybrid** — use `canvas_draw()` to paint a frame, then spawn an engine to animate from that starting state.
 6. **See the result** — `canvas_snapshot()` shows the output. Agent reads it, decides if it likes it, adjusts.
 
-### 9.5 Interactive Sprite Details
+### 10.5 Interactive Sprite Details
 
 ```python
-class InteractiveSprite(Sprite):
+class Control(Sprite):
     """Clickable element. Registers click regions with the widget."""
 
     label: str
@@ -993,15 +1298,15 @@ class InteractiveSprite(Sprite):
         # Dispatch action (play_pause, skip, toggle_mic, custom)
 ```
 
-Compound controls (⏮ ⏯ ⏭) are just multiple InteractiveSprites spawned together by a scene definition. No special ControlsSprite needed — keep it flat.
+Compound controls (⏮ ⏯ ⏭) are just multiple Controls spawned together by a scene definition. No special compound class needed — keep it flat.
 
-### 9.6 Image-to-ASCII (Nice-to-Have)
+### 10.6 Image-to-ASCII (Nice-to-Have)
 
 Utility function, not a sprite type. PIL resize → grayscale → brightness-to-charset mapping. Agent calls it to create sprite frames from images (album art, icons).
 
 ---
 
-## 10. Migration from Current Architecture
+## 11. Migration from Current Architecture
 
 ### What Changes
 
@@ -1013,7 +1318,7 @@ Utility function, not a sprite type. PIL resize → grayscale → brightness-to-
 | Mic icon rendered inline in `_render_mic_icon()` | `ButtonSprite` instance |
 | Voice text rendered inline in `_render_voice_text()` | System sprite at priority 95, or kept as special overlay |
 | `RenderPipeline` compositing 5 layers | SceneManager renders sprites directly onto output arrays |
-| Only click region: mic toggle | Any `InteractiveSprite` registers click regions |
+| Only click region: mic toggle | Any `Control` registers click regions |
 
 ### What Stays
 
@@ -1025,76 +1330,69 @@ Utility function, not a sprite type. PIL resize → grayscale → brightness-to-
 | `FaceArchetype` internals (pre-computed matrices, animation) | Preserved inside FaceSprite |
 | `WeatherArchetype` internals (Numba JIT physics) | Preserved inside WeatherSprite |
 | `ProgressArchetype` internals (percentage cache) | Preserved inside BarSprite |
-| `ClickRegionManager` | Stays, now used by any InteractiveSprite |
+| `ClickRegionManager` | Stays, now used by any Control |
 | Swift widget (rendering, click handling, ASR) | No changes needed |
 | MCP server architecture | Extended with canvas_tools sub-server |
 | StateStore, SignalBus, AppContext | Stay as-is, triggers read from them |
 
 ### Migration Strategy
 
-**Phase 0 — Infrastructure** (this is the critical foundation):
-- Implement `Sprite` base class with full interface
-- Implement `Behavior` base + `StaticBehavior`
-- Implement `SpriteRegistry` with live/dead tracking
-- Implement `SceneManager` with tick/render/spawn/remove
-- Implement rendering onto numpy output arrays (bypassing or wrapping `RenderPipeline`)
+**Phase 0 — Core Infrastructure** (critical foundation):
+- `sprites/core.py` — `Sprite` base class, `SpriteRegistry` (live/dead tracking, type queries)
+- `sprites/behaviors.py` — `Behavior` base + `StaticBehavior`
+- `sprites/scenes.py` — `SceneManager` (tick/render/spawn/remove/kill-list)
+- Rendering onto numpy output arrays (priority-sorted compositing)
 
-**Phase 1 — Wrap Existing**:
-- `FaceSprite` wrapping `FaceArchetype`
-- `BarSprite` wrapping `ProgressArchetype`
-- `WeatherSprite` wrapping `WeatherArchetype`
-- `ButtonSprite` for mic toggle (replaces `_render_mic_icon()`)
-- System sprite for voice text overlay
+**Phase 1 — System Wrappers** (prove the architecture, zero visual change):
+- `sprites/system.py` — `FaceSprite`, `BarSprite`, `WeatherSprite` wrapping existing archetypes
+- `sprites/control.py` — `Control` + mic toggle button
 - Wire `SceneManager` into `DisplayManager` (replacing `FrameRenderer`)
 - Verify: exact same visual output as before
 
-**Phase 2 — Static Content**:
-- `AsciiArtSprite` — YAML-defined static/animated ASCII art
-- `TextBlockSprite` — agent-written text
-- `InfoWidgetSprite` — clock, weather summary
-- MCP `canvas_tools.py` — spawn, remove, move, list, snapshot, draw
-- Scene definition loading from YAML
-- Default scene with face + bar + weather + mic
+**Phase 2 — Cel + Reel + MCP** (first new content):
+- `sprites/cel.py` — YAML-defined multi-frame ASCII art with animation cycles
+- `sprites/reel.py` — text content with modes (STATIC, SCROLL, REVEAL, MARQUEE)
+- MCP `canvas_tools.py` — spawn, remove, move, configure, list, snapshot, draw
+- Scene YAML loading + default scene definition
+- Sample content: ASCII clock (Reel/STATIC + TimeSource), static ASCII art (Cel)
 
-**Phase 3 — Living World**:
-- `WanderBehavior`, `DriftBehavior`, `PatrolBehavior`
-- `CreatureSprite` with YAML-defined creatures
-- `EmitterSprite` (fireflies, sparkles)
-- `LifecycleBehavior` (plants, effects)
-- Trigger system (auto-spawn based on context events)
-- Sample creatures: cat, bird, firefly, plant
+**Phase 3 — Behaviors + Living World**:
+- `WanderBehavior`, `DriftBehavior`, `PatrolBehavior`, `LifecycleBehavior`
+- Emitter behavior (child sprite spawning at configurable rate)
+- YAML creature definitions: cat, bird, firefly, plant (all Cel + behaviors)
+- `sprites/sources.py` — `DataSource` protocol + `StateStoreSource`, `TimeSource`
+- Trigger system (event → spawn/remove/load_scene actions)
 
 **Phase 4 — Music Integration**:
-- `LyricsSprite` with Spotify sync
-- `ControlsSprite` (playback buttons with click regions)
-- `TickerSprite` for now-playing info
-- Now-playing scene definition
-- Triggers: music.playing → load scene, music.stopped → unload
+- `SpotifySource` data adapter (track info, lyrics, beat position)
+- Lyrics (Reel/SCROLL + SpotifySource), now-playing ticker (Reel/MARQUEE)
+- Playback controls (Control group)
+- Now-playing scene definition + triggers (music.playing → load, music.stopped → unload)
 
 **Phase 5 — Programmable Engines**:
-- `EngineSprite` base with config-driven programming model
-- Cellular automaton engine (Numba JIT, agent-defined rules)
-- Particle engine (generalized from weather JIT)
-- Wave engine
-- Agent programs engines via canvas_spawn config — NOT pre-defined algorithms
+- `sprites/sandbox/base.py` — `Sandbox` (state array + step + char_map + configure)
+- `sprites/sandbox/registry.py` — engine type lookup
+- `sandbox/automaton.py` — cellular automaton (Numba JIT, agent-defined rules)
+- `sandbox/particles.py` — particle system (generalized from weather JIT)
+- `sandbox/waves.py` — wave interference
 
-**Phase 6 — Reactive & Data-Driven**:
-- Heartbeat (activity rate), thought bubbles, error lightning
-- Code rain (from actual session content)
-- Token river, word cloud
-- Data-source integration (StateStore, hook events, git)
+**Phase 6 — Reactive + Effects**:
+- `sprites/postfx.py` — `PostFx` (post-processing: glitch, debugger overlay)
+- Heartbeat (Reel waveform trace + activity source)
+- Thought bubbles (emitter + Cel, triggered by status=thinking)
+- Error lightning (PostFx, triggered by hook:event errors)
+- Growth sprites: vine/cobweb (automaton sandbox + SignalBus event hooks)
 
-**Phase 7 — Polish & Expansion**:
-- More engines (L-system, boids, reaction-diffusion, sandpile)
+**Phase 7 — Engine Expansion + Polish**:
+- More engines: L-system, boids, reaction-diffusion, sandpile
+- More creatures, scenes, and YAML definitions
+- Dream mode (scene orchestration on idle timer)
 - Image-to-ASCII utility
-- More creatures and scene definitions
-- Agent curation patterns (agent decides what to show)
-- Scene rotation (cycle through ambient scenes)
-- Feed sprite (git log, notifications)
+- Agent curation patterns (agent decides what to show via canvas tools)
 
 ---
 
-## 11. Key Design Decisions
+## 12. Key Design Decisions
 
 ### Priority Values (Conventions, Not Constants)
 
@@ -1127,14 +1425,14 @@ No more `LayerPriority` enum. Just conventions:
 
 - Pre-compute frame matrices at sprite creation (like FaceArchetype does)
 - Weather and GenArt use Numba JIT for heavy computation
-- Simple sprites (TextBlock, AsciiArt, Button) are just `put_text` or `blit` calls — negligible cost
+- Simple sprites (Reel, Cel, Control) are just `put_text` or `blit` calls — negligible cost
 - SpriteRegistry.alive() caches the sorted list, invalidated on spawn/kill
 - At 3 FPS with ~20 sprites, performance is not a concern
 - The snapshot() MCP tool is O(W*H) — fast for 43x17
 
 ---
 
-## 12. Open Questions (To Resolve During Implementation)
+## 13. Open Questions (To Resolve During Implementation)
 
 1. **RenderPipeline fate**: Do we keep it as an internal optimization (weather renders to a buffer, then composited with sprite output)? Or fully replace with direct sprite-onto-output rendering? Start with direct rendering, add buffers if performance needs it.
 

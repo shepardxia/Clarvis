@@ -4,11 +4,11 @@ You are ingesting a document into the knowledge base.
 
 ## Process
 
-1. Call knowledge_ingest with the provided path or content
-2. After ingestion, check what was extracted: call knowledge_entities and knowledge_facts
+1. Call `ingest` with the provided path or content
+2. After ingestion, check what was extracted: call `entities` and `relations`
 3. Look for obvious issues:
-   - Duplicate entities that should be merged (call knowledge_merge)
-   - Incorrect entity types (call knowledge_update)
+   - Duplicate entities that should be merged (call `merge_entities`)
+   - Incorrect entity types (call `update_entity`)
    - Missing relationships that are obvious from context
 4. Report what was ingested: new entities, new relationships, any corrections made
 

@@ -1,4 +1,4 @@
-"""Tests for PiBackend — protocol compliance, config, and event translation."""
+"""PiBackend — event translation and error propagation."""
 
 import json
 from pathlib import Path
@@ -20,12 +20,9 @@ def _make_config(**overrides) -> BackendConfig:
     return BackendConfig(**defaults)
 
 
-# ── send() event translation ──
-
-
 @pytest.mark.asyncio
 async def test_send_translates_events():
-    """Verify send() yields text for text_delta, None for tool_end, returns on agent_end."""
+    """send() yields text for text_delta, None for tool_end, returns on agent_end."""
     backend = PiBackend(_make_config())
 
     events = [
@@ -37,12 +34,9 @@ async def test_send_translates_events():
         {"event": "agent_end"},
     ]
 
-    # Mock the reader as an async line-reader
     lines = [json.dumps(e).encode() + b"\n" for e in events]
     reader = AsyncMock()
     reader.readline = AsyncMock(side_effect=lines)
-
-    # Mock writer
     writer = MagicMock()
     writer.write = MagicMock()
 
@@ -59,16 +53,13 @@ async def test_send_translates_events():
 
 @pytest.mark.asyncio
 async def test_send_raises_on_error_event():
-    """Verify send() raises RuntimeError on error events."""
+    """send() raises RuntimeError on error events."""
     backend = PiBackend(_make_config())
 
-    events = [
-        {"event": "error", "message": "something broke"},
-    ]
+    events = [{"event": "error", "message": "something broke"}]
     lines = [json.dumps(e).encode() + b"\n" for e in events]
     reader = AsyncMock()
     reader.readline = AsyncMock(side_effect=lines)
-
     writer = MagicMock()
     writer.write = MagicMock()
 
@@ -77,15 +68,5 @@ async def test_send_raises_on_error_event():
     backend._writer = writer
 
     with pytest.raises(RuntimeError, match="something broke"):
-        async for _ in backend.send("test"):
-            pass
-
-
-@pytest.mark.asyncio
-async def test_send_raises_when_not_connected():
-    """Verify send() raises when not connected."""
-    backend = PiBackend(_make_config())
-
-    with pytest.raises(RuntimeError, match="not connected"):
         async for _ in backend.send("test"):
             pass

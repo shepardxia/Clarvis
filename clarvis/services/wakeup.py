@@ -32,13 +32,11 @@ class WakeupManager:
         agent: Any,
         state_store: Any = None,
         memory_service: Any = None,
-        consolidator: Any = None,
         get_spotify_session: Any = None,
     ):
         self._agent = agent
         self._state = state_store
         self._memory = memory_service
-        self._consolidator = consolidator
         self._get_spotify_session = get_spotify_session
 
     # ------------------------------------------------------------------
@@ -56,10 +54,6 @@ class WakeupManager:
         """Regular check-in pulse from Scheduler."""
         await self._wakeup(reason="pulse")
 
-    async def on_consolidation_needed(self, session_key: str) -> None:
-        """Triggered when conversation needs memory consolidation."""
-        await self._wakeup(reason="consolidation", session_key=session_key)
-
     # ------------------------------------------------------------------
     # Core
     # ------------------------------------------------------------------
@@ -74,7 +68,17 @@ class WakeupManager:
         if self._get_spotify_session:
             loop = asyncio.get_running_loop()
             np = await loop.run_in_executor(None, now_playing_summary, self._get_spotify_session)
-        prompt = self._build_context_prompt(reason, now_playing=np, **context)
+        # Fetch memory grounding (async)
+        mem_ctx = None
+        if self._memory:
+            try:
+                from clarvis.memory.ground import build_memory_context
+
+                mem_ctx = await build_memory_context(self._memory, "master")
+            except Exception:
+                logger.debug("Wakeup memory grounding failed", exc_info=True)
+
+        prompt = self._build_context_prompt(reason, now_playing=np, memory_context=mem_ctx, **context)
         logger.info("Wakeup (%s): sending prompt (%d chars)", reason, len(prompt))
 
         chunks: list[str] = []
@@ -115,14 +119,13 @@ class WakeupManager:
         if np:
             parts.append(np)
 
-        # Memory context
-        if self._consolidator:
-            mem_ctx = self._consolidator.get_memory_context()
-            if mem_ctx:
-                preview = mem_ctx[:300]
-                if len(mem_ctx) > 300:
-                    preview += "..."
-                parts.append(f"Memory snapshot: {preview}")
+        # Memory context (pre-fetched in _wakeup)
+        mem_ctx = context.pop("memory_context", None)
+        if mem_ctx:
+            preview = mem_ctx[:300]
+            if len(mem_ctx) > 300:
+                preview += "..."
+            parts.append(f"Memory snapshot: {preview}")
 
         # Reason-specific context
         if reason == "timer":

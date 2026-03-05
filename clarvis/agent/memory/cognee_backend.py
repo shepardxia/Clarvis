@@ -323,8 +323,10 @@ class CogneeBackend:
         if node is None:
             return {"status": "error", "reason": f"entity {entity_id} not found"}
 
-        # Build updated properties, then delete+re-add with rollback on failure
+        # GraphDBInterface has no update_node method, so we must delete+re-add.
+        # Save edges first so they survive the node deletion.
         updated_props = {**node, **fields}
+        edges = await engine.get_edges(entity_id)
         await engine.delete_node(entity_id)
         try:
             await engine.add_node(entity_id, properties=updated_props)
@@ -332,6 +334,10 @@ class CogneeBackend:
             # Restore original node on failure
             await engine.add_node(entity_id, properties=node)
             raise
+        finally:
+            # Restore all edges that were connected to this node
+            for source_id, target_id, rel_name, props in edges:
+                await engine.add_edge(str(source_id), str(target_id), rel_name, props)
 
         return {"status": "ok", "entity_id": entity_id, "updated_fields": list(fields.keys())}
 

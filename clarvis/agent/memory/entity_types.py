@@ -3,8 +3,8 @@
 Passed to ``cognee.cognify(graph_model=...)`` to guide entity classification
 and attribute extraction.
 
-Types with extra fields trigger an LLM call per entity to extract structured
-attributes.  Classification-only types (name only) are free.
+Types with extra fields (beyond name and description) trigger an LLM call per
+entity to extract structured attributes.
 
 All types subclass cognee's ``DataPoint`` so they integrate natively with
 cognee's pipeline, graph storage, and embedding infrastructure.

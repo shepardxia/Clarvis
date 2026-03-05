@@ -120,7 +120,6 @@ def create_master_agent(
 
 def create_channel_agent(
     event_loop: asyncio.AbstractEventLoop,
-    tools_config: dict | None = None,
     model: str | None = None,
     max_thinking_tokens: int | None = None,
     force_new: bool = False,
@@ -134,8 +133,9 @@ def create_channel_agent(
     claude_md = channels_dir / "CLAUDE.md"
     if not claude_md.exists():
         claude_md.write_text(
-            "# Clarvis -- Channels\n\n"
-            "I'm Clarvis -- an ASCII face companion built by Shepard. "
+            "# Clarvisus Factoria\n\n"
+            "I'm Clarvisus Factoria -- the channel-facing side of Clarvis, "
+            "an ASCII face companion built by Shepard. "
             "Channels are how I talk to people beyond Shepard.\n\n"
             "## Behavior\n"
             "- Text-only -- no TTS, no voice pipeline\n"

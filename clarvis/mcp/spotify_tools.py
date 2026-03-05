@@ -229,33 +229,6 @@ def _fmt_devices(result: dict, session) -> str:
     return "\n".join(lines) if lines else "No devices."
 
 
-def _fmt_queue_or_history(result: dict, session) -> str:
-    data = result.get("data")
-    if not data:
-        return "Empty."
-    if not isinstance(data, list):
-        data = [data]
-
-    cap = result.get("limit", 10)
-    lines = []
-    unknown = 0
-
-    for track in data[:cap]:
-        line = _resolve_track(track)
-        if line:
-            lines.append(line)
-        else:
-            unknown += 1
-
-    if unknown:
-        lines.append(f"...and {unknown} untitled tracks")
-    remaining = len(data) - cap
-    if remaining > 0:
-        lines.append(f"...and {remaining} more in queue")
-
-    return "\n".join(lines) if lines else "Empty."
-
-
 def _fmt_recommend(result: dict, session) -> str:
     tracks = _dig(result, "data", "recommendedTracks", default=[])
     if not tracks:

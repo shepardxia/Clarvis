@@ -237,7 +237,6 @@ class WeatherArchetype(Archetype):
 
         # Shape cache
         self._shape_cache: list[Shape] = []
-        self._shape_cells_cache = {}
 
     def _load_physics_params(self) -> None:
         """Load physics parameters from config."""
@@ -265,11 +264,6 @@ class WeatherArchetype(Archetype):
         self.p_shape_idx = np.zeros(n, dtype=np.int64)
         self.p_count = 0
 
-        # Render arrays
-        self._render_px = np.zeros(self.batch_size, dtype=np.int32)
-        self._render_py = np.zeros(self.batch_size, dtype=np.int32)
-        self._render_shape = np.zeros(self.batch_size, dtype=np.int8)
-
     def _grow_arrays(self) -> None:
         """Double array capacity when needed."""
         old_size = len(self.p_x)
@@ -286,10 +280,6 @@ class WeatherArchetype(Archetype):
             new = np.zeros(new_size, dtype=np.int64)
             new[:old_size] = old
             setattr(self, attr, new)
-
-        self._render_px = np.zeros(new_size, dtype=np.int32)
-        self._render_py = np.zeros(new_size, dtype=np.int32)
-        self._render_shape = np.zeros(new_size, dtype=np.int8)
 
     def _on_element_change(self, kind: str, name: str) -> None:
         """Handle element changes."""
@@ -312,7 +302,6 @@ class WeatherArchetype(Archetype):
     def _rebuild_shape_cache(self) -> None:
         """Rebuild shape cache for current weather type."""
         self._shape_cache = []
-        self._shape_cells_cache.clear()
 
         if not self.weather_type:
             self._shape_offsets = None

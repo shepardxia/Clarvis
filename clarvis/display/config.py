@@ -46,6 +46,8 @@ class DisplayConfig(BaseModel):
     avatar_y_offset: int = Field(default=0, description="Avatar vertical offset in grid cells")
     bar_x_offset: int = Field(default=0, description="Progress bar horizontal offset in grid cells")
     bar_y_offset: int = Field(default=0, description="Progress bar vertical offset in grid cells")
+    mic_x_offset: int = Field(default=0, description="Mic icon horizontal offset in grid cells")
+    mic_y_offset: int = Field(default=0, description="Mic icon vertical offset in grid cells")
     fps: int = Field(default=5, description="Target render frames per second")
 
 
@@ -97,9 +99,6 @@ class HindsightConfig(BaseModel):
         default="pg0",
         description="Database URL for Hindsight MemoryEngine (e.g. 'pg0' or full postgres URL).",
     )
-    llm_provider: str = Field(default="anthropic", description="LLM provider for memory extraction.")
-    llm_model: str | None = Field(default=None, description="LLM model name (None = provider default).")
-    llm_api_key: str | None = Field(default=None, description="LLM API key (None = from env).")
     banks: dict[str, DatasetConfig] = Field(
         default_factory=lambda: {
             "parletre": DatasetConfig(
@@ -150,18 +149,29 @@ class DocumentsConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    """Configuration for memory system (Hindsight + Cognee)."""
+    """Configuration for the entire memory system.
+
+    Maintenance pipeline (retain + reflect) settings are top-level.
+    Backend configs (hindsight, cognee, documents) are nested since
+    they each have many backend-specific fields.
+    """
 
     enabled: bool = Field(default=False, description="Enable memory system (Hindsight + Cognee)")
     data_dir: str = Field(default="~/.clarvis/memory", description="Root directory for memory storage")
-    staging_path: str = Field(
-        default="~/.clarvis/memory/staging.json",
-        description="Path to staging store JSON for reflect-then-approve flow.",
+
+    # Reflect: consolidate facts into observations + refresh mental models
+    reflect_fact_threshold: int = Field(
+        default=50,
+        ge=1,
+        description="Minimum unconsolidated facts before reflection triggers.",
     )
-    auto_ingest: bool = Field(default=True, description="Automatically ingest transcripts at session boundaries")
-    staleness_hours: int = Field(
-        default=24, ge=1, description="Hours since last memory write before staleness timer triggers ingestion"
+    reflect_staleness_hours: int = Field(
+        default=24,
+        ge=1,
+        description="Hours since last reflection before a fallback reflect triggers (even below fact threshold).",
     )
+
+    # Backend configs
     hindsight: HindsightConfig = Field(
         default_factory=HindsightConfig,
         description="Hindsight conversational memory backend settings.",
@@ -249,7 +259,6 @@ class WakeupConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable autonomous wakeup prompts")
     pulse_interval_minutes: int = Field(default=45, description="Minutes between regular pulse wakeups")
-    consolidation_threshold: int = Field(default=30, description="Message count before triggering memory consolidation")
     context_sources: list[str] = Field(
         default_factory=lambda: ["time", "weather", "activity", "memory", "music"],
         description="Context sources to include in wakeup prompts",
@@ -310,7 +319,7 @@ class WidgetConfig(BaseModel):
     testing: TestingConfig = Field(default_factory=TestingConfig, description="Development testing overrides")
     voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Voice pipeline and wake word settings")
     music: MusicConfig = Field(default_factory=MusicConfig, description="Music integration (Spotify)")
-    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Dual memory system (Graphiti + memU)")
+    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Dual memory system (Hindsight + Cognee)")
     mcp: McpConfig = Field(default_factory=McpConfig, description="MCP server port assignments")
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig, description="Online channel agent settings")
 

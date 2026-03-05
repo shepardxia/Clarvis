@@ -63,14 +63,11 @@ class Agent:
         self._session_key = session_key
         self._profile = profile
         self._loop = event_loop
-        self._force_new = force_new
 
         # Per-session state
         self._connected = False
         self._lock = asyncio.Lock()
-        self._sending = False
         self._last_session_id: str | None = None
-        self._interrupted = False
 
         # Build backend if not injected
         if backend is not None:
@@ -169,7 +166,6 @@ class Agent:
         async with self._lock:
             if self._connected:
                 self._connected = False
-                self._interrupted = False
                 await self._backend.disconnect()
                 logger.info("Agent disconnected (session=%s)", self._session_key)
 
@@ -198,28 +194,24 @@ class Agent:
         timeouts preserve the conversation so retry can resume.
         Yields None at tool-call boundaries.
         """
-        self._sending = True
+        yielded = False
         try:
-            yielded = False
-            try:
-                async for chunk in self._send_inner(text):
-                    yielded = True
-                    yield chunk
-            except (_sdk().CLIConnectionError, _sdk().ProcessError, asyncio.TimeoutError) as exc:
-                if yielded:
-                    logger.warning("Agent send failed mid-stream for %s (%s), not retrying", self._session_key, exc)
-                    return
-                logger.warning("Agent send failed for %s (%s), reconnecting for retry", self._session_key, exc)
-                # Only wipe session for hard crashes -- keep it for transient errors
-                if isinstance(exc, _sdk().ProcessError):
-                    self._last_session_id = None
-                    self._backend.set_session_id(None)
-                    self._clear_session_id()
-                await self.disconnect()
-                async for chunk in self._send_inner(text):
-                    yield chunk
-        finally:
-            self._sending = False
+            async for chunk in self._send_inner(text):
+                yielded = True
+                yield chunk
+        except (_sdk().CLIConnectionError, _sdk().ProcessError, asyncio.TimeoutError) as exc:
+            if yielded:
+                logger.warning("Agent send failed mid-stream for %s (%s), not retrying", self._session_key, exc)
+                return
+            logger.warning("Agent send failed for %s (%s), reconnecting for retry", self._session_key, exc)
+            # Only wipe session for hard crashes -- keep it for transient errors
+            if isinstance(exc, _sdk().ProcessError):
+                self._last_session_id = None
+                self._backend.set_session_id(None)
+                self._clear_session_id()
+            await self.disconnect()
+            async for chunk in self._send_inner(text):
+                yield chunk
 
     async def _send_inner(self, text: str) -> AsyncGenerator[str | None]:
         """Core send logic -- delegates to backend, syncs session ID back."""
@@ -236,44 +228,3 @@ class Agent:
         """Interrupt the current query."""
         if self._connected:
             await self._backend.interrupt()
-            self._interrupted = True
-
-    async def _drain_stale(self) -> None:
-        """Drain buffered messages left over from a previous interrupted query.
-
-        After interrupt(), the SDK's internal message buffer may retain
-        AssistantMessage/ResultMessage chunks.  Consuming them before the
-        next query() call prevents response desynchronization.
-
-        Uses the backend's ``drain()`` method if available (SDK-specific);
-        otherwise falls back to disconnect + reconnect.
-        """
-        self._interrupted = False
-        if not self._connected:
-            return
-
-        drain_fn = getattr(self._backend, "drain", None)
-        if drain_fn is None:
-            # Backend doesn't support drain -- disconnect forces a clean slate
-            await self.disconnect()
-            return
-
-        drained = 0
-        try:
-            async with asyncio.timeout(3.0):
-                async for _chunk in drain_fn():
-                    drained += 1
-        except TimeoutError:
-            logger.warning("Drain timed out for %s -- disconnecting to reset", self._session_key)
-            await self.disconnect()
-        except Exception:
-            logger.warning("Drain failed for %s -- disconnecting to reset", self._session_key, exc_info=True)
-            await self.disconnect()
-        else:
-            # Sync session ID after drain
-            new_id = self._backend.get_session_id()
-            if new_id and new_id != self._last_session_id:
-                self._last_session_id = new_id
-                self._write_session_id(new_id)
-            if drained:
-                logger.info("Drained %d stale message(s) for %s", drained, self._session_key)

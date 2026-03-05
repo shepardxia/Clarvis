@@ -1,7 +1,14 @@
 """Knowledge graph MCP sub-server — Cognee document knowledge base.
 
-Exposes knowledge tools (search, ingest, entities, facts, update, merge,
-delete, communities) that delegate to the daemon's CogneeBackend.
+Exposes knowledge tools for the Cognee backend (document knowledge graph with
+entities, relationships, and communities). Two backends, clear naming:
+
+- **Hindsight** (memory_tools.py): conversational memory with facts/observations/models.
+  Tools use natural verbs: ``recall``, ``remember``, ``forget``.
+- **Cognee** (this file): document knowledge graph.
+  ``knowledge`` for search; direct verbs for mutations: ``ingest``,
+  ``entities``, ``relations``, ``update_entity``, ``merge_entities``,
+  ``delete_entity``, ``build_communities``.
 
 All tools return natural language strings for agent readability.
 
@@ -9,7 +16,6 @@ IMPORTANT: Do NOT use ``from __future__ import annotations`` in this file.
 It breaks Pydantic's runtime ``Annotated`` resolution for JSON schema generation.
 """
 
-import json
 import logging
 from typing import Annotated
 
@@ -44,16 +50,16 @@ def _fmt_entities(entities: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _fmt_facts(facts: list[dict]) -> str:
+def _fmt_relations(rels: list[dict]) -> str:
     """Format relationship list into numbered lines."""
-    if not facts:
+    if not rels:
         return "No relationships found."
     lines = []
-    for i, f in enumerate(facts, 1):
-        src = str(f.get("source_id", "?"))[:8]
-        tgt = str(f.get("target_id", "?"))[:8]
-        rel = f.get("relationship", "related_to")
-        props = f.get("properties", {})
+    for i, r in enumerate(rels, 1):
+        src = str(r.get("source_id", "?"))[:8]
+        tgt = str(r.get("target_id", "?"))[:8]
+        rel = r.get("relationship", "related_to")
+        props = r.get("properties", {})
         prop_str = ""
         if props:
             prop_str = f" {props}"
@@ -68,14 +74,14 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
         daemon: CentralHubDaemon instance.
         visibility: Access level for tool filtering.
             ``"master"`` gets all tools (search, ingest, graph mutation).
-            ``"all"`` gets ``knowledge_search`` only.
+            ``"all"`` gets ``knowledge`` (search) only.
     """
     server = FastMCP("Knowledge", lifespan=make_lifespan(daemon, visibility=visibility))
 
-    # -- knowledge_search (available to all visibility levels) -------------
+    # -- knowledge (search — available to all visibility levels) --------
 
     @server.tool()
-    async def knowledge_search(
+    async def knowledge(
         query: Annotated[
             str,
             Field(description="Natural language query to search the document knowledge graph."),
@@ -123,6 +129,8 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
         if not results:
             return "No results found."
 
+        import json
+
         lines = []
         for i, r in enumerate(results, 1):
             content = r.get("result", str(r))
@@ -139,12 +147,12 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
 
         return f"Results ({len(results)}):\n" + "\n".join(lines)
 
-    # -- Master-only tools ------------------------------------------------
+    # -- Home-only tools (Clarvis only, not Clarvisus Factoria) -----------
 
     if visibility == "master":
 
         @server.tool()
-        async def knowledge_ingest(
+        async def ingest(
             content_or_path: Annotated[
                 str,
                 Field(
@@ -192,7 +200,7 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
             return f"Ingested into '{ds}' (status: {status}{tag_info})"
 
         @server.tool()
-        async def knowledge_entities(
+        async def entities(
             type_name: Annotated[
                 str | None,
                 Field(
@@ -220,20 +228,20 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
                 return "Error: Knowledge service not available."
 
             try:
-                entities = await backend.list_entities(
+                entity_list = await backend.list_entities(
                     type_name=type_name,
                     name=name,
                 )
             except Exception as exc:
                 return f"Error: {exc}"
 
-            if not entities:
+            if not entity_list:
                 return "No entities found."
 
-            return f"Entities ({len(entities)}):\n{_fmt_entities(entities)}"
+            return f"Entities ({len(entity_list)}):\n{_fmt_entities(entity_list)}"
 
         @server.tool()
-        async def knowledge_facts(
+        async def relations(
             entity_id: Annotated[
                 str | None,
                 Field(description="Filter by entity ID — shows edges connected to this node."),
@@ -244,7 +252,7 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
             ] = None,
             ctx: Context = None,
         ) -> str:
-            """Browse relationships (facts) in the knowledge graph.
+            """Browse relationships in the knowledge graph.
 
             Returns edges connecting entities — each with source, target,
             relationship type, and properties. Use ``entity_id`` to see all
@@ -256,30 +264,29 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
                 return "Error: Knowledge service not available."
 
             try:
-                facts = await backend.list_facts(
+                rels = await backend.list_facts(
                     entity_id=entity_id,
                     relationship_type=relationship_type,
                 )
             except Exception as exc:
                 return f"Error: {exc}"
 
-            if not facts:
+            if not rels:
                 return "No relationships found."
 
-            return f"Relationships ({len(facts)}):\n{_fmt_facts(facts)}"
+            return f"Relationships ({len(rels)}):\n{_fmt_relations(rels)}"
 
         @server.tool()
-        async def knowledge_update(
+        async def update_entity(
             entity_id: Annotated[
                 str,
-                Field(description="ID of the entity to update (from knowledge_entities results)."),
+                Field(description="ID of the entity to update (from entities output)."),
             ],
             fields: Annotated[
-                str,
+                dict,
                 Field(
                     description=(
-                        "JSON object of fields to update (e.g. "
-                        '\'{"name": "New Name", "description": "Updated desc"}\').'
+                        'Properties to update as a dict (e.g. {"name": "New Name", "description": "Updated desc"}).'
                     ),
                 ),
             ],
@@ -287,8 +294,7 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
         ) -> str:
             """Update properties on a knowledge graph entity.
 
-            Pass ``fields`` as a JSON string with the properties to change.
-            Use ``knowledge_entities`` first to find the entity ID.
+            Use ``entities`` first to find the entity ID.
             """
             d = get_daemon(ctx)
             backend = d.cognee_backend
@@ -296,12 +302,7 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
                 return "Error: Knowledge service not available."
 
             try:
-                field_dict = json.loads(fields)
-            except json.JSONDecodeError as exc:
-                return f"Error: Invalid JSON in fields: {exc}"
-
-            try:
-                result = await backend.update_entity(entity_id, field_dict)
+                result = await backend.update_entity(entity_id, fields)
             except Exception as exc:
                 return f"Error: {exc}"
 
@@ -313,12 +314,12 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
             return f"Updated entity {entity_id[:12]}: {', '.join(updated)}"
 
         @server.tool()
-        async def knowledge_merge(
+        async def merge_entities(
             entity_ids: Annotated[
-                str,
+                list[str],
                 Field(
                     description=(
-                        "Comma-separated entity IDs to merge. First ID becomes the survivor — "
+                        "Entity IDs to merge. First ID becomes the survivor — "
                         "all edges from other entities are re-pointed to it, then duplicates deleted."
                     ),
                 ),
@@ -329,19 +330,18 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
 
             The first entity ID in the list survives. All edges from duplicate
             entities are re-pointed to the survivor, then the duplicates are
-            deleted. Use ``knowledge_entities`` to identify duplicates first.
+            deleted. Use ``entities`` to identify duplicates first.
             """
             d = get_daemon(ctx)
             backend = d.cognee_backend
             if backend is None or not backend.ready:
                 return "Error: Knowledge service not available."
 
-            ids = [s.strip() for s in entity_ids.split(",") if s.strip()]
-            if len(ids) < 2:
-                return "Error: Need at least 2 entity IDs to merge (comma-separated)."
+            if len(entity_ids) < 2:
+                return "Error: Need at least 2 entity IDs to merge."
 
             try:
-                result = await backend.merge_entities(ids)
+                result = await backend.merge_entities(entity_ids)
             except Exception as exc:
                 return f"Error: {exc}"
 
@@ -349,12 +349,12 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
             if status == "error":
                 return f"Error: {result.get('reason', 'unknown')}"
 
-            survivor = result.get("survivor_id", ids[0])[:12]
-            merged = result.get("merged_count", len(ids) - 1)
+            survivor = result.get("survivor_id", entity_ids[0])[:12]
+            merged = result.get("merged_count", len(entity_ids) - 1)
             return f"Merged {merged} entities into {survivor}"
 
         @server.tool()
-        async def knowledge_delete(
+        async def delete_entity(
             node_id: Annotated[
                 str,
                 Field(description="ID of the node to delete from the knowledge graph."),
@@ -364,7 +364,7 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
             """Delete a node from the knowledge graph.
 
             Permanently removes the entity and all its edges. Use
-            ``knowledge_entities`` or ``knowledge_facts`` to find the ID first.
+            ``entities`` or ``relations`` to find the ID first.
             """
             d = get_daemon(ctx)
             backend = d.cognee_backend
@@ -379,14 +379,14 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
             return f"Deleted: {result.get('deleted_id', node_id)[:12]}"
 
         @server.tool()
-        async def knowledge_communities(
+        async def build_communities(
             ctx: Context = None,
         ) -> str:
             """Trigger community detection and summary building.
 
             Runs Cognee's memify pass to detect entity communities and
             generate summaries. Use this after significant ingestion to
-            improve ``knowledge_search`` with summary-based results.
+            improve ``knowledge`` search with summary-based results.
             """
             d = get_daemon(ctx)
             backend = d.cognee_backend

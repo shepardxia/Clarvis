@@ -1,6 +1,6 @@
 """Shared context formatting and JSONL transcript helpers.
 
-Used by MCP tools, hook processor, and wakeup manager to avoid
+Used by MCP tools, wakeup manager, and context accumulator to avoid
 duplicating weather/time/location/transcript formatting logic.
 """
 

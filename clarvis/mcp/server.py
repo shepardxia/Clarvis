@@ -186,8 +186,8 @@ async def run_embedded(
 ):
     """Run MCP servers embedded in daemon's event loop.
 
-    Port 7777: standard tools (ping, context, spotify, timers).
-    Port 7778: standard + memory + voice tools (for ~/.clarvis/home/ sessions).
+    Port 7777: standard tools (ping, context, channels).
+    Port 7778: standard + memory + knowledge + voice tools (for ~/.clarvis/home/ sessions).
     Additional channel ports: one per unique tool_config across channels.
 
     Args:

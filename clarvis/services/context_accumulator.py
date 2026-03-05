@@ -99,6 +99,7 @@ class ContextAccumulator:
     """
 
     def __init__(self, ctx: "AppContext", home_slug: str, state_dir: str = "~/.clarvis/staging"):
+        self._ctx = ctx
         self._state_dir = Path(state_dir).expanduser()
         self._state_file = self._state_dir / "state.json"
         self._last_check_in: datetime = datetime.now(timezone.utc)
@@ -175,6 +176,7 @@ class ContextAccumulator:
                     "session_id": ref["session_id"],
                     "project": ref["project_name"],
                     "project_path": ref["project_path"],
+                    "transcript_path": ref["transcript_path"],
                     "timestamp": ref.get("timestamp"),
                     "preview": _extract_preview(ref["transcript_path"]),
                 }

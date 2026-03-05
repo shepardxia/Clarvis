@@ -59,7 +59,7 @@ class ChannelManager:
         self._outbound_hooks: dict[str, OutboundHook] = {}
         self._voice_channel = None
         self._transcript_path = Path.home() / ".clarvis" / "channels" / "transcript.jsonl"
-        self._memory_service = memory_service
+        self._memory_service = memory_service  # HindsightStore instance
         self._session_grounded = False
 
     @property
@@ -238,19 +238,17 @@ class ChannelManager:
 
         # 4. Memory grounding — synthetic first turn on session start
         if not self._session_grounded and self._memory_service:
-            self._session_grounded = True
             try:
-                from .memory_context import build_memory_grounding, read_recent_transcript
+                from clarvis.memory.ground import build_memory_context
 
-                transcript = read_recent_transcript(self._transcript_path)
-                grounding = await build_memory_grounding(
+                grounding = await build_memory_context(
                     self._memory_service,
-                    "agora",
-                    transcript,
+                    "all",
                 )
                 if grounding:
                     logger.info("[dialogue] Injecting memory grounding (%d chars)", len(grounding))
                     await self.send_to_agent(grounding)
+                    self._session_grounded = True
             except Exception:
                 logger.debug("Memory grounding failed", exc_info=True)
 

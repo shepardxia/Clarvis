@@ -105,7 +105,7 @@ class RefreshManager:
         elif "rain" in description or "shower" in description or "drizzle" in description:
             widget_type = "rain"
         elif "thunder" in description:
-            widget_type = "rain"
+            widget_type = "thunderstorm"
         elif "fog" in description:
             widget_type = "fog"
         elif "cloud" in description or "overcast" in description:

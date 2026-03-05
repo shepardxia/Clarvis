@@ -55,6 +55,8 @@ class FrameRenderer:
         avatar_y_offset: int = 0,
         bar_x_offset: int = 0,
         bar_y_offset: int = 0,
+        mic_x_offset: int = 0,
+        mic_y_offset: int = 0,
     ):
         self.width = width
         self.height = height
@@ -64,6 +66,8 @@ class FrameRenderer:
         self.avatar_y_offset = avatar_y_offset
         self.bar_x_offset = bar_x_offset
         self.bar_y_offset = bar_y_offset
+        self.mic_x_offset = mic_x_offset
+        self.mic_y_offset = mic_y_offset
 
         # Element registry
         self.registry = ElementRegistry()
@@ -156,12 +160,13 @@ class FrameRenderer:
         """Return (row, col, width) for the current mic icon style.
 
         Positioned two rows below the progress bar, right-aligned.
+        Offsets shift from that default anchor.
         """
         icons = self.MIC_ICONS.get(self._mic_style, self.MIC_ICONS["bracket"])
         icon = icons["on"]
         icon_w = len(icon)
-        row = self.bar_y + 2
-        col = self.width - icon_w
+        row = self.bar_y + 2 + self.mic_y_offset
+        col = self.width - icon_w + self.mic_x_offset
         return row, col, icon_w
 
     def tick(self):

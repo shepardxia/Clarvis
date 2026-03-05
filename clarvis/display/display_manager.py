@@ -25,7 +25,7 @@ class DisplayManager:
         self.socket_server = socket_server
         self.fps = fps
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._running = False
         self._frozen = False
         self._wake_event = threading.Event()
@@ -112,8 +112,9 @@ class DisplayManager:
     def _loop(self, get_state: Callable[[], tuple[str, float]]) -> None:
         """Display rendering loop.
 
-        All state reads and rendering happen under a single lock acquisition
-        to prevent mid-frame tearing (e.g., stale voice text with new status).
+        tick() acquires the lock separately, then state reads and rendering
+        happen under a second lock acquisition. Uses RLock so callbacks
+        (e.g., testing-mode set_status/set_weather) can re-enter safely.
 
         When frozen, the thread sleeps on an Event with zero CPU cost.
         wake() resumes rendering instantly.

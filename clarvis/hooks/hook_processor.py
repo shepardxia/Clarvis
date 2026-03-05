@@ -45,7 +45,7 @@ class HookProcessor:
         elif event == "UserPromptSubmit":
             status = "thinking"
         elif event == "Stop":
-            status = self._check_special_animation(session_id, raw_data) or "awaiting"
+            status = self._check_special_animation(session_id) or "awaiting"
         elif event == "Notification":
             status = "awaiting"
         elif context_window:
@@ -74,13 +74,13 @@ class HookProcessor:
             "timestamp": datetime.now().isoformat(),
         }
 
-    def _check_special_animation(self, session_id: str, raw_data: dict) -> str | None:
+    def _check_special_animation(self, session_id: str) -> str | None:
         """Check if Stop event should trigger a special animation.
 
         Returns a status string if special animation should play, None otherwise.
 
         Triggers:
-        - eureka: Created something (Write/Edit succeeded), especially after failures
+        - eureka: Created something (Write/Edit succeeded)
         - celebration: Productive session (5+ tools) without creation
         """
         session = self.session_tracker.get(session_id)

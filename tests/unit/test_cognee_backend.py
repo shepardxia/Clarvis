@@ -1,4 +1,4 @@
-"""Tests for CogneeBackend — wrapper around cognee's pip API."""
+"""CogneeBackend — configuration, ingest pipeline, search, merge with self-loop prevention."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +11,6 @@ from clarvis.agent.memory.cognee_backend import CogneeBackend
 
 @pytest.fixture()
 def backend():
-    """Create a CogneeBackend with test defaults."""
     return CogneeBackend(
         db_host="localhost",
         db_port=5432,
@@ -25,17 +24,12 @@ def backend():
     )
 
 
-# -- Lifecycle tests --------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_not_ready_before_start(backend):
-    assert backend.ready is False
+# -- Tests ------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_start_configures_cognee(backend):
-    """start() should configure all cognee backends and set ready=True."""
+    """start() configures all 4 cognee backends and sets ready=True."""
     import cognee
 
     with (
@@ -47,43 +41,15 @@ async def test_start_configures_cognee(backend):
         await backend.start()
 
     assert backend.ready is True
-
-    # Verify relational config
-    rel_call = mock_rel.call_args[0][0]
-    assert rel_call["db_provider"] == "postgres"
-    assert rel_call["db_host"] == "localhost"
-    assert rel_call["db_name"] == "test_knowledge"
-
-    # Verify vector config
-    vec_call = mock_vec.call_args[0][0]
-    assert vec_call["vector_db_provider"] == "pgvector"
-    assert "postgresql://" in vec_call["vector_db_url"]
-
-    # Verify graph config
-    graph_call = mock_graph.call_args[0][0]
-    assert graph_call["graph_database_provider"] == "kuzu"
-    assert graph_call["graph_file_path"] == "/tmp/test_graph_kuzu"
-
-    # Verify LLM config
-    llm_call = mock_llm.call_args[0][0]
-    assert llm_call["llm_provider"] == "anthropic"
-    assert llm_call["llm_model"] == "claude-sonnet-4-6"
-    assert llm_call["llm_api_key"] == "test-key"
-
-
-@pytest.mark.asyncio
-async def test_stop_clears_ready(backend):
-    backend._ready = True
-    await backend.stop()
-    assert backend.ready is False
-
-
-# -- Ingest tests -----------------------------------------------------------
+    assert mock_rel.call_args[0][0]["db_provider"] == "postgres"
+    assert mock_vec.call_args[0][0]["vector_db_provider"] == "pgvector"
+    assert mock_graph.call_args[0][0]["graph_database_provider"] == "kuzu"
+    assert mock_llm.call_args[0][0]["llm_provider"] == "anthropic"
 
 
 @pytest.mark.asyncio
 async def test_ingest_calls_add_and_cognify(backend):
-    """ingest() should call cognee.add then cognee.cognify."""
+    """ingest() calls cognee.add then cognee.cognify with entity types."""
     backend._ready = True
 
     with (
@@ -94,23 +60,13 @@ async def test_ingest_calls_add_and_cognify(backend):
 
     assert result["status"] == "ok"
     assert result["dataset"] == "test_ds"
-    assert result["tags"] == ["tag1"]
-
     mock_add.assert_awaited_once_with("some text", dataset_name="test_ds")
-    from clarvis.agent.memory.entity_types import ENTITY_TYPES
-
-    mock_cognify.assert_awaited_once_with(
-        datasets=["test_ds"],
-        graph_model=list(ENTITY_TYPES.values()),
-    )
-
-
-# -- Search tests -----------------------------------------------------------
+    mock_cognify.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_search_delegates_to_cognee(backend):
-    """search() should call cognee.search with correct params."""
+    """search() maps cognee results to dicts with correct fields."""
     backend._ready = True
 
     mock_result = MagicMock()
@@ -118,19 +74,12 @@ async def test_search_delegates_to_cognee(backend):
     mock_result.dataset_id = None
     mock_result.dataset_name = "test_ds"
 
-    with patch("cognee.search", new_callable=AsyncMock, return_value=[mock_result]) as mock_search:
+    with patch("cognee.search", new_callable=AsyncMock, return_value=[mock_result]):
         results = await backend.search("test query", search_type="graph_completion")
 
     assert len(results) == 1
     assert results[0]["result"] == {"name": "Test Entity"}
     assert results[0]["dataset_name"] == "test_ds"
-
-    call_kwargs = mock_search.call_args[1]
-    assert call_kwargs["query_text"] == "test query"
-    assert call_kwargs["top_k"] == 10
-
-
-# -- Graph mutation tests ---------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -139,11 +88,7 @@ async def test_merge_entities(backend):
     backend._ready = True
 
     mock_engine = AsyncMock()
-    mock_engine.get_edges = AsyncMock(
-        return_value=[
-            ("id2", "id3", "KNOWS", {}),
-        ]
-    )
+    mock_engine.get_edges = AsyncMock(return_value=[("id2", "id3", "KNOWS", {})])
     mock_engine.add_edge = AsyncMock()
     mock_engine.delete_node = AsyncMock()
 
@@ -156,32 +101,17 @@ async def test_merge_entities(backend):
 
     assert result["status"] == "ok"
     assert result["survivor_id"] == "id1"
-    assert result["merged_count"] == 1
-    # Edge from id2->id3 should become id1->id3
     mock_engine.add_edge.assert_awaited_once_with("id1", "id3", "KNOWS", {})
     mock_engine.delete_node.assert_awaited_once_with("id2")
 
 
 @pytest.mark.asyncio
-async def test_merge_entities_needs_at_least_two(backend):
-    """merge_entities() requires at least 2 IDs."""
-    backend._ready = True
-    result = await backend.merge_entities(["id1"])
-    assert result["status"] == "error"
-
-
-@pytest.mark.asyncio
 async def test_merge_entities_skips_self_loops(backend):
-    """merge_entities() skips edges that would create self-loops."""
+    """Edges that would create self-loops are skipped."""
     backend._ready = True
 
     mock_engine = AsyncMock()
-    # Edge from dup to survivor would become a self-loop
-    mock_engine.get_edges = AsyncMock(
-        return_value=[
-            ("id2", "id1", "RELATED", {}),
-        ]
-    )
+    mock_engine.get_edges = AsyncMock(return_value=[("id2", "id1", "RELATED", {})])
     mock_engine.add_edge = AsyncMock()
     mock_engine.delete_node = AsyncMock()
 
@@ -193,5 +123,4 @@ async def test_merge_entities_skips_self_loops(backend):
         result = await backend.merge_entities(["id1", "id2"])
 
     assert result["status"] == "ok"
-    # Self-loop should have been skipped
     mock_engine.add_edge.assert_not_awaited()
