@@ -8,8 +8,8 @@ from .colors import StatusColors
 
 if TYPE_CHECKING:
     from ..core.state import StateStore
-    from .renderer import FrameRenderer
     from .socket_server import WidgetSocketServer
+    from .sprites.scenes import SceneManager
 
 
 class DisplayManager:
@@ -17,11 +17,11 @@ class DisplayManager:
 
     def __init__(
         self,
-        renderer: "FrameRenderer",
+        scene: "SceneManager",
         socket_server: "WidgetSocketServer",
         fps: int = 2,
     ):
-        self.renderer = renderer
+        self.scene = scene
         self.socket_server = socket_server
         self.fps = fps
 
@@ -32,24 +32,33 @@ class DisplayManager:
         self._thread: threading.Thread | None = None
         self._state_store: "StateStore | None" = None
 
+        # Cached state for tick context
+        self._status = "idle"
+        self._weather_type = "clear"
+        self._weather_intensity = 0.0
+        self._wind_speed = 0.0
+
     def push_frame(self, output: dict) -> None:
         """Push frame to socket."""
         self.socket_server.push_frame(output)
 
     def tick(self) -> None:
-        """Advance renderer animation state."""
+        """Advance scene animation state."""
         with self._lock:
-            self.renderer.tick()
+            ctx = self._build_tick_context()
+            self.scene.tick(**ctx)
 
     def set_status(self, status: str) -> None:
-        """Update renderer status."""
+        """Update status for next tick context."""
         with self._lock:
-            self.renderer.set_status(status)
+            self._status = status
 
     def set_weather(self, weather_type: str, intensity: float, wind_speed: float) -> None:
-        """Update renderer weather."""
+        """Update weather for next tick context."""
         with self._lock:
-            self.renderer.set_weather(weather_type, intensity, wind_speed)
+            self._weather_type = weather_type
+            self._weather_intensity = intensity
+            self._wind_speed = wind_speed
 
     def set_fps(self, fps: int) -> None:
         """Update render FPS. Takes effect on the next loop iteration."""
@@ -65,49 +74,48 @@ class DisplayManager:
             self._frozen = False
             self._wake_event.set()
 
-    def _update_voice_text(self) -> None:
-        """Calculate and apply voice text reveal state from state store."""
-        if not self._state_store:
-            return
-        voice_data = self._state_store.get("voice_text")
-        if not voice_data or not voice_data.get("active"):
-            self.renderer.clear_voice_text()
-            return
+    def _build_tick_context(self) -> dict:
+        """Build tick context from state store and cached values."""
+        ctx = {
+            "status": self._status,
+            "context_percent": 0.0,
+            "weather_type": self._weather_type,
+            "weather_intensity": self._weather_intensity,
+            "wind_speed": self._wind_speed,
+        }
 
-        full_text = voice_data.get("full_text", "")
-        tts_started = voice_data.get("tts_started_at", 0)
-        tts_speed = voice_data.get("tts_speed", 150)
-        streaming = voice_data.get("streaming", False)
+        if self._state_store:
+            # Voice text
+            voice_data = self._state_store.get("voice_text")
+            if voice_data and voice_data.get("active"):
+                full_text = voice_data.get("full_text", "")
+                tts_started = voice_data.get("tts_started_at", 0)
+                tts_speed = voice_data.get("tts_speed", 150)
+                streaming = voice_data.get("streaming", False)
 
-        if streaming or tts_started <= 0:
-            # Still streaming from Claude — show all text received so far
-            reveal_chars = len(full_text)
-        else:
-            # TTS in progress — reveal at word boundaries synced with speech
-            elapsed = time.time() - tts_started
-            # Compensate for TTS subprocess startup delay (~250ms)
-            elapsed = max(0, elapsed - 0.25)
-            chars_per_sec = tts_speed * 5.0 / 60.0
-            target_chars = min(int(elapsed * chars_per_sec), len(full_text))
-            # Snap to word boundary to avoid revealing partial words
-            if target_chars < len(full_text):
-                space_idx = full_text.rfind(" ", 0, target_chars + 1)
-                reveal_chars = space_idx + 1 if space_idx > 0 else target_chars
-            else:
-                reveal_chars = len(full_text)
+                if streaming or tts_started <= 0:
+                    reveal_chars = len(full_text)
+                else:
+                    elapsed = time.time() - tts_started
+                    elapsed = max(0, elapsed - 0.25)
+                    chars_per_sec = tts_speed * 5.0 / 60.0
+                    target_chars = min(int(elapsed * chars_per_sec), len(full_text))
+                    if target_chars < len(full_text):
+                        space_idx = full_text.rfind(" ", 0, target_chars + 1)
+                        reveal_chars = space_idx + 1 if space_idx > 0 else target_chars
+                    else:
+                        reveal_chars = len(full_text)
 
-        self.renderer.set_voice_text(full_text, reveal_chars)
+                ctx["voice_text"] = full_text
+                ctx["reveal_chars"] = reveal_chars
 
-    def _update_mic_state(self) -> None:
-        """Read mic state from state store and pass to renderer."""
-        if not self._state_store:
-            return
-        mic = self._state_store.get("mic") or {}
-        self.renderer.set_mic_state(
-            visible=mic.get("visible", False),
-            enabled=mic.get("enabled", False),
-            style=mic.get("style", "bracket"),
-        )
+            # Mic state
+            mic = self._state_store.get("mic") or {}
+            ctx["mic_visible"] = mic.get("visible", False)
+            ctx["mic_enabled"] = mic.get("enabled", False)
+            ctx["mic_style"] = mic.get("style", "bracket")
+
+        return ctx
 
     def _loop(self, get_state: Callable[[], tuple[str, float]]) -> None:
         """Display rendering loop.
@@ -129,13 +137,14 @@ class DisplayManager:
             interval = 1.0 / self.fps
             start = time.time()
 
-            self.tick()
             with self._lock:
-                self._update_voice_text()
-                self._update_mic_state()
                 status, context_percent = get_state()
+                self._status = status
+                ctx = self._build_tick_context()
+                ctx["context_percent"] = context_percent
+                self.scene.tick(**ctx)
                 color_def = StatusColors.get(status)
-                rows, cell_colors = self.renderer.render_grid(context_percent)
+                rows, cell_colors = self.scene.to_grid()
                 output = {
                     "rows": rows,
                     "cell_colors": cell_colors,

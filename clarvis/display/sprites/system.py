@@ -248,13 +248,47 @@ class BarSprite(Sprite):
         out_colors[b.y, b.x : b.x2] = self._layer.colors[b.y, b.x : b.x2]
 
 
-def _build_voice_reel(width: int, height: int) -> Reel:
-    """Voice text overlay as a Reel in REVEAL mode."""
+class VoiceReel(Reel):
+    """Voice text overlay. Consumes voice_text/reveal_chars from tick context."""
+
+    def tick(self, **ctx) -> None:
+        voice_text = ctx.get("voice_text")
+        if voice_text is not None:
+            if voice_text != getattr(self, "_last_text", ""):
+                self.set_content(voice_text)
+                self._last_text = voice_text
+            reveal = ctx.get("reveal_chars", len(voice_text))
+            self.set_reveal_position(reveal)
+        elif getattr(self, "_last_text", ""):
+            self.set_content("")
+            self._last_text = ""
+        super().tick(**ctx)
+
+
+class MicControl(Control):
+    """Mic toggle. Consumes mic_visible/mic_enabled from tick context."""
+
+    MIC_COLOR_OFF = 240
+
+    def tick(self, **ctx) -> None:
+        mic_visible = ctx.get("mic_visible")
+        if mic_visible is not None:
+            self.set_visible(mic_visible)
+        mic_enabled = ctx.get("mic_enabled")
+        if mic_enabled is not None:
+            state = "enabled" if mic_enabled else "disabled"
+            self.set_state(state)
+            self.color = 0 if mic_enabled else self.MIC_COLOR_OFF
+        super().tick(**ctx)
+
+
+def _build_voice_reel(width: int, height: int) -> VoiceReel:
+    """Voice text overlay as a VoiceReel in REVEAL mode."""
     text_x_margin = 2
     text_y_start = 1
     text_max_rows = 8
     text_width = width - 2 * text_x_margin
-    return Reel(
+    return VoiceReel(
         x=text_x_margin,
         y=text_y_start,
         width=text_width,
@@ -272,8 +306,8 @@ def _build_mic_control(
     mic_x_offset: int = 0,
     mic_y_offset: int = 0,
     style: str = "bracket",
-) -> Control:
-    """Mic toggle as a Control sprite."""
+) -> MicControl:
+    """Mic toggle as a MicControl sprite."""
     icons = {
         "bracket": {"enabled": "[M]", "disabled": "[\u00b7]"},
         "dot": {"enabled": "\u25c9", "disabled": "\u25cb"},
@@ -282,7 +316,7 @@ def _build_mic_control(
     icon_w = max(len(v) for v in style_icons.values())
     row = bar_y + 2 + mic_y_offset
     col = grid_width - icon_w + mic_x_offset
-    return Control(
+    return MicControl(
         x=col,
         y=row,
         priority=MIC,
