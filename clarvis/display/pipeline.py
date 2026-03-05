@@ -1,9 +1,8 @@
 """
-Layered rendering pipeline with vectorized compositing.
+Layer primitive for rendering into numpy char/color arrays.
 
-Each layer tracks its bounding box as content is rendered.
-During compositing, the entire bounding box region overwrites lower layers,
-making layers fully opaque within their rendered area.
+Provides blit, put, and put_text operations with bounding box tracking.
+Used by archetypes and system sprites as a rendering surface.
 """
 
 from typing import Callable
@@ -12,16 +11,6 @@ import numpy as np
 
 # Space character code - background fill
 SPACE = ord(" ")
-
-
-class LayerPriority:
-    """Named constants for render layer ordering."""
-
-    WEATHER = 0
-    AVATAR = 50
-    BAR = 80
-    MIC = 92
-    TEXT = 95
 
 
 class Layer:
@@ -136,85 +125,3 @@ class Layer:
 
         # Update bbox
         self._expand_bbox_rect(dst_x1, dst_y1, dst_x2 - dst_x1, dst_y2 - dst_y1)
-
-
-class RenderPipeline:
-    """Manages layers and composites them with vectorized operations."""
-
-    def __init__(self, width: int, height: int):
-        self.width = width
-        self.height = height
-        self.layers: dict[str, Layer] = {}
-
-        # Output buffers
-        self.out_chars = np.full((height, width), SPACE, dtype=np.uint32)
-        self.out_colors = np.zeros((height, width), dtype=np.uint8)
-
-    def add_layer(
-        self,
-        name: str,
-        priority: int,
-        render_func: Callable[[Layer], None] | None = None,
-        transparent: bool = False,
-    ) -> Layer:
-        """Create and register a new layer."""
-        layer = Layer(name, priority, self.width, self.height, render_func, transparent)
-        self.layers[name] = layer
-        return layer
-
-    def get_layer(self, name: str) -> Layer | None:
-        """Get a layer by name."""
-        return self.layers.get(name)
-
-    def render(self) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Render all layers and flatten.
-
-        1. Call each layer's render_func (if set)
-        2. Composite layers by priority (low to high)
-        3. Each layer's bounding box region fully overwrites lower layers
-        4. Return (chars, colors) arrays
-        """
-        # Clear output
-        self.out_chars.fill(SPACE)
-        self.out_colors.fill(0)
-
-        # Sort layers by priority
-        sorted_layers = sorted(self.layers.values(), key=lambda layer: layer.priority)
-
-        # Render and composite each layer
-        for layer in sorted_layers:
-            # Call render function if set
-            if layer.render_func:
-                layer.clear()
-                layer.render_func(layer)
-
-            # Composite: bounding box region overwrites lower layers
-            bbox = layer.bbox
-            if bbox is not None:
-                x1, y1, x2, y2 = bbox
-                if layer.transparent:
-                    # Only overwrite non-space characters (weather shows through gaps)
-                    region = layer.chars[y1:y2, x1:x2]
-                    mask = region != SPACE
-                    self.out_chars[y1:y2, x1:x2] = np.where(mask, region, self.out_chars[y1:y2, x1:x2])
-                    self.out_colors[y1:y2, x1:x2] = np.where(
-                        mask, layer.colors[y1:y2, x1:x2], self.out_colors[y1:y2, x1:x2]
-                    )
-                else:
-                    self.out_chars[y1:y2, x1:x2] = layer.chars[y1:y2, x1:x2]
-                    self.out_colors[y1:y2, x1:x2] = layer.colors[y1:y2, x1:x2]
-
-        return self.out_chars, self.out_colors
-
-    def to_grid(self) -> tuple[list[str], list[list[int]]]:
-        """Render and return structured grid data.
-
-        Returns:
-            (rows, cell_colors) where rows is a list of strings (one per row)
-            and cell_colors is a 2D list of ANSI 256 color codes per cell.
-            Color 0 means "use theme/default color".
-        """
-        self.render()
-        rows = [row.tobytes().decode("utf-32-le") for row in self.out_chars]
-        return rows, self.out_colors.tolist()

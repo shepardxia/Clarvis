@@ -1,7 +1,7 @@
 """System sprites: current visual elements expressed through sprite patterns.
 
 FaceCel, WeatherSandbox, CelestialCel, BarSprite, and build_default_scene()
-replicate FrameRenderer's visual output using the sprite/pattern system.
+produce the standard Clarvis visual output using the sprite/pattern system.
 """
 
 from datetime import datetime
@@ -19,7 +19,7 @@ from .core import BBox, Sprite
 from .reel import Reel, ReelMode
 from .scenes import SceneManager
 
-# Priority constants matching old LayerPriority
+# Priority constants for sprite compositing order
 WEATHER = 0
 CELESTIAL = 1
 AVATAR = 50
@@ -340,13 +340,13 @@ def build_default_scene(
     mic_y_offset: int = 0,
     mic_style: str = "bracket",
 ) -> SceneManager:
-    """Factory that replicates FrameRenderer layout, returning a populated SceneManager."""
+    """Factory that builds the standard Clarvis scene, returning a populated SceneManager."""
     scene = SceneManager(width, height)
 
     registry = ElementRegistry()
     registry.load_all()
 
-    # Layout math from FrameRenderer.__init__
+    # Standard layout math
     avatar_w = FaceArchetype.WIDTH  # 11
     avatar_h = FaceArchetype.HEIGHT  # 5
     bar_gap = 1
