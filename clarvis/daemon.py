@@ -133,8 +133,6 @@ class CentralHubDaemon:
 
         # Memory backends (optional — requires hindsight + cognee)
         self.hindsight_store = None  # HindsightStore (Level 2 interface)
-        self.hindsight_backend = None  # Compat alias — points to hindsight_store
-        self.memory_store = None  # Compat alias — used by mcp/memory_tools.py
         self.cognee_backend = None
         self.document_watcher = None
         if config.memory.enabled:
@@ -146,8 +144,6 @@ class CentralHubDaemon:
                     db_url=h_cfg.db_url,
                     banks={name: {"visibility": dc.visibility} for name, dc in h_cfg.banks.items()},
                 )
-                self.hindsight_backend = self.hindsight_store  # Compat alias for mcp/server.py
-                self.memory_store = self.hindsight_store  # Compat alias for mcp/memory_tools.py
             except ImportError:
                 logger.info("hindsight not installed — conversational memory disabled")
 
@@ -601,8 +597,6 @@ class CentralHubDaemon:
             except Exception:
                 logger.exception("Failed to start HindsightStore")
                 self.hindsight_store = None
-                self.hindsight_backend = None  # Keep compat aliases in sync
-                self.memory_store = None
 
         if self.cognee_backend is not None:
             try:

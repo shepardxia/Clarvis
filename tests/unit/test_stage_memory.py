@@ -7,7 +7,7 @@ import pytest
 import pytest_asyncio
 from fastmcp import Client
 
-from clarvis.mcp.server import STANDARD_TOOLS, create_app
+from clarvis.mcp.server import create_app
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def daemon(staging_dir):
 
 @pytest_asyncio.fixture
 async def client(daemon):
-    app = create_app(daemon, STANDARD_TOOLS)
+    app = create_app(daemon)
     async with Client(app) as c:
         yield c
 
@@ -53,7 +53,7 @@ class TestStageMemory:
         queue_file = staging_dir / "remember_queue.json"
         queue_file.write_text(json.dumps([{"summary": "first", "timestamp": "t1"}]))
 
-        app = create_app(daemon, STANDARD_TOOLS)
+        app = create_app(daemon)
         async with Client(app) as c:
             await c.call_tool("stage_memory", {"summary": "second"})
 

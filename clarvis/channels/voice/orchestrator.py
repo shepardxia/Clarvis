@@ -167,7 +167,7 @@ class VoiceCommandOrchestrator:
             bus.on("wake_word:audio_lost", self._on_audio_lost)
 
     def _on_prompt_reply(self, signal: str, **kw) -> None:
-        """Signal callback: prompt_response MCP tool was invoked."""
+        """Signal callback: prompt_response command was invoked."""
         self._prompt_reply_pending = True
 
     def _on_wake_word(self, signal: str, **kw) -> None:

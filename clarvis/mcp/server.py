@@ -15,7 +15,7 @@ from pydantic import Field
 
 from ..core.context_helpers import build_ambient_context, now_playing_summary
 
-# --- Lifespan helpers (inlined from deleted _helpers.py) ---
+# --- Lifespan helpers ---
 
 
 def get_daemon(ctx):
@@ -110,21 +110,10 @@ _TOOLS = [
     stage_memory,
 ]
 
-# --- Per-port tool config (only standard remains) ---
-
-STANDARD_TOOLS = {
-    "spotify": False,
-    "timers": False,
-    "channels": True,
-    "prompt_response": False,
-    "memory": False,
-}
-
-
 # --- App factory ---
 
 
-def create_app(daemon, tool_config=None):
+def create_app(daemon):
     """Create the Clarvis MCP server (standard tools only)."""
     app = FastMCP("clarvis", lifespan=make_lifespan(daemon))
     for fn in _TOOLS:
@@ -149,7 +138,7 @@ async def run_embedded(
 
     import uvicorn
 
-    app = create_app(daemon, tool_config=STANDARD_TOOLS)
+    app = create_app(daemon)
     asgi = app.http_app(transport="streamable-http")
 
     config = uvicorn.Config(asgi, host=host, port=port, log_level="warning")

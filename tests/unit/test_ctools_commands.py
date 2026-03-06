@@ -57,14 +57,14 @@ def mock_store():
 def mock_cognee():
     backend = MagicMock()
     backend.ready = True
-    backend.search = AsyncMock(return_value=[{"result": "test"}])
-    backend.ingest = AsyncMock(return_value={"status": "ok"})
-    backend.list_entities = AsyncMock(return_value=[])
-    backend.list_facts = AsyncMock(return_value=[])
-    backend.update_entity = AsyncMock(return_value={"status": "ok", "updated_fields": ["name"]})
-    backend.merge_entities = AsyncMock(return_value={"status": "ok", "merged_count": 1})
-    backend.delete = AsyncMock(return_value={"deleted_id": "x"})
-    backend.build_communities = AsyncMock(return_value={"status": "ok"})
+    backend.search = AsyncMock(return_value="Results (1):\n  1. test result")
+    backend.ingest = AsyncMock(return_value="Ingested into 'knowledge' (status: ok)")
+    backend.list_entities = AsyncMock(return_value="No entities found.")
+    backend.list_facts = AsyncMock(return_value="No relationships found.")
+    backend.update_entity = AsyncMock(return_value="Updated entity abcdef123456: name")
+    backend.merge_entities = AsyncMock(return_value="Merged 1 entities into abcdef123456")
+    backend.delete = AsyncMock(return_value="Deleted: abcdef123456")
+    backend.build_communities = AsyncMock(return_value="Community summaries built (status: ok)")
     return backend
 
 
@@ -241,9 +241,10 @@ class TestKnowledge:
         assert "Ingested" in result
         assert "status: ok" in result
 
-    def test_merge_entities_requires_two(self, handlers):
+    def test_merge_entities_requires_two(self, handlers, mock_cognee):
+        mock_cognee.merge_entities = AsyncMock(return_value="Error: need at least 2 entity IDs to merge")
         result = handlers.merge_entities(entity_ids=["e1"])
-        assert "error" in result
+        assert "Error" in result
 
     def test_knowledge_when_no_backend(self, loop):
         h = _make_handlers(loop)
@@ -258,7 +259,7 @@ class TestSpotifyCommand:
     @pytest.fixture
     def spotify_handlers(self, loop):
         mock_session = MagicMock()
-        mock_session.run = MagicMock(return_value={"status": "playing", "track": "jazz"})
+        mock_session.run = MagicMock(return_value="Now playing: jazz")
         h = _make_handlers(loop, spotify_session=lambda: mock_session)
         return h, mock_session
 

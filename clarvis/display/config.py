@@ -240,7 +240,7 @@ class ClarvisAgentConfig(BaseModel):
     idle_timeout: float = Field(default=3600.0, description="Seconds before Clarvis agent disconnects")
     tools: dict[str, Any] = Field(
         default_factory=dict,
-        description="MCP tool overrides (merged on top of STANDARD_TOOLS/CLARVIS_TOOLS defaults)",
+        description="Tool overrides for Clarvis agent",
     )
 
 
@@ -301,7 +301,7 @@ class ChannelsConfig(BaseModel):
     )
     tools: dict[str, Any] = Field(
         default_factory=dict,
-        description="MCP tool overrides for Factoria port (overrides FACTORIA_DEFAULTS, merged with per-channel tools)",
+        description="Tool overrides for Factoria agent",
     )
     pi: PiConfig = Field(default_factory=PiConfig, description="Pi agent core bridge settings")
     wakeup: WakeupConfig = Field(default_factory=WakeupConfig, description="Autonomous wakeup prompt settings")

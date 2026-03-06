@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from .context import AppContext
 
 from ..display.refresh_manager import RefreshManager
-from ..formatters.knowledge import fmt_entities, fmt_relations, fmt_search_results
 from ..formatters.memory import (
     fmt_bank_profile,
     fmt_bank_stats,
@@ -21,7 +20,6 @@ from ..formatters.memory import (
     fmt_observations,
     fmt_stale_models,
 )
-from ..formatters.spotify import format_result as format_spotify_result
 from ..services.session_tracker import SessionTracker
 from .ipc import DaemonServer
 
@@ -735,73 +733,31 @@ class CommandHandlers:
         self, *, query: str, search_type: str = "graph_completion", datasets: str | None = None, **kw
     ) -> str | dict:
         ds_list = [s.strip() for s in datasets.split(",")] if datasets else None
-        result = self._cognee_op(lambda b: b.search(query, search_type=search_type, datasets=ds_list))
-        if isinstance(result, dict) and "error" in result:
-            return result
-        if not result:
-            return "No results found."
-        return fmt_search_results(result)
+        return self._cognee_op(lambda b: b.search(query, search_type=search_type, datasets=ds_list, format=True))
 
     def ingest(self, *, content_or_path: str, dataset: str = "knowledge", tags: str | None = None, **kw) -> str | dict:
         tag_list = [t.strip() for t in tags.split(",")] if tags else None
-        result = self._cognee_op(lambda b: b.ingest(content_or_path, dataset=dataset, tags=tag_list))
-        if isinstance(result, dict) and "error" in result:
-            return result
-        status = result.get("status", "unknown")
-        ds = result.get("dataset", dataset)
-        tag_info = f", tags: {result.get('tags', [])}" if result.get("tags") else ""
-        return f"Ingested into '{ds}' (status: {status}{tag_info})"
+        return self._cognee_op(lambda b: b.ingest(content_or_path, dataset=dataset, tags=tag_list, format=True))
 
     def entities(self, *, type_name: str | None = None, name: str | None = None, **kw) -> str | dict:
-        result = self._cognee_op(lambda b: b.list_entities(type_name=type_name, name=name))
-        if isinstance(result, dict) and "error" in result:
-            return result
-        if not result:
-            return "No entities found."
-        return f"Entities ({len(result)}):\n{fmt_entities(result)}"
+        return self._cognee_op(lambda b: b.list_entities(type_name=type_name, name=name, format=True))
 
     def relations(self, *, entity_id: str | None = None, relationship_type: str | None = None, **kw) -> str | dict:
-        result = self._cognee_op(lambda b: b.list_facts(entity_id=entity_id, relationship_type=relationship_type))
-        if isinstance(result, dict) and "error" in result:
-            return result
-        if not result:
-            return "No relationships found."
-        return f"Relationships ({len(result)}):\n{fmt_relations(result)}"
+        return self._cognee_op(
+            lambda b: b.list_facts(entity_id=entity_id, relationship_type=relationship_type, format=True)
+        )
 
     def update_entity(self, *, entity_id: str, fields: dict, **kw) -> str | dict:
-        result = self._cognee_op(lambda b: b.update_entity(entity_id, fields))
-        if isinstance(result, dict) and "error" in result:
-            return result
-        status = result.get("status", "unknown")
-        if status == "error":
-            return f"Error: {result.get('reason', 'unknown')}"
-        updated = result.get("updated_fields", [])
-        return f"Updated entity {entity_id[:12]}: {', '.join(updated)}"
+        return self._cognee_op(lambda b: b.update_entity(entity_id, fields, format=True))
 
     def merge_entities(self, *, entity_ids: list[str], **kw) -> str | dict:
-        if len(entity_ids) < 2:
-            return {"error": "Need at least 2 entity IDs to merge"}
-        result = self._cognee_op(lambda b: b.merge_entities(entity_ids))
-        if isinstance(result, dict) and "error" in result:
-            return result
-        status = result.get("status", "unknown")
-        if status == "error":
-            return f"Error: {result.get('reason', 'unknown')}"
-        survivor = result.get("survivor_id", entity_ids[0])[:12]
-        merged = result.get("merged_count", len(entity_ids) - 1)
-        return f"Merged {merged} entities into {survivor}"
+        return self._cognee_op(lambda b: b.merge_entities(entity_ids, format=True))
 
     def delete_entity(self, *, node_id: str, **kw) -> str | dict:
-        result = self._cognee_op(lambda b: b.delete(node_id))
-        if isinstance(result, dict) and "error" in result:
-            return result
-        return f"Deleted: {result.get('deleted_id', node_id)[:12]}"
+        return self._cognee_op(lambda b: b.delete(node_id, format=True))
 
     def build_communities(self, **kw) -> str | dict:
-        result = self._cognee_op(lambda b: b.build_communities())
-        if isinstance(result, dict) and "error" in result:
-            return result
-        return f"Community summaries built (status: {result.get('status', 'ok')})"
+        return self._cognee_op(lambda b: b.build_communities(format=True))
 
     # --- Channels ---
 
@@ -888,10 +844,9 @@ class CommandHandlers:
         if session is None:
             return {"error": "Spotify not available"}
         try:
-            result = session.run(command)
+            return session.run(command)
         except Exception as e:
             return {"error": str(e)}
-        return format_spotify_result(result, session)
 
     # --- Timers ---
 

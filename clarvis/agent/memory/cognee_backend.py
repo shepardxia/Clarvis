@@ -5,6 +5,7 @@ construction, and graph queries.  Configures cognee with PostgreSQL (relational
 + vector via pgvector) and kuzu (embedded graph) backends.
 """
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -15,6 +16,66 @@ from cognee.api.v1.search import SearchType
 from .entity_types import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
+
+
+# ── Formatting helpers ─────────────────────────────────────────
+
+
+def _fmt_entities(entities: list[dict]) -> str:
+    """Format entity list into numbered lines."""
+    if not entities:
+        return "No entities found."
+    lines = []
+    for i, e in enumerate(entities, 1):
+        eid = str(e.get("id", "?"))[:12]
+        name = e.get("name", "unnamed")
+        etype = e.get("type", "")
+        desc = e.get("description") or ""
+        parts = [f"[{etype}]" if etype else "", name]
+        if desc:
+            preview = desc[:60] + ("..." if len(desc) > 60 else "")
+            parts.append(f"-- {preview}")
+        line = " ".join(p for p in parts if p)
+        lines.append(f"  {i}. [id:{eid}] {line}")
+    return "\n".join(lines)
+
+
+def _fmt_relations(rels: list[dict]) -> str:
+    """Format relationship list into numbered lines."""
+    if not rels:
+        return "No relationships found."
+    lines = []
+    for i, r in enumerate(rels, 1):
+        src = str(r.get("source_id", "?"))[:8]
+        tgt = str(r.get("target_id", "?"))[:8]
+        rel = r.get("relationship", "related_to")
+        props = r.get("properties", {})
+        prop_str = ""
+        if props:
+            prop_str = f" {props}"
+        lines.append(f"  {i}. [{src}] --{rel}--> [{tgt}]{prop_str}")
+    return "\n".join(lines)
+
+
+def _fmt_search_results(results: list[dict]) -> str:
+    """Format knowledge search results into numbered lines."""
+    if not results:
+        return "No results found."
+    lines = []
+    for i, r in enumerate(results, 1):
+        content = r.get("result", str(r))
+        ds_name = r.get("dataset_name", "")
+        if isinstance(content, dict):
+            content = json.dumps(content, default=str, ensure_ascii=False)
+        elif isinstance(content, list):
+            content = "; ".join(str(x) for x in content)
+        suffix = f" [{ds_name}]" if ds_name else ""
+        content = str(content)
+        if len(content) > 300:
+            content = content[:297] + "..."
+        lines.append(f"  {i}.{suffix} {content}")
+    return f"Results ({len(results)}):\n" + "\n".join(lines)
+
 
 # Map user-facing search type strings to cognee SearchType enum values.
 _SEARCH_TYPE_MAP: dict[str, SearchType] = {
@@ -150,7 +211,8 @@ class CogneeBackend:
         *,
         dataset: str = "knowledge",
         tags: list[str] | None = None,
-    ) -> dict[str, Any]:
+        format: bool = False,
+    ) -> dict[str, Any] | str:
         """Ingest content or a file path through the cognee pipeline.
 
         Runs ``cognee.add()`` followed by ``cognee.cognify()`` with our custom
@@ -164,6 +226,8 @@ class CogneeBackend:
             Cognee dataset name to store under.
         tags:
             Optional tags for organization (stored as metadata).
+        format:
+            If True, return a formatted string instead of raw dict.
         """
         import cognee
 
@@ -173,11 +237,15 @@ class CogneeBackend:
             graph_model=list(ENTITY_TYPES.values()),
         )
 
-        return {
+        result = {
             "status": "ok",
             "dataset": dataset,
             "tags": tags or [],
         }
+        if format:
+            tag_info = f", tags: {result['tags']}" if result["tags"] else ""
+            return f"Ingested into '{dataset}' (status: ok{tag_info})"
+        return result
 
     # ── Search ──────────────────────────────────────────────────
 
@@ -188,7 +256,8 @@ class CogneeBackend:
         search_type: str = "graph_completion",
         datasets: list[str] | None = None,
         top_k: int = 10,
-    ) -> list[dict[str, Any]]:
+        format: bool = False,
+    ) -> list[dict[str, Any]] | str:
         """Search the knowledge graph.
 
         Parameters
@@ -203,6 +272,8 @@ class CogneeBackend:
             Optional list of dataset names to scope search.
         top_k:
             Maximum number of results.
+        format:
+            If True, return a formatted string instead of raw dicts.
         """
         import cognee
 
@@ -217,7 +288,7 @@ class CogneeBackend:
 
         results = await cognee.search(**kwargs)
 
-        return [
+        items = [
             {
                 "result": r.search_result,
                 "dataset_id": str(r.dataset_id) if r.dataset_id else None,
@@ -225,6 +296,7 @@ class CogneeBackend:
             }
             for r in results
         ]
+        return _fmt_search_results(items) if format else items
 
     # ── Graph query operations ──────────────────────────────────
 
@@ -233,7 +305,8 @@ class CogneeBackend:
         *,
         type_name: str | None = None,
         name: str | None = None,
-    ) -> list[dict[str, Any]]:
+        format: bool = False,
+    ) -> list[dict[str, Any]] | str:
         """List entities from the knowledge graph.
 
         Parameters
@@ -242,6 +315,8 @@ class CogneeBackend:
             Filter by entity type name (e.g. ``"Person"``).
         name:
             Filter by entity name (substring match).
+        format:
+            If True, return a formatted string instead of raw dicts.
         """
         from cognee.infrastructure.databases.graph import get_graph_engine
 
@@ -257,6 +332,10 @@ class CogneeBackend:
                 continue
             results.append({"id": str(node_id), **props})
 
+        if format:
+            if not results:
+                return "No entities found."
+            return f"Entities ({len(results)}):\n{_fmt_entities(results)}"
         return results
 
     async def list_facts(
@@ -264,7 +343,8 @@ class CogneeBackend:
         *,
         entity_id: str | None = None,
         relationship_type: str | None = None,
-    ) -> list[dict[str, Any]]:
+        format: bool = False,
+    ) -> list[dict[str, Any]] | str:
         """List relationships (facts) from the knowledge graph.
 
         Parameters
@@ -273,6 +353,8 @@ class CogneeBackend:
             If provided, only return edges connected to this node.
         relationship_type:
             If provided, filter by relationship name.
+        format:
+            If True, return a formatted string instead of raw dicts.
         """
         from cognee.infrastructure.databases.graph import get_graph_engine
 
@@ -298,6 +380,10 @@ class CogneeBackend:
                 }
             )
 
+        if format:
+            if not results:
+                return "No relationships found."
+            return f"Relationships ({len(results)}):\n{_fmt_relations(results)}"
         return results
 
     # ── Graph mutation operations ───────────────────────────────
@@ -306,7 +392,9 @@ class CogneeBackend:
         self,
         entity_id: str,
         fields: dict[str, Any],
-    ) -> dict[str, Any]:
+        *,
+        format: bool = False,
+    ) -> dict[str, Any] | str:
         """Update properties on a graph node.
 
         Parameters
@@ -315,13 +403,18 @@ class CogneeBackend:
             The node ID to update.
         fields:
             Dictionary of field names and new values.
+        format:
+            If True, return a formatted string instead of raw dict.
         """
         from cognee.infrastructure.databases.graph import get_graph_engine
 
         engine = await get_graph_engine()
         node = await engine.get_node(entity_id)
         if node is None:
-            return {"status": "error", "reason": f"entity {entity_id} not found"}
+            reason = f"entity {entity_id} not found"
+            if format:
+                return f"Error: {reason}"
+            return {"status": "error", "reason": reason}
 
         # GraphDBInterface has no update_node method, so we must delete+re-add.
         # Save edges first so they survive the node deletion.
@@ -339,12 +432,17 @@ class CogneeBackend:
             for source_id, target_id, rel_name, props in edges:
                 await engine.add_edge(str(source_id), str(target_id), rel_name, props)
 
-        return {"status": "ok", "entity_id": entity_id, "updated_fields": list(fields.keys())}
+        result = {"status": "ok", "entity_id": entity_id, "updated_fields": list(fields.keys())}
+        if format:
+            return f"Updated entity {entity_id[:12]}: {', '.join(result['updated_fields'])}"
+        return result
 
     async def merge_entities(
         self,
         entity_ids: list[str],
-    ) -> dict[str, Any]:
+        *,
+        format: bool = False,
+    ) -> dict[str, Any] | str:
         """Merge multiple entities into one.
 
         The first entity in the list is the survivor.  All edges from other
@@ -355,9 +453,14 @@ class CogneeBackend:
         ----------
         entity_ids:
             List of node IDs to merge.  First becomes the survivor.
+        format:
+            If True, return a formatted string instead of raw dict.
         """
         if len(entity_ids) < 2:
-            return {"status": "error", "reason": "need at least 2 entity IDs to merge"}
+            reason = "need at least 2 entity IDs to merge"
+            if format:
+                return f"Error: {reason}"
+            return {"status": "error", "reason": reason}
 
         from cognee.infrastructure.databases.graph import get_graph_engine
 
@@ -375,32 +478,46 @@ class CogneeBackend:
                 await engine.add_edge(new_source, new_target, rel_name, props)
             await engine.delete_node(dup_id)
 
-        return {
+        result = {
             "status": "ok",
             "survivor_id": survivor_id,
             "merged_count": len(entity_ids) - 1,
         }
+        if format:
+            return f"Merged {result['merged_count']} entities into {survivor_id[:12]}"
+        return result
 
-    async def delete(self, node_id: str) -> dict[str, Any]:
+    async def delete(self, node_id: str, *, format: bool = False) -> dict[str, Any] | str:
         """Delete a node from the knowledge graph.
 
         Parameters
         ----------
         node_id:
             The node ID to delete.
+        format:
+            If True, return a formatted string instead of raw dict.
         """
         from cognee.infrastructure.databases.graph import get_graph_engine
 
         engine = await get_graph_engine()
         await engine.delete_node(node_id)
-        return {"status": "ok", "deleted_id": node_id}
+        result = {"status": "ok", "deleted_id": node_id}
+        if format:
+            return f"Deleted: {node_id[:12]}"
+        return result
 
-    async def build_communities(self) -> dict[str, Any]:
+    async def build_communities(self, *, format: bool = False) -> dict[str, Any] | str:
         """Trigger community detection and summary building via memify.
 
-        Returns a status report.
+        Parameters
+        ----------
+        format:
+            If True, return a formatted string instead of raw dict.
         """
         import cognee
 
         await cognee.memify()
-        return {"status": "ok", "action": "community_summaries_built"}
+        result = {"status": "ok", "action": "community_summaries_built"}
+        if format:
+            return "Community summaries built (status: ok)"
+        return result
