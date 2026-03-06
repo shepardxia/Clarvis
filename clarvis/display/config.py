@@ -273,17 +273,6 @@ class WakeupConfig(BaseModel):
     )
 
 
-# ── MCP server ports ──────────────────────────────────────────────
-
-
-class McpConfig(BaseModel):
-    """MCP server port assignment."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    standard_port: int = Field(default=7777, description="MCP tools for Claude Code (ping, context, stage_memory)")
-
-
 # ── Channels extra ─────────────────────────────────────────────────
 
 
@@ -326,7 +315,6 @@ class WidgetConfig(BaseModel):
     voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Voice I/O pipeline (TTS, ASR, wake word)")
     music: MusicConfig = Field(default_factory=MusicConfig, description="Music integration (Spotify)")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Dual memory system (Hindsight + Cognee)")
-    mcp: McpConfig = Field(default_factory=McpConfig, description="MCP server port assignments")
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig, description="Factoria channel agent settings")
 
     @model_validator(mode="after")

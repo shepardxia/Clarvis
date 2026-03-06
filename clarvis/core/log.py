@@ -22,7 +22,6 @@ _NOISY_LOGGERS = (
     "graphiti_core",
     "nanobuddy.detector",
     "onnxruntime",
-    "uvicorn.access",
 )
 
 _FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

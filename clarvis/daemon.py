@@ -3,7 +3,7 @@
 
 CentralHubDaemon is the orchestration layer that wires together:
 - HookProcessor: translates Claude Code hook events into semantic statuses
-- CommandHandlers: IPC request handlers for MCP server communication
+- CommandHandlers: IPC request handlers for daemon commands
 - DisplayManager: FPS-limited rendering loop
 - RefreshManager: periodic weather/location/time updates
 - Scheduler: unified periodic task runner (replaces scattered polling threads)
@@ -99,7 +99,7 @@ class CentralHubDaemon:
     and background services. Delegates domain logic to focused modules:
 
     - HookProcessor: event classification, staleness, context building
-    - CommandHandlers: IPC request handlers for MCP server
+    - CommandHandlers: IPC request handlers for daemon commands
     - DisplayManager: rendering loop
     - RefreshManager: data refresh (passive, driven by Scheduler)
     - Scheduler: unified periodic tasks (replaces RefreshManager thread,
@@ -179,7 +179,6 @@ class CentralHubDaemon:
                 except ImportError:
                     logger.info("document_watcher deps not available")
         self.ctx: AppContext | None = None
-        self._mcp_task: asyncio.Task | None = None
         self._staleness_handle: asyncio.TimerHandle | None = None
         self.scheduler: Scheduler | None = None
         self.timer_service: TimerService | None = None
@@ -724,10 +723,6 @@ class CentralHubDaemon:
         if self.wake_word_service:
             self.wake_word_service.stop()
 
-        # Stop embedded MCP server
-        if self._mcp_task:
-            self._mcp_task.cancel()
-
         # Stop memory backends
         if self.document_watcher is not None:
             try:
@@ -758,13 +753,12 @@ class CentralHubDaemon:
 
     async def complete_reflect(self) -> dict:
         """Finalize reflect: advance watermarks, clear queue, reset agents."""
-        from .core.persistence import json_save_atomic
-
         if self._session_reader:
             self._session_reader.advance_all()
-        queue_file = self.staging_dir / "remember_queue.json"
-        if queue_file.exists():
-            json_save_atomic(queue_file, [])
+        remember_dir = self.staging_dir / "remember"
+        if remember_dir.is_dir():
+            for f in remember_dir.glob("*.md"):
+                f.unlink()
         await self.reset_all_agents()
         return {"status": "reflect complete"}
 
@@ -823,43 +817,7 @@ class CentralHubDaemon:
         # Start channel manager (chat channels, gated behind channels extra)
         await self._init_channel_manager()
 
-        # Start embedded MCP server — must be listening BEFORE eager-connect,
-        # otherwise CLI subprocesses hang trying to reach their MCP port.
-        from .mcp.server import run_embedded
-
-        mcp_ready = asyncio.Event()
-        mcp_error: list[BaseException] = []
-
-        def _on_mcp_done(task: asyncio.Task) -> None:
-            exc = task.exception() if not task.cancelled() else None
-            if exc is not None:
-                logger.error("MCP server task crashed: %s: %s", type(exc).__name__, exc)
-                mcp_error.append(exc)
-                mcp_ready.set()  # unblock the wait
-
-        logger.info("Starting MCP server…")
-        mcp_cfg = self.ctx.config.mcp
-        self._mcp_task = asyncio.create_task(
-            run_embedded(
-                self,
-                port=mcp_cfg.standard_port,
-                ready=mcp_ready,
-            )
-        )
-        self._mcp_task.add_done_callback(_on_mcp_done)
-
-        try:
-            await asyncio.wait_for(mcp_ready.wait(), timeout=10.0)
-        except asyncio.TimeoutError:
-            logger.error("MCP server failed to bind within 10s — check for port conflicts")
-            raise RuntimeError("MCP server startup timed out")
-
-        if mcp_error:
-            raise RuntimeError(f"MCP server failed to start: {mcp_error[0]}")
-
-        logger.info("MCP server ready on :%d", mcp_cfg.standard_port)
-
-        # Eager-connect agents — MCP servers are listening, CLI won't hang
+        # Eager-connect agents
         if self._agents:
             agent_names = list(self._agents.keys())
             logger.info("Connecting agents: %s", ", ".join(agent_names))

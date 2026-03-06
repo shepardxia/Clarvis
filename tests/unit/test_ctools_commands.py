@@ -351,11 +351,6 @@ class TestChannels:
 
 
 class TestCoreTools:
-    def test_stage_memory(self, handlers, tmp_path, monkeypatch):
-        monkeypatch.setattr("clarvis.core.command_handlers._STAGING_DIR", tmp_path)
-        result = handlers.stage_memory(summary="test session summary")
-        assert result["queued"] == 1
-
     def test_prompt_response(self, handlers):
         result = handlers.prompt_response()
         assert result["status"] == "listening"

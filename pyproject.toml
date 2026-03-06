@@ -1,12 +1,11 @@
 [project]
 name = "clarvis"
 version = "0.1.0"
-description = "Clarvis MCP server for widget data (weather, status, thinking feed, music control)"
+description = "Clarvis — macOS desktop companion with animated ASCII avatar"
 requires-python = ">=3.13"
 readme = "README.md"
 license = { text = "MIT" }
 dependencies = [
-    "fastmcp>=2.14,<3",
     "httpx",
     "filelock",
     "cachetools",
