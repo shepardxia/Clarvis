@@ -223,7 +223,7 @@ uv run ruff check . && uv run ruff format .  # Lint + format
 
 - Thinking feed adapted from [watch-claude-think](https://github.com/bporterfield/watch-claude-think) by [@bporterfield](https://github.com/bporterfield)
 - Spotify Connect client via [SpotAPI](https://github.com/Aran404/SpotAPI) by [@Aran404](https://github.com/Aran404)
-- Wake word engine built on [nanowakeword](https://github.com/kahrendt/nanowakeword) by [@kahrendt](https://github.com/kahrendt) and [hey-buddy](https://github.com/painebenjamin/hey-buddy) by [@painebenjamin](https://github.com/painebenjamin)
+- Wake word engine built on [nanowakeword](https://github.com/arcosoph/nanowakeword) by [@arcosoph](https://github.com/arcosoph) and [hey-buddy](https://github.com/painebenjamin/hey-buddy) by [@painebenjamin](https://github.com/painebenjamin)
 
 ## License
 

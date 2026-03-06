@@ -7,150 +7,89 @@ import pytest
 
 from clarvis.agent.memory.document_watcher import DocumentWatcher
 
-# -- Fixtures ---------------------------------------------------------------
-
-
-@pytest.fixture()
-def watch_dir(tmp_path: Path) -> Path:
-    d = tmp_path / "documents"
-    d.mkdir()
-    return d
-
-
-@pytest.fixture()
-def hash_store(tmp_path: Path) -> Path:
-    return tmp_path / "doc_hashes.json"
-
-
-@pytest.fixture()
-def mock_backend():
-    backend = AsyncMock()
-    backend.ingest = AsyncMock(return_value={"status": "ok", "dataset": "documents"})
-    return backend
-
-
-@pytest.fixture()
-def watcher(watch_dir, mock_backend, hash_store):
-    return DocumentWatcher(
-        watch_dir=watch_dir,
-        cognee_backend=mock_backend,
-        hash_store_path=hash_store,
-        poll_interval=60,
-    )
-
-
-# -- Scan: new files -------------------------------------------------------
+# -- Tests ------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_scan_ingests_new_file(watcher, watch_dir, mock_backend):
-    """scan() should ingest a newly created file."""
+async def test_document_scan_lifecycle(tmp_path: Path):
+    """New file → unchanged skip → modified re-ingest → hash persists across instances."""
+    watch_dir = tmp_path / "documents"
+    watch_dir.mkdir()
+    hash_store = tmp_path / "doc_hashes.json"
+    backend = AsyncMock()
+    backend.ingest = AsyncMock(return_value={"status": "ok", "dataset": "documents"})
+    watcher = DocumentWatcher(watch_dir=watch_dir, cognee_backend=backend, hash_store_path=hash_store, poll_interval=60)
+
+    # first scan ingests new file
     (watch_dir / "notes.md").write_text("some notes")
     results = await watcher.scan()
-
     assert len(results) == 1
     assert results[0]["status"] == "ok"
     assert results[0]["file"] == "notes.md"
-    mock_backend.ingest.assert_awaited_once()
+    backend.ingest.assert_awaited_once()
 
-
-# -- Scan: unchanged files skipped -----------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_scan_skips_unchanged_file(watcher, watch_dir, mock_backend):
-    """scan() should skip files that haven't changed since last scan."""
-    (watch_dir / "stable.txt").write_text("content")
-
-    # First scan: should ingest
-    results1 = await watcher.scan()
-    assert len(results1) == 1
-
-    mock_backend.ingest.reset_mock()
-
-    # Second scan: same content, should skip
-    results2 = await watcher.scan()
-    assert len(results2) == 0
-    mock_backend.ingest.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_scan_detects_changed_file(watcher, watch_dir, mock_backend):
-    """scan() re-ingests a file when its content changes."""
-    f = watch_dir / "evolving.txt"
-    f.write_text("version 1")
-
-    await watcher.scan()
-    mock_backend.ingest.reset_mock()
-
-    f.write_text("version 2")
+    # rescan unchanged file — skipped
+    backend.ingest.reset_mock()
     results = await watcher.scan()
+    assert len(results) == 0
+    backend.ingest.assert_not_awaited()
 
+    # modify file — re-ingested
+    (watch_dir / "notes.md").write_text("updated notes")
+    results = await watcher.scan()
     assert len(results) == 1
-    assert results[0]["file"] == "evolving.txt"
-    mock_backend.ingest.assert_awaited_once()
+    assert results[0]["file"] == "notes.md"
+    backend.ingest.assert_awaited_once()
 
-
-# -- Scan: subdirectories --------------------------------------------------
+    # hash state persists across instances
+    backend.ingest.reset_mock()
+    (watch_dir / "stable.txt").write_text("content")
+    w2_backend = AsyncMock()
+    w2_backend.ingest = AsyncMock(return_value={"status": "ok", "dataset": "documents"})
+    w2 = DocumentWatcher(watch_dir=watch_dir, cognee_backend=w2_backend, hash_store_path=hash_store, poll_interval=60)
+    results = await w2.scan()
+    # only stable.txt is new; notes.md hash persisted from previous instance
+    assert len(results) == 1
+    assert results[0]["file"] == "stable.txt"
 
 
 @pytest.mark.asyncio
-async def test_scan_handles_subdirectories(watcher, watch_dir, mock_backend):
-    """scan() recurses into subdirectories."""
+async def test_document_scan_structure(tmp_path: Path):
+    """Recursive scanning into subdirectories and dotfile exclusion."""
+    watch_dir = tmp_path / "documents"
+    watch_dir.mkdir()
+    hash_store = tmp_path / "doc_hashes.json"
+    backend = AsyncMock()
+    backend.ingest = AsyncMock(side_effect=lambda *a, **kw: {"status": "ok", "dataset": "documents"})
+    watcher = DocumentWatcher(watch_dir=watch_dir, cognee_backend=backend, hash_store_path=hash_store, poll_interval=60)
+
+    # subdirectories are recursed
     sub = watch_dir / "subdir"
     sub.mkdir()
     (sub / "nested.txt").write_text("nested content")
 
-    results = await watcher.scan()
-    assert len(results) == 1
-    assert "subdir/nested.txt" in results[0]["file"]
-
-
-# -- Scan: hidden files skipped --------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_scan_skips_hidden_files(watcher, watch_dir, mock_backend):
-    """scan() skips hidden files (dotfiles)."""
+    # hidden files skipped
     (watch_dir / ".hidden").write_text("secret")
     (watch_dir / "visible.txt").write_text("public")
 
     results = await watcher.scan()
-    assert len(results) == 1
-    assert results[0]["file"] == "visible.txt"
-
-
-# -- Hash persistence -------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_hash_state_persists_across_instances(watch_dir, mock_backend, hash_store):
-    """Hash state is persisted and loaded by new instances."""
-    (watch_dir / "doc.txt").write_text("content")
-
-    # First instance scans
-    w1 = DocumentWatcher(watch_dir, mock_backend, hash_store)
-    await w1.scan()
-    assert mock_backend.ingest.await_count == 1
-
-    mock_backend.ingest.reset_mock()
-
-    # New instance with same hash store — should skip
-    w2 = DocumentWatcher(watch_dir, mock_backend, hash_store)
-    results = await w2.scan()
-    assert len(results) == 0
-    mock_backend.ingest.assert_not_awaited()
-
-
-# -- Ingest failure handling ------------------------------------------------
+    assert len(results) == 2
+    result_files = [r["file"] for r in results]
+    assert any("visible.txt" in f for f in result_files)
+    assert any("nested.txt" in f for f in result_files)
+    # .hidden not ingested
+    assert not any(".hidden" in f for f in result_files)
 
 
 @pytest.mark.asyncio
-async def test_scan_continues_on_ingest_failure(watcher, watch_dir, mock_backend):
-    """scan() should not crash if one file fails to ingest."""
-    (watch_dir / "good.txt").write_text("good")
-    (watch_dir / "bad.txt").write_text("bad")
+async def test_document_scan_error_resilience(tmp_path: Path):
+    """Failure isolation and hash rollback on ingest error."""
+    watch_dir = tmp_path / "documents"
+    watch_dir.mkdir()
+    hash_store = tmp_path / "doc_hashes.json"
 
+    # scan continues when one file fails
+    backend = AsyncMock()
     call_count = 0
 
     async def flaky_ingest(path, **kwargs):
@@ -160,25 +99,24 @@ async def test_scan_continues_on_ingest_failure(watcher, watch_dir, mock_backend
             raise RuntimeError("ingest failed")
         return {"status": "ok", "dataset": "documents"}
 
-    mock_backend.ingest = flaky_ingest
+    backend.ingest = flaky_ingest
+    watcher = DocumentWatcher(watch_dir=watch_dir, cognee_backend=backend, hash_store_path=hash_store, poll_interval=60)
+
+    (watch_dir / "good.txt").write_text("good")
+    (watch_dir / "bad.txt").write_text("bad")
 
     results = await watcher.scan()
-    # Only the successful one should be in results
     assert len(results) == 1
     assert results[0]["file"] == "good.txt"
-    assert call_count == 2  # both were attempted
+    assert call_count == 2  # both attempted
 
-
-@pytest.mark.asyncio
-async def test_failed_ingest_does_not_update_hash(watcher, watch_dir):
-    """If ingest fails, the hash should NOT be stored (so retry is possible)."""
+    # failed ingest does not update hash — retry is possible
+    backend2 = AsyncMock()
+    backend2.ingest = AsyncMock(side_effect=RuntimeError("boom"))
+    watcher2 = DocumentWatcher(
+        watch_dir=watch_dir, cognee_backend=backend2, hash_store_path=hash_store, poll_interval=60
+    )
     (watch_dir / "retry.txt").write_text("content")
 
-    backend = AsyncMock()
-    backend.ingest = AsyncMock(side_effect=RuntimeError("boom"))
-    watcher._backend = backend
-
-    await watcher.scan()
-
-    # Hash should not be stored since ingest failed
-    assert "retry.txt" not in watcher._hashes
+    await watcher2.scan()
+    assert "retry.txt" not in watcher2._hashes

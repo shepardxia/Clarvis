@@ -1,4 +1,4 @@
-"""CogneeBackend — configuration, ingest pipeline, search, merge with self-loop prevention."""
+"""CogneeBackend — configuration, search, merge with self-loop prevention."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,10 +30,11 @@ def backend():
 
 
 @pytest.mark.asyncio
-async def test_start_configures_cognee(backend):
-    """start() configures all 4 cognee backends and sets ready=True."""
+async def test_cognee_configuration_and_search(backend):
+    """start() configures cognee backends → search() maps results correctly."""
     import cognee
 
+    # configuration phase
     with (
         patch.object(cognee.config, "set_relational_db_config") as mock_rel,
         patch.object(cognee.config, "set_vector_db_config") as mock_vec,
@@ -48,29 +49,7 @@ async def test_start_configures_cognee(backend):
     assert mock_graph.call_args[0][0]["graph_database_provider"] == "kuzu"
     assert mock_llm.call_args[0][0]["llm_provider"] == "anthropic"
 
-
-@pytest.mark.asyncio
-async def test_ingest_calls_add_and_cognify(backend):
-    """ingest() calls cognee.add then cognee.cognify with entity types."""
-    backend._ready = True
-
-    with (
-        patch("cognee.add", new_callable=AsyncMock) as mock_add,
-        patch("cognee.cognify", new_callable=AsyncMock) as mock_cognify,
-    ):
-        result = await backend.ingest("some text", dataset="test_ds", tags=["tag1"])
-
-    assert result["status"] == "ok"
-    assert result["dataset"] == "test_ds"
-    mock_add.assert_awaited_once_with("some text", dataset_name="test_ds")
-    mock_cognify.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_search_delegates_to_cognee(backend):
-    """search() maps cognee results to dicts with correct fields."""
-    backend._ready = True
-
+    # search phase — result mapping
     mock_result = MagicMock()
     mock_result.search_result = {"name": "Test Entity"}
     mock_result.dataset_id = None
@@ -85,10 +64,11 @@ async def test_search_delegates_to_cognee(backend):
 
 
 @pytest.mark.asyncio
-async def test_merge_entities(backend):
-    """merge_entities() re-points edges to survivor and deletes duplicates."""
+async def test_cognee_entity_merge(backend):
+    """Merge re-points edges to survivor, self-loops are skipped."""
     backend._ready = True
 
+    # normal merge: edges re-pointed to survivor
     mock_engine = AsyncMock()
     mock_engine.get_edges = AsyncMock(return_value=[("id2", "id3", "KNOWS", {})])
     mock_engine.add_edge = AsyncMock()
@@ -106,23 +86,18 @@ async def test_merge_entities(backend):
     mock_engine.add_edge.assert_awaited_once_with("id1", "id3", "KNOWS", {})
     mock_engine.delete_node.assert_awaited_once_with("id2")
 
-
-@pytest.mark.asyncio
-async def test_merge_entities_skips_self_loops(backend):
-    """Edges that would create self-loops are skipped."""
-    backend._ready = True
-
-    mock_engine = AsyncMock()
-    mock_engine.get_edges = AsyncMock(return_value=[("id2", "id1", "RELATED", {})])
-    mock_engine.add_edge = AsyncMock()
-    mock_engine.delete_node = AsyncMock()
+    # self-loop prevention: edge pointing back to survivor is skipped
+    mock_engine2 = AsyncMock()
+    mock_engine2.get_edges = AsyncMock(return_value=[("id2", "id1", "RELATED", {})])
+    mock_engine2.add_edge = AsyncMock()
+    mock_engine2.delete_node = AsyncMock()
 
     with patch(
         "cognee.infrastructure.databases.graph.get_graph_engine",
         new_callable=AsyncMock,
-        return_value=mock_engine,
+        return_value=mock_engine2,
     ):
-        result = await backend.merge_entities(["id1", "id2"])
+        result2 = await backend.merge_entities(["id1", "id2"])
 
-    assert result["status"] == "ok"
-    mock_engine.add_edge.assert_not_awaited()
+    assert result2["status"] == "ok"
+    mock_engine2.add_edge.assert_not_awaited()

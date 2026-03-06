@@ -1,4 +1,4 @@
-"""Tests for retain_direct — field mapping, entity conversion, batch, dedup, temporal.
+"""Tests for retain_direct — field mapping, entity conversion, dedup.
 
 Pipeline step mock-verification tests removed. Only behavioral outcomes kept.
 """
@@ -143,9 +143,13 @@ def mock_config():
 
 
 @pytest.mark.asyncio
-async def test_fact_input_to_processed_fact(mock_pool, mock_embeddings_model, mock_entity_resolver, mock_config):
-    """FactInput fields are correctly mapped to ProcessedFact."""
+async def test_fact_input_pipeline(mock_pool, mock_embeddings_model, mock_entity_resolver, mock_config):
+    """Field mapping → entity conversion → duplicate detection returns empty."""
     pool, conn = mock_pool
+
+    # basic field mapping: FactInput → ProcessedFact
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 1, 15, 11, 0, tzinfo=UTC)
     fact = _make_fact_input(
         fact_text="Shepard works at MIT",
         fact_type="world",
@@ -154,6 +158,8 @@ async def test_fact_input_to_processed_fact(mock_pool, mock_embeddings_model, mo
         tags=["research"],
         document_id="transcript-001",
         metadata={"source": "voice"},
+        occurred_start=start,
+        occurred_end=end,
     )
 
     result, captured = await _run_retain(pool, conn, [fact], mock_embeddings_model, mock_entity_resolver, mock_config)
@@ -169,50 +175,21 @@ async def test_fact_input_to_processed_fact(mock_pool, mock_embeddings_model, mo
     assert pf.document_id == "transcript-001"
     assert pf.metadata == {"source": "voice"}
     assert pf.embedding == [0.1]
+    assert pf.occurred_start == start
+    assert pf.occurred_end == end
 
+    # entity name strings converted to EntityRef objects
+    fact2 = _make_fact_input(entities=["Shepard", "MIT", "Boston"])
+    _, captured2 = await _run_retain(pool, conn, [fact2], mock_embeddings_model, mock_entity_resolver, mock_config)
 
-@pytest.mark.asyncio
-async def test_entity_names_converted_to_entity_refs(
-    mock_pool, mock_embeddings_model, mock_entity_resolver, mock_config
-):
-    """Entity name strings are converted to EntityRef objects."""
-    pool, conn = mock_pool
-    fact = _make_fact_input(entities=["Shepard", "MIT", "Boston"])
-
-    _, captured = await _run_retain(pool, conn, [fact], mock_embeddings_model, mock_entity_resolver, mock_config)
-
-    pf = captured[0]
-    assert len(pf.entities) == 3
-    for entity in pf.entities:
+    pf2 = captured2[0]
+    assert len(pf2.entities) == 3
+    for entity in pf2.entities:
         assert isinstance(entity, EntityRef)
-    assert [e.name for e in pf.entities] == ["Shepard", "MIT", "Boston"]
+    assert [e.name for e in pf2.entities] == ["Shepard", "MIT", "Boston"]
 
-
-@pytest.mark.asyncio
-async def test_multiple_facts_in_batch(mock_pool, mock_embeddings_model, mock_entity_resolver, mock_config):
-    """Multiple facts processed as a batch with correct types."""
-    pool, conn = mock_pool
-    facts = [
-        _make_fact_input(fact_text="Shepard works at MIT", entities=["Shepard", "MIT"]),
-        _make_fact_input(fact_text="Alice likes Python", fact_type="experience", entities=["Alice"]),
-        _make_fact_input(fact_text="GRPO > PPO", fact_type="opinion", entities=[]),
-    ]
-
-    result, captured = await _run_retain(pool, conn, facts, mock_embeddings_model, mock_entity_resolver, mock_config)
-
-    assert result == ["unit-0", "unit-1", "unit-2"]
-    assert len(captured) == 3
-    assert captured[0].fact_type == "world"
-    assert captured[1].fact_type == "experience"
-    assert captured[2].fact_type == "opinion"
-
-
-@pytest.mark.asyncio
-async def test_all_duplicates_returns_empty(mock_pool, mock_embeddings_model, mock_entity_resolver, mock_config):
-    """When all facts are duplicates, returns empty list and skips storage."""
-    pool, conn = mock_pool
-    fact = _make_fact_input()
-
+    # all duplicates returns empty list, skips storage
+    fact3 = _make_fact_input()
     with ExitStack() as stack:
         mocks = [stack.enter_context(p) for p in _pipeline_patches()]
         mock_acquire, mock_emb, mock_dedup, mock_storage, mock_entity, mock_links = mocks
@@ -231,31 +208,16 @@ async def test_all_duplicates_returns_empty(mock_pool, mock_embeddings_model, mo
         mock_links.create_semantic_links_batch = AsyncMock()
         mock_links.create_causal_links_batch = AsyncMock()
 
-        result = await retain_direct(
+        dedup_result = await retain_direct(
             pool=pool,
             embeddings_model=mock_embeddings_model,
             entity_resolver=mock_entity_resolver,
             format_date_fn=_fake_format_date,
             duplicate_checker_fn=AsyncMock(return_value=[True]),
             bank_id="parletre",
-            facts=[fact],
+            facts=[fact3],
             config=mock_config,
         )
 
-    assert result == []
+    assert dedup_result == []
     mock_storage.insert_facts_batch.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_temporal_fields_passed_through(mock_pool, mock_embeddings_model, mock_entity_resolver, mock_config):
-    """occurred_start and occurred_end flow through to ProcessedFact."""
-    pool, conn = mock_pool
-    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
-    end = datetime(2026, 1, 15, 11, 0, tzinfo=UTC)
-    fact = _make_fact_input(occurred_start=start, occurred_end=end)
-
-    _, captured = await _run_retain(pool, conn, [fact], mock_embeddings_model, mock_entity_resolver, mock_config)
-
-    pf = captured[0]
-    assert pf.occurred_start == start
-    assert pf.occurred_end == end

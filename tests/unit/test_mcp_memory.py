@@ -9,7 +9,6 @@ import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import pytest_asyncio
 
 pytest.importorskip("asyncpg", reason="asyncpg not installed (memory extra required)")
 
@@ -69,8 +68,7 @@ def _make_mock_store():
     return store
 
 
-@pytest.fixture
-def mock_daemon(loop):
+def _make_mock_daemon(loop):
     daemon = MagicMock()
     daemon.state.get.side_effect = lambda key, default=None: {
         "weather": {"temperature": 32, "description": "clear", "wind_speed": 10, "city": "Boston"},
@@ -92,90 +90,62 @@ def mock_daemon(loop):
     return daemon
 
 
-@pytest_asyncio.fixture
-async def memory_client(mock_daemon):
-    app = create_app(daemon=mock_daemon, tool_config=CLARVIS_TOOLS)
+# ── Tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_memory_tool_surface_and_schema(loop):
+    """All memory tools registered on Clarvis port, ctx not leaked in schemas."""
+    daemon = _make_mock_daemon(loop)
+    app = create_app(daemon=daemon, tool_config=CLARVIS_TOOLS)
     async with Client(app) as c:
-        yield c
+        tools = await c.list_tools()
+        names = {t.name for t in tools}
 
+        # full tool surface check
+        expected = {
+            "recall",
+            "remember",
+            "update_fact",
+            "forget",
+            "list_facts",
+            "list_models",
+            "search_models",
+            "create_model",
+            "update_model",
+            "delete_model",
+            "list_observations",
+            "get_observation",
+            "audit",
+            "stats",
+            "list_directives",
+            "create_directive",
+            "update_directive",
+            "delete_directive",
+            "get_profile",
+            "set_mission",
+            "set_disposition",
+        }
+        assert expected <= names, f"Missing tools: {expected - names}"
 
-# ── Tool surface ────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_memory_tools_registered(memory_client):
-    """All memory tools should be registered on the home port."""
-    tools = await memory_client.list_tools()
-    names = {t.name for t in tools}
-    expected = {
-        "recall",
-        "remember",
-        "update_fact",
-        "forget",
-        "list_facts",
-        "list_models",
-        "search_models",
-        "create_model",
-        "update_model",
-        "delete_model",
-        "list_observations",
-        "get_observation",
-        "audit",
-        "stats",
-        "list_directives",
-        "create_directive",
-        "update_directive",
-        "delete_directive",
-        "get_profile",
-        "set_mission",
-        "set_disposition",
-    }
-    assert expected <= names, f"Missing tools: {expected - names}"
-
-
-@pytest.mark.asyncio
-async def test_no_ctx_leakage(memory_client):
-    """ctx parameter must not appear in tool schemas."""
-    tools = await memory_client.list_tools()
-    # Check all Hindsight memory tools (no common prefix now, check individually)
-    memory_tools = {
-        "recall",
-        "remember",
-        "update_fact",
-        "forget",
-        "list_facts",
-        "list_models",
-        "search_models",
-        "create_model",
-        "update_model",
-        "delete_model",
-        "list_observations",
-        "get_observation",
-        "audit",
-        "stats",
-        "unconsolidated",
-        "related_observations",
-        "consolidate",
-        "stale_models",
-        "list_directives",
-        "create_directive",
-        "update_directive",
-        "delete_directive",
-        "get_profile",
-        "set_mission",
-        "set_disposition",
-    }
-    for t in tools:
-        if t.name in memory_tools:
-            assert "ctx" not in t.inputSchema.get("properties", {}), f"ctx leaked in {t.name}"
-
-
-# ── Visibility & permissions ────────────────────────────────────────
+        # ctx not exposed in any memory tool schema
+        memory_tools = expected | {
+            "unconsolidated",
+            "related_observations",
+            "consolidate",
+            "stale_models",
+        }
+        for t in tools:
+            if t.name in memory_tools:
+                assert "ctx" not in t.inputSchema.get("properties", {}), f"ctx leaked in {t.name}"
 
 
 @pytest.mark.asyncio
-async def test_recall_restricted_bank(mock_daemon):
-    """Factoria (visibility=all) cannot search parletre."""
+async def test_memory_permission_scoping(loop):
+    """Bank restriction and tool restriction for channel agents."""
+    daemon = _make_mock_daemon(loop)
+
+    # Factoria (visibility=all) cannot search parletre
     tool_config = {
         "memory": {"visibility": "all"},
         "spotify": False,
@@ -183,32 +153,29 @@ async def test_recall_restricted_bank(mock_daemon):
         "channels": True,
         "prompt_response": False,
     }
-    mock_daemon.memory_store.visible_banks.return_value = ["agora"]
-    mock_daemon.memory_store.default_bank.return_value = "agora"
-    app = create_app(daemon=mock_daemon, tool_config=tool_config)
+    daemon.memory_store.visible_banks.return_value = ["agora"]
+    daemon.memory_store.default_bank.return_value = "agora"
+    app = create_app(daemon=daemon, tool_config=tool_config)
     async with Client(app) as c:
         r = await c.call_tool("recall", {"query": "test", "bank": "parletre"})
         assert "Error" in r.content[0].text
         assert "not accessible" in r.content[0].text
 
-
-@pytest.mark.asyncio
-async def test_channel_agent_only_gets_recall(mock_daemon):
-    """Factoria (visibility=all) only gets recall, no write tools."""
-    tool_config = {
+    # Factoria only gets recall, no write tools
+    tool_config_no_channels = {
         "memory": {"visibility": "all"},
         "spotify": False,
         "timers": False,
         "channels": False,
         "prompt_response": False,
     }
-    mock_daemon.memory_store.visible_banks.return_value = ["agora"]
-    mock_daemon.memory_store.default_bank.return_value = "agora"
-    app = create_app(daemon=mock_daemon, tool_config=tool_config)
-    async with Client(app) as c:
+    app2 = create_app(daemon=daemon, tool_config=tool_config_no_channels)
+    async with Client(app2) as c:
         tools = await c.list_tools()
         names = {t.name for t in tools}
         assert "recall" in names
+
+        # write/admin tools not available to Factoria
         clarvis_only = {
             "remember",
             "update_fact",
@@ -235,75 +202,57 @@ async def test_channel_agent_only_gets_recall(mock_daemon):
             assert tool_name not in names, f"{tool_name} should not be available to Factoria"
 
 
-# ── Field mapping & validation ──────────────────────────────────────
-
-
 @pytest.mark.asyncio
-async def test_remember_with_type_and_entities(memory_client, mock_daemon):
-    """FactInput construction preserves all fields."""
-    r = await memory_client.call_tool(
-        "remember",
-        {
-            "content": "likes coffee",
-            "fact_type": "opinion",
-            "confidence": 0.9,
-            "entities": ["Shepard"],
-            "tags": ["preferences"],
-        },
-    )
-    assert "Stored" in r.content[0].text
-    fact_input = mock_daemon.memory_store.store_facts.call_args[0][0][0]
-    assert fact_input.fact_text == "likes coffee"
-    assert fact_input.fact_type == "opinion"
-    assert fact_input.confidence == 0.9
-    assert fact_input.entities == ["Shepard"]
-    assert fact_input.tags == ["preferences"]
-
-
-@pytest.mark.asyncio
-async def test_update_fact_requires_content(memory_client):
-    """update without content returns validation error."""
-    r = await memory_client.call_tool("update_fact", {"fact_id": "fact-001"})
-    assert "Error" in r.content[0].text
-    assert "content is required" in r.content[0].text
-
-
-@pytest.mark.asyncio
-async def test_update_fact_failure(memory_client, mock_daemon):
-    """Backend failure is surfaced to agent."""
-    mock_daemon.memory_store.update_fact = AsyncMock(return_value={"success": False, "message": "fact not found"})
-    r = await memory_client.call_tool("update_fact", {"fact_id": "bad-id", "content": "text"})
-    assert "failed" in r.content[0].text.lower()
-
-
-@pytest.mark.asyncio
-async def test_audit_uses_last_checkin(memory_client, mock_daemon):
-    """Audit reads last_check_in from ContextAccumulator, not from a since param."""
-    r = await memory_client.call_tool("audit", {})
-    # Should succeed without a since param — reads from ContextAccumulator
-    assert "Facts since" in r.content[0].text
-
-
-# ── Graceful degradation ────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_recall_store_not_ready(mock_daemon):
-    """Returns error when store is not ready."""
-    mock_daemon.memory_store.ready = False
-    app = create_app(daemon=mock_daemon, tool_config=CLARVIS_TOOLS)
+async def test_remember_field_mapping_and_validation(loop):
+    """Field mapping → validation error → backend failure handling."""
+    daemon = _make_mock_daemon(loop)
+    app = create_app(daemon=daemon, tool_config=CLARVIS_TOOLS)
     async with Client(app) as c:
-        r = await c.call_tool("recall", {"query": "test"})
+        # correct field mapping preserves all fields
+        r = await c.call_tool(
+            "remember",
+            {
+                "content": "likes coffee",
+                "fact_type": "opinion",
+                "confidence": 0.9,
+                "entities": ["Shepard"],
+                "tags": ["preferences"],
+            },
+        )
+        assert "Stored" in r.content[0].text
+        fact_input = daemon.memory_store.store_facts.call_args[0][0][0]
+        assert fact_input.fact_text == "likes coffee"
+        assert fact_input.fact_type == "opinion"
+        assert fact_input.confidence == 0.9
+        assert fact_input.entities == ["Shepard"]
+        assert fact_input.tags == ["preferences"]
+
+        # update without content returns validation error
+        r = await c.call_tool("update_fact", {"fact_id": "fact-001"})
         assert "Error" in r.content[0].text
-        assert "not available" in r.content[0].text
+        assert "content is required" in r.content[0].text
+
+        # backend failure surfaced to agent
+        daemon.memory_store.update_fact = AsyncMock(return_value={"success": False, "message": "fact not found"})
+        r = await c.call_tool("update_fact", {"fact_id": "bad-id", "content": "text"})
+        assert "failed" in r.content[0].text.lower()
 
 
 @pytest.mark.asyncio
-async def test_remember_store_not_ready(mock_daemon):
-    """Returns error when store is not ready."""
-    mock_daemon.memory_store.ready = False
-    app = create_app(daemon=mock_daemon, tool_config=CLARVIS_TOOLS)
+async def test_memory_graceful_degradation(loop):
+    """Audit behavior and store-not-ready fallback."""
+    daemon = _make_mock_daemon(loop)
+
+    # audit reads last_check_in from ContextAccumulator
+    app = create_app(daemon=daemon, tool_config=CLARVIS_TOOLS)
     async with Client(app) as c:
-        r = await c.call_tool("remember", {"content": "test"})
+        r = await c.call_tool("audit", {})
+        assert "Facts since" in r.content[0].text
+
+    # store not ready returns error
+    daemon.memory_store.ready = False
+    app2 = create_app(daemon=daemon, tool_config=CLARVIS_TOOLS)
+    async with Client(app2) as c:
+        r = await c.call_tool("recall", {"query": "test"})
         assert "Error" in r.content[0].text
         assert "not available" in r.content[0].text

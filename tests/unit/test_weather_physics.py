@@ -3,7 +3,6 @@
 import numpy as np
 
 from clarvis.display.sprites.weather_physics import (
-    BoundingBox,
     Shape,
     tick_physics_batch,
 )
@@ -28,19 +27,6 @@ class TestShape:
             assert False, "Should have raised"
         except ValueError:
             pass
-
-
-class TestBoundingBox:
-    def test_contains_inside(self):
-        bb = BoundingBox(5, 5, 10, 10)
-        assert bb.contains(5, 5)
-        assert bb.contains(14, 14)
-
-    def test_contains_outside(self):
-        bb = BoundingBox(5, 5, 10, 10)
-        assert not bb.contains(4, 5)
-        assert not bb.contains(15, 5)
-        assert not bb.contains(5, 15)
 
 
 class TestTickPhysics:

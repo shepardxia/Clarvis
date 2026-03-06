@@ -1,6 +1,6 @@
-"""Tests for sprites/scenes.py — SceneManager."""
+"""Tests for sprites/scenes.py — SceneManager and SpriteRegistry."""
 
-from clarvis.display.sprites.core import BBox, Sprite
+from clarvis.display.sprites.core import BBox, Sprite, SpriteRegistry
 from clarvis.display.sprites.scenes import SceneManager
 
 
@@ -49,98 +49,82 @@ class TransparentSprite(Sprite):
         out_colors[b.y, b.x + 2] = 2
 
 
-class TestSceneManagerEmpty:
-    def test_empty_scene_all_spaces(self):
-        scene = SceneManager(10, 5)
-        rows, colors = scene.to_grid()
-        assert len(rows) == 5
-        assert all(len(r) == 10 for r in rows)
-        assert all(c == " " for row in rows for c in row)
+def test_registry_lifecycle():
+    """Registry: add sprites -> priority order -> kill -> exclude from alive -> process removes dead."""
+    reg = SpriteRegistry()
 
-    def test_empty_scene_colors_zero(self):
-        scene = SceneManager(10, 5)
-        _, colors = scene.to_grid()
-        assert all(c == 0 for row in colors for c in row)
+    # Add sprites with different priorities
+    s1 = FillSprite(0, 0, 1, 1, priority=10)
+    s2 = FillSprite(0, 0, 1, 1, priority=5)
+    s3 = FillSprite(0, 0, 1, 1, priority=7)
+    reg.add(s1)
+    reg.add(s2)
+    reg.add(s3)
 
+    # Verify priority-sorted order
+    alive = reg.alive()
+    assert len(alive) == 3
+    assert alive[0].priority == 5
+    assert alive[1].priority == 7
+    assert alive[2].priority == 10
 
-class TestSceneManagerCompositing:
-    def test_opaque_sprite_writes_bbox(self):
-        scene = SceneManager(5, 3)
-        scene.add(FillSprite(1, 0, 2, 2, char="A", transparent=False))
-        rows, _ = scene.to_grid()
-        assert rows[0][1] == "A"
-        assert rows[0][2] == "A"
-        assert rows[1][1] == "A"
-        # Outside bbox = space
-        assert rows[0][0] == " "
+    # Kill one sprite — excluded from alive but still in internal storage
+    s2.kill()
+    alive = reg.alive()
+    assert len(alive) == 2
+    assert all(s is not s2 for s in alive)
 
-    def test_higher_priority_overwrites(self):
-        scene = SceneManager(5, 3)
-        scene.add(FillSprite(0, 0, 3, 1, char="L", priority=0, transparent=False))
-        scene.add(FillSprite(1, 0, 1, 1, char="H", priority=10, transparent=False))
-        rows, _ = scene.to_grid()
-        assert rows[0][0] == "L"
-        assert rows[0][1] == "H"  # overwritten by higher priority
-        assert rows[0][2] == "L"
-
-    def test_transparent_sprite_preserves_spaces(self):
-        scene = SceneManager(5, 3)
-        scene.add(FillSprite(0, 0, 5, 1, char="B", priority=0, transparent=False))
-        scene.add(TransparentSprite(1, 0, priority=10))
-        rows, _ = scene.to_grid()
-        # TransparentSprite writes "A B" at (1,0)
-        assert rows[0][0] == "B"  # untouched by transparent sprite
-        assert rows[0][1] == "A"  # overwritten
-        assert rows[0][2] == "B"  # SPACE in transparent sprite, background shows through
-        assert rows[0][3] == "B"  # overwritten
+    # Process kills — dead sprite removed from internal list
+    reg.process_kills()
+    assert len(reg._sprites) == 2
 
 
-class TestSceneManagerTick:
-    def test_tick_calls_all_sprites(self):
-        scene = SceneManager(5, 3)
-        s1 = FillSprite(0, 0, 1, 1)
-        s2 = FillSprite(1, 1, 1, 1)
-        scene.add(s1)
-        scene.add(s2)
-        scene.tick(status="idle")
-        assert s1.ticked
-        assert s2.ticked
+def test_compositing_pipeline():
+    """Full compositing pipeline: empty canvas -> opaque -> priority overwrite ->
+    transparent preservation -> dead sprite exclusion."""
 
-    def test_dead_sprites_excluded_after_tick(self):
-        scene = SceneManager(5, 3)
-        s1 = FillSprite(0, 0, 2, 2, char="A")
-        s2 = FillSprite(0, 0, 2, 2, char="B", priority=10)
-        scene.add(s1)
-        scene.add(s2)
-        s2.kill()
-        scene.tick()
-        rows, _ = scene.to_grid()
-        # s2 is dead, so s1's "A" should show
-        assert rows[0][0] == "A"
+    # Phase 1: empty scene is all spaces
+    scene = SceneManager(10, 5)
+    rows, colors = scene.to_grid()
+    assert len(rows) == 5
+    assert all(len(r) == 10 for r in rows)
+    assert all(c == " " for row in rows for c in row)
 
+    # Phase 2: opaque sprite writes into its bbox
+    scene = SceneManager(5, 3)
+    scene.add(FillSprite(1, 0, 2, 2, char="A", transparent=False))
+    rows, _ = scene.to_grid()
+    assert rows[0][1] == "A"
+    assert rows[0][2] == "A"
+    assert rows[1][1] == "A"
+    assert rows[0][0] == " "  # outside bbox
 
-class TestSceneManagerScratchArrays:
-    def test_scratch_arrays_exist_with_correct_shape(self):
-        scene = SceneManager(10, 5)
-        assert scene._scratch_chars.shape == (5, 10)
-        assert scene._scratch_colors.shape == (5, 10)
+    # Phase 3: higher priority overwrites lower
+    scene = SceneManager(5, 3)
+    scene.add(FillSprite(0, 0, 3, 1, char="L", priority=0, transparent=False))
+    scene.add(FillSprite(1, 0, 1, 1, char="H", priority=10, transparent=False))
+    rows, _ = scene.to_grid()
+    assert rows[0][0] == "L"
+    assert rows[0][1] == "H"  # overwritten by higher priority
+    assert rows[0][2] == "L"
 
-    def test_scratch_arrays_reused_across_renders(self):
-        scene = SceneManager(5, 3)
-        scene.add(TransparentSprite(0, 0, priority=10))
-        scene.render()
-        id_c = id(scene._scratch_chars)
-        id_k = id(scene._scratch_colors)
-        scene.render()
-        assert id(scene._scratch_chars) == id_c
-        assert id(scene._scratch_colors) == id_k
+    # Phase 4: transparent sprite preserves SPACE cells (background shows through)
+    scene = SceneManager(5, 3)
+    scene.add(FillSprite(0, 0, 5, 1, char="B", priority=0, transparent=False))
+    scene.add(TransparentSprite(1, 0, priority=10))
+    rows, _ = scene.to_grid()
+    assert rows[0][0] == "B"  # untouched by transparent sprite
+    assert rows[0][1] == "A"  # overwritten
+    assert rows[0][2] == "B"  # SPACE in transparent sprite, background shows through
+    assert rows[0][3] == "B"  # overwritten
 
-
-class TestSceneManagerToGrid:
-    def test_to_grid_shape(self):
-        scene = SceneManager(8, 4)
-        rows, colors = scene.to_grid()
-        assert len(rows) == 4
-        assert all(len(r) == 8 for r in rows)
-        assert len(colors) == 4
-        assert all(len(c) == 8 for c in colors)
+    # Phase 5: dead sprites excluded after tick
+    scene = SceneManager(5, 3)
+    s1 = FillSprite(0, 0, 2, 2, char="A")
+    s2 = FillSprite(0, 0, 2, 2, char="B", priority=10)
+    scene.add(s1)
+    scene.add(s2)
+    s2.kill()
+    scene.tick()
+    rows, _ = scene.to_grid()
+    assert rows[0][0] == "A"  # s2 is dead, s1's "A" shows

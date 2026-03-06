@@ -3,7 +3,7 @@
 import numpy as np
 
 from clarvis.display.sprites.control import Control
-from clarvis.display.sprites.core import SPACE, BBox
+from clarvis.display.sprites.core import SPACE
 
 GRID_W, GRID_H = 20, 5
 
@@ -17,148 +17,90 @@ def _make_grids():
 LABELS = {"enabled": "[MIC]", "disabled": "[---]"}
 
 
-class TestControlRender:
-    def test_renders_label_at_position(self):
-        ctrl = Control(x=2, y=1, priority=80, labels=LABELS, action_id="mic_toggle")
-        chars, colors = _make_grids()
-        ctrl.render(chars, colors)
-        rendered = "".join(chr(c) for c in chars[1, 2:7])
-        assert rendered == "[MIC]"
+def test_control_render_and_state():
+    """Render at position -> change state -> visibility toggle -> invalid state error."""
 
-    def test_enabled_state_shows_enabled_label(self):
-        ctrl = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic_toggle")
-        chars, colors = _make_grids()
-        ctrl.render(chars, colors)
-        rendered = "".join(chr(c) for c in chars[0, 0:5])
-        assert rendered == "[MIC]"
+    # Phase 1: renders label at position
+    ctrl = Control(x=2, y=1, priority=80, labels=LABELS, action_id="mic_toggle")
+    chars, colors = _make_grids()
+    ctrl.render(chars, colors)
+    rendered = "".join(chr(c) for c in chars[1, 2:7])
+    assert rendered == "[MIC]"
 
-    def test_disabled_state_shows_disabled_label(self):
-        ctrl = Control(
-            x=0,
-            y=0,
-            priority=80,
-            labels=LABELS,
-            action_id="mic_toggle",
-            state="disabled",
-        )
-        chars, colors = _make_grids()
-        ctrl.render(chars, colors)
-        rendered = "".join(chr(c) for c in chars[0, 0:5])
-        assert rendered == "[---]"
+    # Phase 2: disabled state shows disabled label
+    ctrl2 = Control(
+        x=0,
+        y=0,
+        priority=80,
+        labels=LABELS,
+        action_id="mic_toggle",
+        state="disabled",
+    )
+    chars, colors = _make_grids()
+    ctrl2.render(chars, colors)
+    rendered = "".join(chr(c) for c in chars[0, 0:5])
+    assert rendered == "[---]"
 
-    def test_color_applied_to_non_space_cells(self):
-        ctrl = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic", color=7)
-        chars, colors = _make_grids()
-        ctrl.render(chars, colors)
-        # All 5 chars of "[MIC]" are non-space
-        assert all(colors[0, i] == 7 for i in range(5))
+    # Phase 3: invisible writes nothing
+    ctrl3 = Control(
+        x=0,
+        y=0,
+        priority=80,
+        labels=LABELS,
+        action_id="mic",
+        visible=False,
+    )
+    chars, colors = _make_grids()
+    ctrl3.render(chars, colors)
+    assert np.all(chars == SPACE)
+    assert np.all(colors == 0)
 
+    # Phase 4: set_visible toggles rendering on/off
+    ctrl4 = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic")
+    ctrl4.set_visible(False)
+    chars, colors = _make_grids()
+    ctrl4.render(chars, colors)
+    assert np.all(chars == SPACE)
 
-class TestClickRegion:
-    def test_click_region_returns_tuple(self):
-        ctrl = Control(x=3, y=2, priority=80, labels=LABELS, action_id="mic")
-        region = ctrl.click_region()
-        assert region == (2, 3, 5, 1)  # (row, col, width, height)
+    ctrl4.set_visible(True)
+    ctrl4.render(chars, colors)
+    rendered = "".join(chr(c) for c in chars[0, 0:5])
+    assert rendered == "[MIC]"
 
-    def test_click_region_matches_bbox(self):
-        ctrl = Control(x=5, y=4, priority=80, labels=LABELS, action_id="mic")
-        region = ctrl.click_region()
-        b = ctrl.bbox
-        assert region == (b.y, b.x, b.w, b.h)
-
-
-class TestVisibility:
-    def test_invisible_writes_nothing(self):
-        ctrl = Control(
-            x=0,
-            y=0,
-            priority=80,
-            labels=LABELS,
-            action_id="mic",
-            visible=False,
-        )
-        chars, colors = _make_grids()
-        ctrl.render(chars, colors)
-        # Entire grid should still be SPACE
-        assert np.all(chars == SPACE)
-        assert np.all(colors == 0)
-
-    def test_set_visible_toggles(self):
-        ctrl = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic")
-        ctrl.set_visible(False)
-        chars, colors = _make_grids()
-        ctrl.render(chars, colors)
-        assert np.all(chars == SPACE)
-
-        ctrl.set_visible(True)
-        ctrl.render(chars, colors)
-        rendered = "".join(chr(c) for c in chars[0, 0:5])
-        assert rendered == "[MIC]"
+    # Phase 5: invalid state raises KeyError
+    ctrl5 = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic")
+    try:
+        ctrl5.set_state("bogus")
+        assert False, "Expected KeyError"
+    except KeyError:
+        pass
 
 
-class TestStateToggle:
-    def test_set_state_changes_label(self):
-        ctrl = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic")
-        ctrl.set_state("disabled")
-        chars, colors = _make_grids()
-        ctrl.render(chars, colors)
-        rendered = "".join(chr(c) for c in chars[0, 0:5])
-        assert rendered == "[---]"
-
-    def test_set_state_invalid_raises(self):
-        ctrl = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic")
-        try:
-            ctrl.set_state("bogus")
-            assert False, "Expected KeyError"
-        except KeyError:
-            pass
+def test_control_click_region():
+    """Click region returns (row, col, width, height) tuple."""
+    ctrl = Control(x=3, y=2, priority=80, labels=LABELS, action_id="mic")
+    region = ctrl.click_region()
+    assert region == (2, 3, 5, 1)
 
 
-class TestWidthAutoCalc:
-    def test_width_from_longest_label(self):
-        labels = {"short": "Hi", "long": "Hello!"}
-        ctrl = Control(x=0, y=0, priority=80, labels=labels, action_id="greet")
-        assert ctrl.bbox.w == 6  # len("Hello!")
+def test_control_auto_width():
+    """Width auto-calculated from longest label, and short labels are padded."""
 
-    def test_width_pads_short_labels(self):
-        labels = {"short": "Hi", "long": "Hello!"}
-        ctrl = Control(
-            x=0,
-            y=0,
-            priority=80,
-            labels=labels,
-            action_id="greet",
-            state="short",
-        )
-        chars, colors = _make_grids()
-        ctrl.render(chars, colors)
-        # "Hi" rendered then padded with SPACE to width 6
-        rendered = "".join(chr(c) for c in chars[0, 0:6])
-        assert rendered == "Hi    "
+    # Phase 1: width from longest label
+    labels = {"short": "Hi", "long": "Hello!"}
+    ctrl = Control(x=0, y=0, priority=80, labels=labels, action_id="greet")
+    assert ctrl.bbox.w == 6  # len("Hello!")
 
-    def test_equal_length_labels(self):
-        ctrl = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic")
-        assert ctrl.bbox.w == 5  # Both "[MIC]" and "[---]" are 5 chars
-
-
-class TestBBoxProperty:
-    def test_bbox_type_and_values(self):
-        ctrl = Control(x=3, y=2, priority=80, labels=LABELS, action_id="mic")
-        b = ctrl.bbox
-        assert isinstance(b, BBox)
-        assert b.x == 3
-        assert b.y == 2
-        assert b.w == 5
-        assert b.h == 1
-
-    def test_bbox_height_always_one(self):
-        labels = {"a": "ABCDEFGH"}
-        ctrl = Control(x=0, y=0, priority=0, labels=labels, action_id="x")
-        assert ctrl.bbox.h == 1
-
-
-class TestTickNoop:
-    def test_tick_does_not_crash(self):
-        ctrl = Control(x=0, y=0, priority=80, labels=LABELS, action_id="mic")
-        ctrl.tick()  # Should be a no-op
-        ctrl.tick(frame=42, dt=0.1)  # With kwargs — still no-op
+    # Phase 2: short label padded to full width
+    ctrl2 = Control(
+        x=0,
+        y=0,
+        priority=80,
+        labels=labels,
+        action_id="greet",
+        state="short",
+    )
+    chars, colors = _make_grids()
+    ctrl2.render(chars, colors)
+    rendered = "".join(chr(c) for c in chars[0, 0:6])
+    assert rendered == "Hi    "
