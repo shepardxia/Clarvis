@@ -17,7 +17,6 @@ from .core import SPACE, BBox, Sprite
 from .reel import Reel, ReelMode
 from .scenes import SceneManager
 from .weather_physics import (
-    BoundingBox,
     Particle,
     Shape,
     compute_render_cells,
@@ -212,18 +211,17 @@ class WeatherSandbox(Sprite):
         self._weather_type: str | None = None
         self._intensity = 0.0
         self._wind_speed = 0.0
-        self._exclusion_zones: list[BoundingBox] = []
 
         # Particle SoA arrays
         n = self._batch_size
-        self.p_x = np.zeros(n, dtype=np.float64)
-        self.p_y = np.zeros(n, dtype=np.float64)
-        self.p_vx = np.zeros(n, dtype=np.float64)
-        self.p_vy = np.zeros(n, dtype=np.float64)
-        self.p_age = np.zeros(n, dtype=np.int64)
-        self.p_lifetime = np.zeros(n, dtype=np.int64)
-        self.p_shape_idx = np.zeros(n, dtype=np.int64)
-        self.p_count = 0
+        self._p_x = np.zeros(n, dtype=np.float64)
+        self._p_y = np.zeros(n, dtype=np.float64)
+        self._p_vx = np.zeros(n, dtype=np.float64)
+        self._p_vy = np.zeros(n, dtype=np.float64)
+        self._p_age = np.zeros(n, dtype=np.int64)
+        self._p_lifetime = np.zeros(n, dtype=np.int64)
+        self._p_shape_idx = np.zeros(n, dtype=np.int64)
+        self._p_count = 0
 
         # Ambient clouds
         self._ambient_clouds: list[Particle] = []
@@ -238,21 +236,9 @@ class WeatherSandbox(Sprite):
         self._render_out_shape: np.ndarray = np.zeros(0, dtype=np.int32)
         self._render_out_cell: np.ndarray = np.zeros(0, dtype=np.int32)
 
-        # Prewarm shape arrays for all weather types
-        self._prewarm_shapes()
-
     @property
     def bbox(self) -> BBox:
         return BBox(0, 0, self._width, self._height)
-
-    def _prewarm_shapes(self) -> None:
-        original = self._weather_type
-        for name in self._registry.list_names("weather"):
-            self._weather_type = name
-            self._rebuild_shape_cache()
-        self._weather_type = original
-        if original:
-            self._rebuild_shape_cache()
 
     def _get_shape(self, name: str) -> Shape | None:
         elem = self._registry.get("particles", name)
@@ -310,14 +296,14 @@ class WeatherSandbox(Sprite):
         self._render_out_cell = np.zeros(max_output, dtype=np.int32)
 
     def _grow_arrays(self) -> None:
-        old_size = len(self.p_x)
+        old_size = len(self._p_x)
         new_size = old_size * 2
-        for attr in ("p_x", "p_y", "p_vx", "p_vy"):
+        for attr in ("_p_x", "_p_y", "_p_vx", "_p_vy"):
             old = getattr(self, attr)
             new = np.zeros(new_size, dtype=np.float64)
             new[:old_size] = old
             setattr(self, attr, new)
-        for attr in ("p_age", "p_lifetime", "p_shape_idx"):
+        for attr in ("_p_age", "_p_lifetime", "_p_shape_idx"):
             old = getattr(self, attr)
             new = np.zeros(new_size, dtype=np.int64)
             new[:old_size] = old
@@ -326,7 +312,7 @@ class WeatherSandbox(Sprite):
     def set_weather(self, weather_type: str, intensity: float = 0.6, wind_speed: float = 0.0):
         if weather_type != self._weather_type:
             self._weather_type = weather_type
-            self.p_count = 0
+            self._p_count = 0
             self._rebuild_shape_cache()
         self._intensity = intensity
         self._wind_speed = wind_speed
@@ -343,16 +329,16 @@ class WeatherSandbox(Sprite):
         if not self._weather_type or not self._shape_cache:
             return
 
-        if self.p_count > 0:
-            self.p_count = tick_physics_batch(
-                self.p_x,
-                self.p_y,
-                self.p_vx,
-                self.p_vy,
-                self.p_age,
-                self.p_lifetime,
-                self.p_shape_idx,
-                self.p_count,
+        if self._p_count > 0:
+            self._p_count = tick_physics_batch(
+                self._p_x,
+                self._p_y,
+                self._p_vx,
+                self._p_vy,
+                self._p_age,
+                self._p_lifetime,
+                self._p_shape_idx,
+                self._p_count,
                 1,
                 float(self._width),
                 float(self._height),
@@ -361,7 +347,7 @@ class WeatherSandbox(Sprite):
 
         max_particles = int(self._intensity * self._max_particles_base)
         spawn_rate = self._intensity * 2.0
-        spawn_count = min(np.random.poisson(spawn_rate * 3), max_particles - self.p_count)
+        spawn_count = min(np.random.poisson(spawn_rate * 3), max_particles - self._p_count)
         if spawn_count > 0:
             self._spawn_batch(spawn_count)
 
@@ -399,7 +385,7 @@ class WeatherSandbox(Sprite):
                 )
 
     def _spawn_batch(self, count: int) -> None:
-        while self.p_count + count > len(self.p_x):
+        while self._p_count + count > len(self._p_x):
             self._grow_arrays()
 
         s = self._speed_multiplier
@@ -417,38 +403,30 @@ class WeatherSandbox(Sprite):
             params = (0, w, 0, h, -0.05 * s, 0.1 * s, -0.03 * s, 0.06 * s, 60, 90)
 
         spawn_particles(
-            self.p_x,
-            self.p_y,
-            self.p_vx,
-            self.p_vy,
-            self.p_age,
-            self.p_lifetime,
-            self.p_shape_idx,
-            self.p_count,
+            self._p_x,
+            self._p_y,
+            self._p_vx,
+            self._p_vy,
+            self._p_age,
+            self._p_lifetime,
+            self._p_shape_idx,
+            self._p_count,
             count,
             len(self._shape_cache),
             *params,
         )
-        self.p_count += count
-
-    def _build_exclusion_set(self) -> set:
-        blocked = set()
-        for zone in self._exclusion_zones:
-            for x in range(zone.x, zone.x + zone.w):
-                for y in range(zone.y, zone.y + zone.h):
-                    blocked.add((x, y))
-        return blocked
+        self._p_count += count
 
     def render(self, out_chars: np.ndarray, out_colors: np.ndarray) -> None:
-        # Build exclusion zones from face sprites in the registry
-        self._exclusion_zones = []
+        # Build exclusion set from face sprites in the registry
+        blocked: set[tuple[int, int]] = set()
         if self._scene_registry:
             for s in self._scene_registry.alive():
                 if isinstance(s, FaceCel):
                     b = s.bbox
-                    self._exclusion_zones.append(BoundingBox(x=b.x, y=b.y, w=b.w, h=b.h))
-
-        blocked = self._build_exclusion_set()
+                    for x in range(b.x, b.x2):
+                        for y in range(b.y, b.y2):
+                            blocked.add((x, y))
         color = 15
         w, h = self._width, self._height
 
@@ -467,7 +445,7 @@ class WeatherSandbox(Sprite):
                         out_colors[cy, cx] = color
 
         # Render JIT particles
-        n = self.p_count
+        n = self._p_count
         if n == 0 or self._shape_offsets is None:
             return
 
@@ -481,9 +459,9 @@ class WeatherSandbox(Sprite):
             self._render_out_cell = np.zeros(new_size, dtype=np.int32)
 
         num_cells = compute_render_cells(
-            self.p_x,
-            self.p_y,
-            self.p_shape_idx,
+            self._p_x,
+            self._p_y,
+            self._p_shape_idx,
             n,
             self._shape_offsets,
             self._shape_cell_counts,
@@ -635,8 +613,7 @@ class BarSprite(Sprite):
             chars, colors = self._cache_percent(int_pct)
             filled = int(int_pct / 100 * self._bar_width)
             out_chars[self._y, self._x : self._x + self._bar_width] = chars
-            out_colors[self._y, self._x : self._x + self._bar_width] = colors
-            # Override empty portion color with status color
+            out_colors[self._y, self._x : self._x + filled] = colors[:filled]
             out_colors[self._y, self._x + filled : self._x + self._bar_width] = empty_color
         else:
             filled = int(percent / 100 * self._bar_width)
