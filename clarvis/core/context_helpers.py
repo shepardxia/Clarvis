@@ -1,12 +1,10 @@
-"""Shared context formatting and JSONL transcript helpers.
+"""Shared context formatting helpers.
 
-Used by MCP tools, wakeup manager, and context accumulator to avoid
-duplicating weather/time/location/transcript formatting logic.
+Used by MCP tools and wakeup manager to avoid duplicating
+weather/time/location formatting logic.
 """
 
-import json
 from datetime import datetime
-from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Ambient context formatters
@@ -83,57 +81,47 @@ def now_playing_summary(get_session) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# JSONL transcript parsing
+# Composed ambient context
 # ---------------------------------------------------------------------------
 
 
-def iter_transcript_messages(path: str | Path) -> list[dict]:
-    """Parse a Claude Code JSONL transcript into a list of messages.
+def build_ambient_context(
+    state_getter,
+    now_playing: str | None = None,
+    time_state: dict | None = None,
+) -> list[str]:
+    """Build ambient context lines from state.
 
-    Returns ``[{"role": "U"|"A", "text": str}, ...]`` in chronological order.
-    Filters to user/assistant entries, flattens content arrays, and skips
-    ``<system`` prefixed text blocks.
+    Returns a list of formatted strings: time, weather (+location), now playing.
+
+    Args:
+        state_getter: callable that takes a key and returns a state dict.
+        now_playing: pre-fetched now-playing string (from ``now_playing_summary``).
+        time_state: if provided, uses ``time_summary(time_state, "full")`` instead
+            of local clock. Pass the result of ``refresh.refresh_time()`` for accuracy.
     """
-    p = Path(path)
-    if not p.exists():
-        return []
+    parts: list[str] = []
 
-    messages: list[dict] = []
-    try:
-        with open(p, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+    # Time
+    if time_state:
+        ts = time_summary(time_state, fmt="full")
+        parts.append(ts or "time: unavailable")
+    else:
+        parts.append(datetime.now().astimezone().strftime("%A %H:%M"))
 
-                entry_type = entry.get("type")
-                if entry_type not in ("user", "assistant"):
-                    continue
+    # Weather + location (combined)
+    ws = weather_summary(state_getter("weather"))
+    loc = location_summary(state_getter("location"))
+    if ws:
+        line = ws
+        if loc:
+            line += f" ({loc})"
+        parts.append(line)
+    elif loc:
+        parts.append(loc)
 
-                content = entry.get("message", {}).get("content", "")
+    # Now playing
+    if now_playing:
+        parts.append(now_playing)
 
-                # Flatten content arrays (skip tool_use, system reminders)
-                if isinstance(content, list):
-                    texts = [
-                        c.get("text", "")
-                        for c in content
-                        if c.get("type") == "text" and not c.get("text", "").startswith("<system")
-                    ]
-                    content = " ".join(texts)
-
-                if not content or content.startswith("<system"):
-                    continue
-
-                role = "U" if entry_type == "user" else "A"
-                messages.append({"role": role, "text": content})
-    except OSError:
-        return []
-
-    return messages
-
-
-def format_message(msg: dict, max_len: int = 150) -> str:
-    """Format a parsed transcript message as ``"U: truncated text..."``."""
-    text = msg["text"][:max_len].replace("\n", " ").strip()
-    return f"{msg['role']}: {text}"
+    return parts

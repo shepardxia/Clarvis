@@ -3,11 +3,12 @@
 Goals are stored as opinion-type facts in Hindsight with confidence scores.
 Only seeds if no goals exist yet (first-run detection).
 
-Also provides scaffolding for the checkin skill prompt and seed goals YAML
+Also provides scaffolding for seed goals YAML, skills, and grounding files
 in ``~/.clarvis/clarvis/``.
 """
 
 import logging
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,11 @@ if TYPE_CHECKING:
     from clarvis.memory.store import HindsightStore
 
 logger = logging.getLogger(__name__)
+
+# ── Bundled data paths ────────────────────────────────────────────────────
+
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_SKILLS_DIR = _DATA_DIR / "skills"
 
 # ── Default content for scaffolded files ─────────────────────────────────
 
@@ -39,52 +45,6 @@ goals:
     confidence: 0.5
 """
 
-DEFAULT_CHECKIN_SKILL = """\
-# Check-in Skill
-
-You are Clarvis performing a memory check-in with Shepard. This is an interactive review session.
-
-## Process
-
-### Phase 1: Audit Review
-1. Run audit to see recent changes (facts added/updated since last check-in)
-2. Summarize what's new — highlight anything that looks wrong or worth discussing
-3. Ask: any corrections or things to forget?
-
-### Phase 2: Mental Model Review
-1. Use list_models to list current mental models
-2. For each model, show title and summary
-3. Ask if any models need updating or if new ones should be created
-
-### Phase 3: Goal Review
-1. Search for active goals: recall with fact_type="opinion" and query "active goal"
-2. For each goal: show description and current status
-3. Ask if there's progress to note — update confidence/content as needed
-4. Ask if there are new goals to add
-
-### Phase 4: Ad-hoc Maintenance
-1. Ask if the user wants to do any ad-hoc memory maintenance:
-   - Search and review specific memories
-   - Manually add/update/forget facts
-   - Knowledge graph operations (entity merge, cleanup)
-2. When done, summarize what was changed in this checkin session
-
-### Phase 5: Grounding Review
-1. Read current grounding files from `~/.clarvis/clarvis/grounding/` (placeholder files don't count)
-2. Review memory state vs grounding content using recall, list_models, stats, list_directives, get_profile
-3. Draft updated grounding files:
-   - `01-personality.md`: directives + personality disposition + behavioral rules
-   - `02-profile.md`: user preferences, communication style, key context
-   - `03-knowledge.md`: breadth indicator of what's in memory
-4. Present proposed changes for approval, then write approved files
-5. If personality/directives changed, propose CLAUDE.md edits (clarvis reload picks them up)
-
-## Guidelines
-- Be conversational and efficient — don't belabor each item
-- Group similar changes for batch approval when possible
-- For goals, focus on progress and blockers, not status reports
-"""
-
 
 # Placeholder content for grounding files — filled in by Clarvis during first checkin.
 _GROUNDING_PLACEHOLDERS: dict[str, str] = {
@@ -102,12 +62,16 @@ _GROUNDING_PLACEHOLDERS: dict[str, str] = {
 """,
 }
 
+# Skills to scaffold from bundled data/skills/ templates.
+_SCAFFOLD_SKILLS = ["checkin", "reflect"]
+
 
 def scaffold_checkin_files(home_dir: Path | None = None) -> dict[str, bool]:
     """Ensure checkin-related files exist in the home project directory.
 
-    Creates ``seed_goals.yaml``, ``skills/checkin.md``, and
+    Creates ``seed_goals.yaml``, ``.pi/skills/*/SKILL.md``, and
     ``grounding/*.md`` placeholder files if they don't already exist.
+    Skill content is copied from bundled templates in ``data/skills/``.
     Does not overwrite existing files.
 
     Returns a dict mapping filename to whether it was created.
@@ -128,15 +92,23 @@ def scaffold_checkin_files(home_dir: Path | None = None) -> dict[str, bool]:
     else:
         created["seed_goals.yaml"] = False
 
-    # skills/checkin.md
-    skill_path = home_dir / "skills" / "checkin.md"
-    if not skill_path.exists():
-        skill_path.parent.mkdir(parents=True, exist_ok=True)
-        skill_path.write_text(DEFAULT_CHECKIN_SKILL, encoding="utf-8")
-        created["skills/checkin.md"] = True
-        logger.info("Scaffolded %s", skill_path)
-    else:
-        created["skills/checkin.md"] = False
+    # .pi/skills/*/SKILL.md — copied from bundled data/skills/ templates
+    for skill_name in _SCAFFOLD_SKILLS:
+        template = _SKILLS_DIR / skill_name / "SKILL.md"
+        skill_path = home_dir / ".pi" / "skills" / skill_name / "SKILL.md"
+        skill_key = f".pi/skills/{skill_name}/SKILL.md"
+
+        if not skill_path.exists():
+            if template.exists():
+                skill_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(template), str(skill_path))
+                created[skill_key] = True
+                logger.info("Scaffolded %s from %s", skill_path, template)
+            else:
+                logger.warning("Skill template not found: %s", template)
+                created[skill_key] = False
+        else:
+            created[skill_key] = False
 
     # grounding/*.md placeholders
     grounding_dir = home_dir / "grounding"

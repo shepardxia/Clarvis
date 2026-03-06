@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """Clarvis MCP Server — embedded in the daemon, served over SSE.
 
-Uses FastMCP 2.x composition: main server (daemon tools) + mounted sub-servers.
-Tool handlers access daemon state and services directly (no IPC).
+Uses FastMCP 2.x. Only port 7777 remains — serves external Claude Code sessions.
+Agent tools (memory, spotify, timers) are daemon IPC commands via ctools.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Annotated
 
 from fastmcp import Context, FastMCP
+from pydantic import Field
 
-from ..core.context_helpers import (
-    location_summary,
-    now_playing_summary,
-    time_summary,
-    weather_summary,
-)
-from ._helpers import get_daemon, make_lifespan
-from .channel_tools import create_channel_server
-from .knowledge_tools import create_knowledge_server
-from .memory_tools import create_memory_server
-from .spotify_tools import create_spotify_server
-from .timer_tools import create_timer_server
+from ..core.context_helpers import build_ambient_context, now_playing_summary
+
+# --- Lifespan helpers (inlined from deleted _helpers.py) ---
+
+
+def get_daemon(ctx):
+    """Extract daemon from FastMCP lifespan context."""
+    return ctx.fastmcp._lifespan_result["daemon"]
+
+
+def make_lifespan(daemon, **extras):
+    @asynccontextmanager
+    async def lifespan(server):
+        yield {"daemon": daemon, **extras}
+
+    return lifespan
+
 
 # --- Tool implementations ---
 
@@ -34,66 +43,74 @@ async def ping(ctx: Context = None) -> str:
 async def get_context(ctx: Context = None) -> str:
     """Get current time, weather, location, and currently playing music."""
     d = get_daemon(ctx)
-    parts = []
     loop = asyncio.get_running_loop()
 
-    # Weather (refresh if stale)
+    # Refresh stale weather
     try:
         weather = d.state.get("weather")
         if not weather or not weather.get("temperature"):
-            weather = await loop.run_in_executor(None, d.refresh.refresh_weather)
-        ws = weather_summary(weather)
-        if ws:
-            parts.append(ws)
+            await loop.run_in_executor(None, d.refresh.refresh_weather)
     except Exception:
         pass
 
-    loc = location_summary(d.state.get("location"))
-    if loc:
-        parts.append(loc)
-
-    # Time (always refresh for accuracy)
+    # Refresh time for accuracy
+    time_state = None
     try:
-        time_dict = await loop.run_in_executor(None, d.refresh.refresh_time)
-        ts = time_summary(time_dict, fmt="full")
-        parts.append(ts or "time: unavailable")
+        time_state = await loop.run_in_executor(None, d.refresh.refresh_time)
     except Exception:
-        parts.append("time: unavailable")
+        pass
 
     # Currently playing on Spotify
     def _get_session():
-        from .spotify_tools import _default_get_session
+        from ..services.spotify_session import get_spotify_session
 
-        return _default_get_session()
+        return get_spotify_session()
 
     np = await loop.run_in_executor(None, now_playing_summary, _get_session)
-    if np:
-        parts.append(np)
 
+    parts = build_ambient_context(d.state.get, now_playing=np, time_state=time_state)
     return "\n".join(parts)
 
 
-# Voice pipeline signal
-async def prompt_response(ctx: Context = None) -> str:
-    """Ask a follow-up question and wait for the user's spoken reply."""
-    d = get_daemon(ctx)
-    if d.bus is None:
-        return "Voice pipeline not available."
-    d.bus.emit("voice:prompt_reply")
-    return "Listening."
+async def stage_memory(
+    summary: Annotated[
+        str,
+        Field(description="Session summary to queue for Clarvis's next reflect cycle."),
+    ],
+    ctx: Context = None,
+) -> str:
+    """Stage a session summary for memory processing.
+
+    Called by /remember from Claude Code sessions. The summary is queued
+    and processed by Clarvis during the next reflect cycle.
+    """
+    from datetime import datetime, timezone
+
+    from ..core.persistence import json_load_safe, json_save_atomic
+
+    daemon = get_daemon(ctx)
+    queue_file = Path(daemon.staging_dir) / "remember_queue.json"
+    items = json_load_safe(queue_file) or []
+
+    items.append(
+        {
+            "summary": summary,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    json_save_atomic(queue_file, items)
+    return f"Queued for reflect ({len(items)} item{'s' if len(items) != 1 else ''} pending)."
 
 
-# --- Tool lists ---
+# --- Tool list ---
 
 _TOOLS = [
     ping,
     get_context,
-    prompt_response,
+    stage_memory,
 ]
 
-# --- Per-port tool configs ---
-# Each key controls a tool group; True = enabled, False = disabled,
-# dict = enabled with constraints (e.g. memory visibility).
+# --- Per-port tool config (only standard remains) ---
 
 STANDARD_TOOLS = {
     "spotify": False,
@@ -103,72 +120,15 @@ STANDARD_TOOLS = {
     "memory": False,
 }
 
-CLARVIS_TOOLS = {
-    "spotify": True,
-    "timers": True,
-    "channels": True,
-    "prompt_response": True,
-    "memory": True,
-}
-
-FACTORIA_DEFAULTS = {
-    "spotify": False,
-    "timers": False,
-    "channels": True,
-    "prompt_response": False,
-    "memory": {"visibility": "all"},
-}
-
 
 # --- App factory ---
 
 
-def create_app(daemon, tool_config, get_session=None):
-    """Create the Clarvis MCP server.
-
-    Args:
-        daemon: CentralHubDaemon instance (or mock with .state, .refresh, etc.).
-        tool_config: Dict controlling which tool groups are enabled.
-            Keys: ``spotify``, ``timers``, ``channels``, ``memory``,
-            ``prompt_response``.
-            Values: ``True`` (enabled), ``False`` (disabled), or
-            ``{key: value}`` (enabled with constraints).
-            Use STANDARD_TOOLS, CLARVIS_TOOLS, or FACTORIA_DEFAULTS.
-        get_session: Callable returning SpotifySession instance. Passed through
-            to spotify sub-server. Pass a mock factory for testing.
-    """
-
-    def _enabled(key: str) -> bool:
-        v = tool_config.get(key, True)
-        return bool(v)
-
+def create_app(daemon, tool_config=None):
+    """Create the Clarvis MCP server (standard tools only)."""
     app = FastMCP("clarvis", lifespan=make_lifespan(daemon))
-
-    # Core tools — filter prompt_response if disabled
     for fn in _TOOLS:
-        if fn is prompt_response and not _enabled("prompt_response"):
-            continue
         app.tool()(fn)
-
-    # Sub-servers
-    if _enabled("spotify"):
-        app.mount(create_spotify_server(get_session=get_session))
-    if _enabled("timers"):
-        app.mount(create_timer_server(daemon))
-    if _enabled("channels") and getattr(daemon, "channel_manager", None) is not None:
-        app.mount(create_channel_server(daemon))
-
-    # Memory + Knowledge — driven entirely by tool_config
-    mem_cfg = tool_config.get("memory", False)
-    if mem_cfg:
-        visibility = "master"
-        if isinstance(mem_cfg, dict) and "visibility" in mem_cfg:
-            visibility = mem_cfg["visibility"]
-        if daemon.hindsight_backend is not None:
-            app.mount(create_memory_server(daemon, visibility=visibility))
-        if daemon.cognee_backend is not None:
-            app.mount(create_knowledge_server(daemon, visibility=visibility))
-
     return app
 
 
@@ -179,69 +139,35 @@ async def run_embedded(
     daemon,
     host="127.0.0.1",
     port=7777,
-    clarvis_port=7778,
-    channel_ports=None,
-    clarvis_tools_override=None,
     ready: asyncio.Event | None = None,
 ):
-    """Run MCP servers embedded in daemon's event loop.
+    """Run MCP server embedded in daemon's event loop.
 
-    Port 7777: standard tools (ping, context, channels).
-    Port 7778: Clarvis agent tools (standard + memory + knowledge + spotify + timers).
-    Additional channel ports: one per unique tool_config across channels.
-
-    Args:
-        channel_ports: list of ``(tool_config, port)`` tuples.  Each gets
-            its own uvicorn server with a restricted tool surface.
-        clarvis_tools_override: dict of tool overrides from config.json clarvis.tools,
-            applied on top of STANDARD_TOOLS and CLARVIS_TOOLS defaults.
-        ready: if provided, set after all servers have bound their ports.
+    Port 7777: standard tools (ping, context, stage_memory).
     """
     import socket
 
     import uvicorn
 
-    standard_cfg = {**STANDARD_TOOLS, **(clarvis_tools_override or {})}
-    clarvis_cfg = {**CLARVIS_TOOLS, **(clarvis_tools_override or {})}
+    app = create_app(daemon, tool_config=STANDARD_TOOLS)
+    asgi = app.http_app(transport="streamable-http")
 
-    standard_app = create_app(daemon, tool_config=standard_cfg)
-    clarvis_app = create_app(daemon, tool_config=clarvis_cfg)
+    config = uvicorn.Config(asgi, host=host, port=port, log_level="warning")
+    srv = uvicorn.Server(config)
+    config.load()
+    srv.lifespan = config.lifespan_class(config)
 
-    entries: list[tuple[uvicorn.Server, socket.socket]] = []
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    sock.setblocking(False)
 
-    def _bind(asgi_app, bind_port: int) -> tuple[uvicorn.Server, socket.socket]:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((host, bind_port))
-        sock.set_inheritable(True)
-        cfg = uvicorn.Config(asgi_app, host=host, port=bind_port, log_level="warning")
-        return uvicorn.Server(cfg), sock
-
-    standard_asgi = standard_app.http_app(transport="streamable-http")
-    clarvis_asgi = clarvis_app.http_app(transport="streamable-http")
-
-    entries.append(_bind(standard_asgi, port))
-    entries.append(_bind(clarvis_asgi, clarvis_port))
-
-    for tool_cfg, ch_port in channel_ports or []:
-        ch_app = create_app(daemon, tool_config=tool_cfg)
-        ch_asgi = ch_app.http_app(transport="streamable-http")
-        entries.append(_bind(ch_asgi, ch_port))
-
-    # Phase 1: load config and start each server (binds + listens)
-    for srv, sock in entries:
-        if not srv.config.loaded:
-            srv.config.load()
-        srv.lifespan = srv.config.lifespan_class(srv.config)
-        await srv.startup(sockets=[sock])
-
-    if ready is not None:
+    await srv.startup(sockets=[sock])
+    if ready:
         ready.set()
 
-    # Phase 2: serve until shutdown
     try:
-        await asyncio.gather(*(srv.main_loop() for srv, _ in entries))
+        await srv.main_loop()
     finally:
-        for srv, sock in entries:
-            await srv.shutdown(sockets=[sock])
-            sock.close()
+        await srv.shutdown(sockets=[sock])
+        sock.close()

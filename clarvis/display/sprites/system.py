@@ -58,17 +58,23 @@ class FaceCel(Cel):
         ih = height - 2  # interior height (minus top/bottom borders)
         layout = {
             "edge_v": ord(template.edge),
-            "eyes_row": 1 + int(template.eyes_row * max(ih - 1, 0)),
-            "eyes_cols": [1 + int(c * max(iw - 1, 0)) for c in template.eyes_cols],
-            "mouth_row": 1 + int(template.mouth_row * max(ih - 1, 0)),
-            "mouth_col": 1 + int(template.mouth_col * max(iw - 1, 0)),
-            "substrate_row": 1 + int(template.substrate_row * max(ih - 1, 0)),
+            "eyes_row": 1 + round(template.eyes_row * max(ih - 1, 0)),
+            "eyes_cols": [1 + round(c * max(iw - 1, 0)) for c in template.eyes_cols],
+            "mouth_row": 1 + round(template.mouth_row * max(ih - 1, 0)),
+            "mouth_col": 1 + round(template.mouth_col * max(iw - 1, 0)),
+            "substrate_row": 1 + round(template.substrate_row * max(ih - 1, 0)),
         }
 
         # Resolve corners
         corner_names = palette.corners.get(
             template.default_corners, list(palette.corners.values())[0] if palette.corners else ["╭", "╮", "╰", "╯"]
         )
+
+        # Resolve default substrate
+        if template.default_substrate:
+            default_sub = palette.substrates.get(template.default_substrate, " " * iw)
+        else:
+            default_sub = " " * iw
 
         def _resolve_preset(preset):
             """Resolve a PresetSpec to a frame dict with char codes."""
@@ -88,7 +94,7 @@ class FaceCel(Cel):
 
             # Substrate
             sub_name = preset.substrate
-            substrate = palette.substrates.get(sub_name, " " * iw) if sub_name else " " * iw
+            substrate = palette.substrates.get(sub_name, " " * iw) if sub_name else default_sub
 
             return eye_char, mouth_char, border_char, cn, substrate
 

@@ -84,32 +84,43 @@ async def test_goal_seeding_lifecycle(tmp_path: Path):
 
 
 def test_scaffold_file_creation(tmp_path: Path):
-    """Creation of scaffold files and idempotency on re-run."""
+    """Creation of scaffold files from bundled templates and idempotency on re-run."""
     home = tmp_path / "home"
     home.mkdir()
 
-    # first run creates files
+    checkin_key = ".pi/skills/checkin/SKILL.md"
+    reflect_key = ".pi/skills/reflect/SKILL.md"
+
+    # first run creates files from bundled templates
     created = scaffold_checkin_files(home)
     assert created["seed_goals.yaml"] is True
-    assert created["skills/checkin.md"] is True
+    assert created[checkin_key] is True
+    assert created[reflect_key] is True
     assert (home / "seed_goals.yaml").exists()
-    assert (home / "skills" / "checkin.md").exists()
+    assert (home / ".pi" / "skills" / "checkin" / "SKILL.md").exists()
+    assert (home / ".pi" / "skills" / "reflect" / "SKILL.md").exists()
 
     seed_content = (home / "seed_goals.yaml").read_text()
     assert "goals:" in seed_content
     assert "knowledge graph" in seed_content
 
-    skill_content = (home / "skills" / "checkin.md").read_text()
-    assert "Check-in Skill" in skill_content
-    assert "Phase 1" in skill_content
+    # Skills are copied from bundled data/skills/ templates (not Python strings)
+    checkin_content = (home / ".pi" / "skills" / "checkin" / "SKILL.md").read_text()
+    assert "Check-in" in checkin_content
+    assert "name: checkin" in checkin_content
+
+    reflect_content = (home / ".pi" / "skills" / "reflect" / "SKILL.md").read_text()
+    assert "Reflect" in reflect_content
+    assert "name: reflect" in reflect_content
 
     # overwrite existing files with custom content
     (home / "seed_goals.yaml").write_text("custom: true", encoding="utf-8")
-    (home / "skills" / "checkin.md").write_text("# Custom checkin", encoding="utf-8")
+    (home / ".pi" / "skills" / "checkin" / "SKILL.md").write_text("# Custom checkin", encoding="utf-8")
 
     # re-run does not overwrite
     created = scaffold_checkin_files(home)
     assert created["seed_goals.yaml"] is False
-    assert created["skills/checkin.md"] is False
+    assert created[checkin_key] is False
+    assert created[reflect_key] is False
     assert (home / "seed_goals.yaml").read_text() == "custom: true"
-    assert (home / "skills" / "checkin.md").read_text() == "# Custom checkin"
+    assert (home / ".pi" / "skills" / "checkin" / "SKILL.md").read_text() == "# Custom checkin"

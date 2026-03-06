@@ -1,3 +1,3 @@
-from .agent import SessionProfile
+from .agent import Agent
 
-__all__ = ["SessionProfile"]
+__all__ = ["Agent"]

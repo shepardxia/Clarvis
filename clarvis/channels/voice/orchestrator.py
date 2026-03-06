@@ -529,9 +529,9 @@ class VoiceCommandOrchestrator:
 
         # Currently playing on Spotify (only if actively playing)
         try:
-            from ...mcp.spotify_tools import _default_get_session
+            from ...services.spotify_session import get_spotify_session
 
-            session = _default_get_session()
+            session = get_spotify_session()
             state = session._executor.player.state
             if state and state.is_playing and not state.is_paused and state.track:
                 m = state.track.metadata

@@ -1,23 +1,22 @@
 """PiBackend — event translation and error propagation."""
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from clarvis.agent.backends.pi import PiBackend
-from clarvis.agent.backends.protocol import BackendConfig
+from clarvis.agent.backends.pi import PiBackend, PiConfig
 
 
-def _make_config(**overrides) -> BackendConfig:
+def _make_config(**overrides) -> PiConfig:
     defaults = dict(
         session_key="test-voice",
         project_dir=Path("/tmp/clarvis-pi-test"),
-        session_id_path=Path("/tmp/clarvis-pi-test/session_id"),
     )
     defaults.update(overrides)
-    return BackendConfig(**defaults)
+    return PiConfig(**defaults)
 
 
 @pytest.mark.asyncio
@@ -49,6 +48,37 @@ async def test_send_translates_events():
         chunks.append(chunk)
 
     assert chunks == ["Hello", " world", None, "!"]
+
+
+@pytest.mark.asyncio
+async def test_reset_sends_command_and_waits():
+    """PiBackend.reset() sends reset command and waits for reset_done."""
+    config = _make_config()
+    backend = PiBackend(config)
+
+    backend._connected = True
+    backend._writer = MagicMock()
+    backend._writer.write = MagicMock()
+
+    response = json.dumps({"event": "reset_done"}) + "\n"
+    backend._reader = asyncio.StreamReader()
+    backend._reader.feed_data(response.encode())
+
+    await backend.reset()
+
+    written = backend._writer.write.call_args[0][0].decode()
+    cmd = json.loads(written)
+    assert cmd["method"] == "reset"
+
+
+@pytest.mark.asyncio
+async def test_reset_raises_when_not_connected():
+    """PiBackend.reset() raises if not connected."""
+    config = _make_config()
+    backend = PiBackend(config)
+
+    with pytest.raises(RuntimeError, match="not connected"):
+        await backend.reset()
 
 
 @pytest.mark.asyncio

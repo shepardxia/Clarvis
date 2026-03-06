@@ -1,50 +1,10 @@
-"""Spotify DSL MCP sub-server — mounted onto the main Clarvis server.
+"""Spotify DSL result formatting — converts raw clautify results to agent-readable text."""
 
-Single tool that accepts DSL command strings via the clautify package.
-Formats raw responses as concise text for LLM consumption.
-"""
-
-import asyncio
 import logging
 import re
-from contextlib import asynccontextmanager
-from typing import Annotated, Any
-
-from fastmcp import Context, FastMCP
-from pydantic import Field
+from typing import Any
 
 logger = logging.getLogger(__name__)
-
-# --- Default session factory (lazy init) ---
-
-_session_cache = {}
-
-
-def _default_get_session():
-    """Lazy SpotifySession singleton. Re-attempts on each call if previous init failed."""
-    if "instance" not in _session_cache:
-        from clautify.dsl import SpotifySession
-
-        session = SpotifySession.from_config(eager=False)
-        # Apply max volume from Clarvis config
-        try:
-            from ..display.config import get_config
-
-            session.max_volume = get_config().music.max_volume / 100
-        except Exception:
-            pass
-        check = session.health_check()
-        if check.get("authenticated"):
-            logger.info("Spotify health check passed")
-            _session_cache["instance"] = session
-        else:
-            logger.warning("Spotify health check FAILED: %s", check.get("error", "unknown"))
-            # Don't cache — next call will retry
-            return session
-    return _session_cache["instance"]
-
-
-# --- Formatting helpers ---
 
 
 def _dig(d: Any, *keys: str, default: Any = None) -> Any:
@@ -457,7 +417,7 @@ _QUERY_FORMATTERS = {
 }
 
 
-def _format_result(result: dict, session) -> str:
+def format_result(result: dict, session=None) -> str:
     """Format a clautify DSL result as concise text for LLM consumption."""
     if not isinstance(result, dict):
         return str(result)
@@ -477,99 +437,3 @@ def _format_result(result: dict, session) -> str:
 
     raw = str(result)
     return raw[:2000] + "... (truncated)" if len(raw) > 2000 else raw
-
-
-# --- Tool ---
-
-
-async def clautify(
-    command: Annotated[
-        str,
-        Field(description="A Spotify command."),
-    ],
-    ctx: Context = None,
-) -> str:
-    """Control Spotify playback, search, and library.
-
-    ACTIONS: play, pause, resume, skip, seek, queue
-             library add/remove/list/create/delete
-
-    QUERIES: search, info, recommend, status
-
-    MODIFIERS: volume, mode (shuffle/repeat/normal), device
-               limit, offset (for query results)
-
-    When acting on a specific item, specify its kind (track/album/artist/playlist) and target:
-
-        search artist "radiohead"
-
-    Targets are either a quoted "name" (resolved via fuzzy match) or a
-    Spotify ID returned in search results.
-
-        search track "karma police"          # returns IDs
-        play album "OK Computer Radiohead"   # fuzzy match works better with artist name included
-        play track 6rqhFgbbKwnb9MLmUQDhG6   # prefer IDs for exact matches
-        info album 6dVIqQ8qmQ5GBnJ9shOYGE   # richer detail than search
-        status                               # now playing, queue, devices, history
-        library list playlist limit 10                # 10 saved playlists
-
-    Queue and library add/remove are batchable:
-
-        queue track "Karma Police" "Paranoid Android"
-
-    Use play for albums and playlists.
-
-    Use "in <kind> <target>" for destination context. Kind is required:
-
-        library add track "Bohemian Rhapsody" in playlist "Classics"
-        recommend track 5 in playlist "丁A之之"
-
-    Limit and offset work on any query:
-
-        search track "karma police" limit 3
-
-    Playback modifiers work standalone or chained onto actions:
-
-        play playlist "Rages Cupped" mode shuffle volume 60
-        volume +10 device "Den"  # standalone (Den is the preferred device)
-        skip -2                              # negative = go back
-        seek 30                              # jump to 0:30
-
-    """
-    get_session = ctx.fastmcp._lifespan_result["get_session"]
-    loop = asyncio.get_running_loop()
-
-    try:
-
-        def _run():
-            session = get_session()
-            return session.run(command), session
-
-        result, session = await loop.run_in_executor(None, _run)
-    except Exception as e:
-        return str(e)
-
-    return _format_result(result, session)
-
-
-# --- Sub-server factory ---
-_TOOLS = [clautify]
-
-
-def create_spotify_server(get_session=None):
-    """Create the Spotify DSL MCP sub-server.
-
-    Args:
-        get_session: Callable returning a SpotifySession instance. Defaults to
-            lazy singleton via from_config(). Pass a mock factory for testing.
-    """
-    factory = get_session or _default_get_session
-
-    @asynccontextmanager
-    async def session_lifespan(server):
-        yield {"get_session": factory}
-
-    srv = FastMCP("clautify", lifespan=session_lifespan)
-    for fn in _TOOLS:
-        srv.tool()(fn)
-    return srv

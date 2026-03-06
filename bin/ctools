@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# ctools — Agent CLI for Clarvis daemon services.
+# Usage: ctools <command> [json_params]
+# Example: ctools recall '{"query": "music taste"}'
+#          ctools ping
+
+set -euo pipefail
+
+SOCKET="/tmp/clarvis-daemon.sock"
+METHOD="${1:?Usage: ctools <command> [json_params]}"
+PARAMS="${2:-{}}"
+
+echo "{\"method\": \"$METHOD\", \"params\": $PARAMS}" \
+  | nc -U "$SOCKET" -w 5 \
+  | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+if 'error' in data:
+    print(data['error'], file=sys.stderr); sys.exit(1)
+r = data.get('result', '')
+print(r if isinstance(r, str) else json.dumps(r, indent=2))
+"

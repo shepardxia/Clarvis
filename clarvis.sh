@@ -102,18 +102,8 @@ case "${1:-status}" in
             echo "Is the '$_chat_channel' channel configured and has the daemon started?"
             exit 1
         fi
-        # Detect backend from config.json
-        _backend=$(python3 -c "
-import json
-try:
-    c = json.load(open('config.json'))
-    print(c.get('channels', {}).get('agent_backend', 'claude-code'))
-except Exception:
-    print('claude-code')
-" 2>/dev/null)
-        if [ "$_backend" = "pi" ]; then
-            _session_file="$_chat_dir/pi-session.jsonl"
-            _model=$(python3 -c "
+        _session_file="$_chat_dir/pi-session.jsonl"
+        _model=$(python3 -c "
 import json
 try:
     c = json.load(open('config.json'))
@@ -121,24 +111,11 @@ try:
 except Exception:
     print('claude-sonnet-4-5')
 " 2>/dev/null)
-            if $_chat_new; then
-                rm -f "$_session_file"
-            fi
-            cd "$_chat_dir" || exit 1
-            exec pi --model "$_model" --session "$_session_file"
-        else
-            cd "$_chat_dir" || exit 1
-            if $_chat_new; then
-                exec claude
-            else
-                sid_file="$_chat_dir/session_id"
-                if [ -f "$sid_file" ]; then
-                    exec claude --resume "$(cat "$sid_file")"
-                else
-                    exec claude --continue
-                fi
-            fi
+        if $_chat_new; then
+            rm -f "$_session_file"
         fi
+        cd "$_chat_dir" || exit 1
+        exec pi --model "$_model" --session "$_session_file"
         ;;
     add)
         case "$2" in
@@ -252,21 +229,12 @@ except Exception as e:
             echo "Has the daemon started at least once?"
             exit 1
         fi
-        _backend=$(python3 -c "
-import json
-try:
-    c = json.load(open('config.json'))
-    print(c.get('channels', {}).get('agent_backend', 'claude-code'))
-except Exception:
-    print('claude-code')
-" 2>/dev/null)
         echo ""
         echo "Starting check-in session..."
         echo "Tip: Ask Clarvis to run the checkin skill, or say 'let's do a check-in'"
         echo ""
-        if [ "$_backend" = "pi" ]; then
-            cd "$_checkin_dir" || exit 1
-            exec pi --model "$(python3 -c "
+        cd "$_checkin_dir" || exit 1
+        exec pi --model "$(python3 -c "
 import json
 try:
     c = json.load(open('$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")/config.json'))
@@ -274,10 +242,6 @@ try:
 except Exception:
     print('claude-sonnet-4-5')
 " 2>/dev/null)" --prompt "Let's do a memory check-in. Start by reviewing any staged changes, then review active goals."
-        else
-            cd "$_checkin_dir" || exit 1
-            exec claude --prompt "Let's do a memory check-in. Start by reviewing any staged changes, then review active goals."
-        fi
         ;;
     new)
         rm -f "$HOME/.clarvis/clarvis/session_id"

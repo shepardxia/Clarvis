@@ -8,6 +8,7 @@ Clarvis is the agent; this is the storage and retrieval layer.
 """
 
 import logging
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,7 @@ class HindsightStore:
         *,
         fact_type: str | None = None,
         search_query: str | None = None,
+        since: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
         tags: list[str] | None = None,
@@ -178,6 +180,7 @@ class HindsightStore:
             bank,
             fact_type=fact_type,
             search_query=search_query,
+            since=since,
             limit=limit,
             offset=offset,
             request_context=self._rc(),
@@ -369,6 +372,7 @@ class HindsightStore:
         *,
         tags: list[str] | None = None,
         tags_match: str = "any",
+        since: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -378,6 +382,7 @@ class HindsightStore:
             bank,
             tags=tags,
             tags_match=tags_match,
+            since=since,
             limit=limit,
             offset=offset,
             request_context=self._rc(),
@@ -413,6 +418,7 @@ class HindsightStore:
         *,
         tags: list[str] | None = None,
         tags_match: str = "any",
+        since: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -422,6 +428,7 @@ class HindsightStore:
             bank,
             tags=tags,
             tags_match=tags_match,
+            since=since,
             limit=limit,
             offset=offset,
             request_context=self._rc(),

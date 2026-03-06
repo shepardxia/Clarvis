@@ -33,7 +33,6 @@ from .display.refresh_manager import RefreshManager
 from .display.socket_server import WidgetSocketServer, get_socket_server
 from .display.sprites.system import MicControl
 from .hooks.hook_processor import HookProcessor
-from .services.context_accumulator import ContextAccumulator
 from .services.session_tracker import SessionTracker
 from .services.timer_service import TimerService
 
@@ -125,12 +124,11 @@ class CentralHubDaemon:
         self.command_server = DaemonServer()
         self.wake_word_service = None
         self._agents = {}  # str -> Agent, populated by _init_agents / _init_channel_manager
-        self._force_new = False  # Set from CLARVIS_NEW_CONVERSATION env var
         self.voice_orchestrator = None
         self.channel_manager = None
-        self.context_accumulator = None
-        self.memory_maintenance = None
+        self.staging_dir = Path.home() / ".clarvis" / "staging"
         self._wakeup_manager = None
+        self._session_reader = None
         self._owned_services: list = []  # services with no other refs (prevent GC)
 
         # Memory backends (optional — requires hindsight + cognee)
@@ -139,7 +137,6 @@ class CentralHubDaemon:
         self.memory_store = None  # Compat alias — used by mcp/memory_tools.py
         self.cognee_backend = None
         self.document_watcher = None
-        self.transcript_reader = None
         if config.memory.enabled:
             try:
                 from .memory.store import HindsightStore
@@ -172,17 +169,6 @@ class CentralHubDaemon:
             except ImportError:
                 logger.info("cognee not installed — knowledge graph disabled")
 
-            # TranscriptReader — reads session transcripts on demand for retain
-            try:
-                from .agent.memory.transcript_reader import TranscriptReader
-
-                data_dir = Path(config.memory.data_dir).expanduser()
-                self.transcript_reader = TranscriptReader(
-                    watermark_path=data_dir / "session_watcher_state.json",
-                )
-            except ImportError:
-                pass
-
             if self.cognee_backend is not None:
                 try:
                     from .agent.memory.document_watcher import DocumentWatcher
@@ -196,11 +182,6 @@ class CentralHubDaemon:
                     )
                 except ImportError:
                     logger.info("document_watcher deps not available")
-        # Home project slug — only stage sessions from this project.
-        # Encode path the same way Claude Code names its projects/ dirs:
-        # replace "." → "-", then "/" → "-".
-        _clarvis_path = str(Path.home() / ".clarvis" / "clarvis")
-        self._clarvis_slug = _clarvis_path.replace(".", "-").replace("/", "-")
         self.ctx: AppContext | None = None
         self._mcp_task: asyncio.Task | None = None
         self._staleness_handle: asyncio.TimerHandle | None = None
@@ -344,6 +325,17 @@ class CentralHubDaemon:
         display_status = status.get("status", "idle") if status else "idle"
         return display_status, context_percent
 
+    # --- Service getters for ctools ---
+
+    def _get_spotify_session(self):
+        """Lazy SpotifySession getter."""
+        try:
+            from .services.spotify_session import get_spotify_session
+
+            return get_spotify_session()
+        except Exception:
+            return None
+
     # --- Voice pipeline ---
 
     def _init_agents(self) -> None:
@@ -357,8 +349,6 @@ class CentralHubDaemon:
             return
 
         config = self.ctx.config
-        self._force_new = bool(os.environ.pop("CLARVIS_NEW_CONVERSATION", None))
-
         # Read channels config early — needed by both voice gate and _init_channel_manager
         raw_config = json_load_safe(CONFIG_PATH) or {}
         self._channels_config = raw_config.get("channels") or {}
@@ -372,11 +362,8 @@ class CentralHubDaemon:
             from .channels.agent_factory import create_clarvis_agent
 
             agent = create_clarvis_agent(
-                event_loop=self.ctx.loop,
                 model=config.clarvis.model,
                 max_thinking_tokens=config.clarvis.max_thinking_tokens,
-                force_new=self._force_new,
-                mcp_port=config.mcp.clarvis_port,
             )
             self._agents["clarvis"] = agent
 
@@ -434,12 +421,9 @@ class CentralHubDaemon:
     def _init_wakeup(self) -> None:
         """Wire WakeupManager for autonomous context-rich prompts.
 
-        Only active when backend is 'pi' and wakeup is enabled.
         Called from run() after agents are created.
         """
         config = self.ctx.config
-        if config.channels.agent_backend != "pi":
-            return
         if not config.channels.wakeup.enabled:
             return
 
@@ -449,21 +433,10 @@ class CentralHubDaemon:
 
         from .services.wakeup import WakeupManager
 
-        # Lazy Spotify session getter (same as MCP tools use)
-        def _get_spotify_session():
-            try:
-                from .mcp.spotify_tools import _default_get_session
-
-                return _default_get_session()
-            except Exception:
-                return None
-
         self._wakeup_manager = WakeupManager(
             agent=clarvis_agent,
             state_store=self.state,
-            memory_service=self.hindsight_store,
-            get_spotify_session=_get_spotify_session,
-            accumulator=self.context_accumulator,
+            get_spotify_session=self._get_spotify_session,
         )
 
         # Register pulse wakeup with scheduler
@@ -473,14 +446,6 @@ class CentralHubDaemon:
             lambda: asyncio.create_task(self._wakeup_manager.on_pulse()),
             active_interval=pulse_secs,
             idle_interval=pulse_secs * 2,
-        )
-
-        # Register nudge for pending session processing
-        self.scheduler.register(
-            "nudge",
-            lambda: asyncio.create_task(self._wakeup_manager.on_nudge()),
-            active_interval=3600,
-            idle_interval=3600,
         )
 
         # Subscribe to timer:fired for wake_clarvis timers
@@ -511,28 +476,11 @@ class CentralHubDaemon:
             from .channels.manager import ChannelManager
             from .channels.registry import UserRegistry
             from .channels.state import ChannelState
-            from .mcp.server import FACTORIA_DEFAULTS
-
-            # Determine MCP port and tools config for Factoria
-            # Merge order: FACTORIA_DEFAULTS ← channels.tools ← per-channel tools
-            tools_cfg = dict(FACTORIA_DEFAULTS)
-            if config.channels.tools:
-                tools_cfg.update(config.channels.tools)
-            for ch_cfg in channels_config.values():
-                if not isinstance(ch_cfg, dict):
-                    continue
-                if ch_cfg.get("enabled"):
-                    tools_cfg.update(ch_cfg.get("tools", {}))
-            ch_port = config.mcp.factoria_port
-            self._channel_ports = [(tools_cfg, ch_port)]
 
             # Factoria agent for all online channels
             factoria_agent = create_factoria_agent(
-                event_loop=self.ctx.loop,
                 model=config.channels.model or config.clarvis.model,
                 max_thinking_tokens=config.channels.max_thinking_tokens or config.clarvis.max_thinking_tokens,
-                force_new=self._force_new,
-                mcp_port=ch_port,
             )
             self._agents["factoria"] = factoria_agent
 
@@ -740,9 +688,6 @@ class CentralHubDaemon:
             )
         )
 
-        # Memory maintenance — nudge system handles reflect via WakeupManager.
-        # Legacy retain kept for watermark compatibility.
-
         self.scheduler.start()
 
     async def stop(self) -> None:
@@ -808,6 +753,27 @@ class CentralHubDaemon:
             except Exception:
                 pass
 
+    async def reset_all_agents(self) -> None:
+        """Reset all agent sessions (called after reflect)."""
+        for name, agent in self._agents.items():
+            try:
+                await agent.reset()
+                logger.info("Reset agent session: %s", name)
+            except Exception:
+                logger.warning("Failed to reset agent %s", name, exc_info=True)
+
+    async def complete_reflect(self) -> dict:
+        """Finalize reflect: advance watermarks, clear queue, reset agents."""
+        from .core.persistence import json_save_atomic
+
+        if self._session_reader:
+            self._session_reader.advance_all()
+        queue_file = self.staging_dir / "remember_queue.json"
+        if queue_file.exists():
+            json_save_atomic(queue_file, [])
+        await self.reset_all_agents()
+        return {"status": "reflect complete"}
+
     async def run(self) -> None:
         """Run the daemon until interrupted."""
         loop = asyncio.get_running_loop()
@@ -820,22 +786,17 @@ class CentralHubDaemon:
         )
         self._shutdown_event = asyncio.Event()
 
-        # Services that need AppContext — create here, before start()
-        self.context_accumulator = ContextAccumulator(
-            ctx=self.ctx,
-            clarvis_slug=self._clarvis_slug,
+        # Create SessionReader for Pi session files
+        from .agent.memory.session_reader import SessionReader
+
+        home = Path.home() / ".clarvis"
+        self._session_reader = SessionReader(
+            sources={
+                "clarvis": home / "home" / "pi-session.jsonl",
+                "factoria": home / "channels" / "pi-session.jsonl",
+            },
+            watermark_file=self.staging_dir / "session_watermarks.json",
         )
-
-        # Memory maintenance — legacy retain (reflect now via nudge system)
-        if self.hindsight_store is not None and self.transcript_reader is not None:
-            from .services.memory_maintenance import MemoryMaintenanceService
-
-            self.memory_maintenance = MemoryMaintenanceService(
-                ctx=self.ctx,
-                store=self.hindsight_store,
-                context_accumulator=self.context_accumulator,
-                transcript_reader=self.transcript_reader,
-            )
 
         self.commands = CommandHandlers(
             ctx=self.ctx,
@@ -844,11 +805,15 @@ class CentralHubDaemon:
             command_server=self.command_server,
             services={
                 "voice": lambda: self.voice_orchestrator,
-                "memory": lambda: self.hindsight_store,
-                "cognee": lambda: self.cognee_backend,
+                "hindsight_store": lambda: self.hindsight_store,
+                "cognee_backend": lambda: self.cognee_backend,
                 "agents": lambda: self._agents,
-                "maintenance": lambda: self.memory_maintenance,
                 "wakeup": lambda: self._wakeup_manager,
+                "spotify_session": lambda: self._get_spotify_session(),
+                "timer_service": lambda: self.timer_service,
+                "channel_manager": lambda: self.channel_manager,
+                "daemon": lambda: self,
+                "session_reader": lambda: self._session_reader,
             },
         )
 
@@ -864,12 +829,10 @@ class CentralHubDaemon:
         # Start channel manager (chat channels, gated behind channels extra)
         await self._init_channel_manager()
 
-        # Start embedded MCP servers — must be listening BEFORE eager-connect,
+        # Start embedded MCP server — must be listening BEFORE eager-connect,
         # otherwise CLI subprocesses hang trying to reach their MCP port.
         from .mcp.server import run_embedded
 
-        channel_ports = getattr(self, "_channel_ports", None)
-        clarvis_tools = self.ctx.config.clarvis.tools or None
         mcp_ready = asyncio.Event()
         mcp_error: list[BaseException] = []
 
@@ -880,15 +843,12 @@ class CentralHubDaemon:
                 mcp_error.append(exc)
                 mcp_ready.set()  # unblock the wait
 
-        logger.info("Starting MCP servers…")
+        logger.info("Starting MCP server…")
         mcp_cfg = self.ctx.config.mcp
         self._mcp_task = asyncio.create_task(
             run_embedded(
                 self,
                 port=mcp_cfg.standard_port,
-                clarvis_port=mcp_cfg.clarvis_port,
-                channel_ports=channel_ports,
-                clarvis_tools_override=clarvis_tools,
                 ready=mcp_ready,
             )
         )
@@ -897,16 +857,13 @@ class CentralHubDaemon:
         try:
             await asyncio.wait_for(mcp_ready.wait(), timeout=10.0)
         except asyncio.TimeoutError:
-            logger.error("MCP servers failed to bind within 10s — check for port conflicts")
+            logger.error("MCP server failed to bind within 10s — check for port conflicts")
             raise RuntimeError("MCP server startup timed out")
 
         if mcp_error:
             raise RuntimeError(f"MCP server failed to start: {mcp_error[0]}")
 
-        port_info = f":{mcp_cfg.standard_port} :{mcp_cfg.clarvis_port}"
-        for _, cp in channel_ports or []:
-            port_info += f" :{cp}"
-        logger.info("MCP ports ready: %s", port_info)
+        logger.info("MCP server ready on :%d", mcp_cfg.standard_port)
 
         # Eager-connect agents — MCP servers are listening, CLI won't hang
         if self._agents:

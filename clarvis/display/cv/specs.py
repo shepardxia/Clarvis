@@ -40,8 +40,9 @@ class TemplateSpec:
     name: str
     edge: str = "│"
     default_corners: str = "round"
+    default_substrate: str | None = None
     eyes_row: float = 0.0
-    eyes_cols: list[float] = field(default_factory=lambda: [0.33, 0.56])
+    eyes_cols: list[float] = field(default_factory=lambda: [0.3, 0.7])
     mouth_row: float = 0.5
     mouth_col: float = 0.5
     substrate_row: float = 1.0

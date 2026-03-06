@@ -3,7 +3,8 @@
 template box_face {
     edge "│"
     default_corners round
-    eyes row=0.0 cols=[0.33 0.56]
+    default_substrate idle
+    eyes row=0.0 cols=[0.3 0.7]
     mouth row=0.5 col=0.5
     substrate row=1.0
 }
@@ -53,9 +54,9 @@ palette classic {
         sad { eyes=half mouth=neutral border=thin }
 
         # Active states
-        thinking { eyes=half mouth=neutral border=thin }
-        focused { eyes=dot mouth=flat border=arrow corners=heavy }
-        intense { eyes=intense mouth=flat border=thick corners=heavy }
+        thinking { eyes=half mouth=neutral border=thin substrate=thinking }
+        focused { eyes=dot mouth=flat border=arrow corners=heavy substrate=thinking }
+        intense { eyes=intense mouth=flat border=thick corners=heavy substrate=thinking }
 
         # Blink frames
         blink_start { eyes=half mouth=smile border=thin }
@@ -76,8 +77,8 @@ palette classic {
         satisfied { eyes=open mouth=smile border=thin }
 
         # Running/executing
-        running { eyes=dot mouth=flat border=arrow corners=heavy }
-        running_intense { eyes=intense mouth=flat border=arrow_thick corners=heavy }
+        running { eyes=dot mouth=flat border=arrow corners=heavy substrate=thinking }
+        running_intense { eyes=intense mouth=flat border=arrow_thick corners=heavy substrate=thinking }
 
         # Reading
         scan_left { eyes=left mouth=neutral border=thin }
@@ -93,11 +94,11 @@ palette classic {
         curious { eyes=wide mouth=smile border=dotted }
 
         # Thinking (deep)
-        pondering { eyes=open mouth=neutral border=medium corners=heavy }
+        pondering { eyes=open mouth=neutral border=medium corners=heavy substrate=thinking }
 
         # Reviewing
-        reviewing { eyes=open mouth=neutral border=thick }
-        examining { eyes=wide mouth=neutral border=thick }
+        reviewing { eyes=open mouth=neutral border=thick substrate=thinking }
+        examining { eyes=wide mouth=neutral border=thick substrate=thinking }
 
         # Offline
         offline { eyes=closed mouth=neutral border=thin }

@@ -126,6 +126,9 @@ class CvTransformer(Transformer):
     def template_default_corners(self, items):
         return ("default_corners", str(items[0]))
 
+    def template_default_substrate(self, items):
+        return ("default_substrate", str(items[0]))
+
     def template_eyes(self, items):
         kvs = dict(items)
         result = {}

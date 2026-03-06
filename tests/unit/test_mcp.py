@@ -82,12 +82,7 @@ def mock_daemon(loop, tmp_path):
     daemon.staging_store = MagicMock()
     daemon.staging_store.list_staged.return_value = []
     daemon.memory_service = None
-    daemon.context_accumulator = MagicMock()
-    daemon.context_accumulator.get_pending.return_value = {
-        "sessions_since_last": [],
-        "staged_items": [],
-        "last_check_in": "2026-02-06T12:00:00+00:00",
-    }
+    daemon.staging_dir = str(tmp_path / "staging")
 
     bus = SignalBus(loop)
     daemon.bus = bus
@@ -134,7 +129,7 @@ async def test_standard_tools_registered(client):
     """Standard port has core tools but NOT memory, spotify, timers, or prompt_response."""
     tools = await client.list_tools()
     names = {t.name for t in tools}
-    assert {"ping", "get_context"} <= names
+    assert {"ping", "get_context", "stage_memory"} <= names
     assert "clautify" not in names
     assert "set_timer" not in names
     assert "prompt_response" not in names

@@ -151,12 +151,16 @@ def _create_sprite(sspec, w, h, priority, cv_registry, elem_registry):
         sequences = {s.name: s for s in sequences_list}
         if not sequences:
             raise ValueError(f"No sequences found for skin '{skin}'")
+        face_w = int(sspec.properties.get("width", 11))
+        face_h = int(sspec.properties.get("height", 5))
         return FaceCel.from_specs(
             template=template,
             palette=palette,
             sequences=sequences,
             x=0,
             y=0,  # resolved later
+            width=face_w,
+            height=face_h,
             priority=priority,
         )
 

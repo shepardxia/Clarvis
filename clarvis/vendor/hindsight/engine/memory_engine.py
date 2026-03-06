@@ -4166,6 +4166,7 @@ class MemoryEngine(MemoryEngineInterface):
         *,
         fact_type: str | None = None,
         search_query: str | None = None,
+        since: "datetime | None" = None,
         limit: int = 100,
         offset: int = 0,
         request_context: "RequestContext",
@@ -4177,6 +4178,7 @@ class MemoryEngine(MemoryEngineInterface):
             bank_id: Filter by bank ID
             fact_type: Filter by fact type (world, experience, opinion)
             search_query: Full-text search query (searches text and context fields)
+            since: Only return units created/updated after this timestamp.
             limit: Maximum number of results to return
             offset: Offset for pagination
             request_context: Request context for authentication.
@@ -4207,6 +4209,11 @@ class MemoryEngine(MemoryEngineInterface):
                 param_count += 1
                 query_conditions.append(f"(text ILIKE ${param_count} OR context ILIKE ${param_count})")
                 query_params.append(f"%{search_query}%")
+
+            if since is not None:
+                param_count += 1
+                query_conditions.append(f"created_at >= ${param_count}")
+                query_params.append(since)
 
             where_clause = "WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
@@ -5729,6 +5736,7 @@ class MemoryEngine(MemoryEngineInterface):
         *,
         tags: list[str] | None = None,
         tags_match: str = "any",
+        since: "datetime | None" = None,
         limit: int = 100,
         offset: int = 0,
         request_context: "RequestContext",
@@ -5742,6 +5750,7 @@ class MemoryEngine(MemoryEngineInterface):
             bank_id: Bank identifier
             tags: Optional tags to filter by
             tags_match: How to match tags - 'any', 'all', or 'exact'
+            since: Only return observations updated after this timestamp.
             limit: Maximum number of results
             offset: Offset for pagination
             request_context: Request context for authentication
@@ -5765,11 +5774,17 @@ class MemoryEngine(MemoryEngineInterface):
                     tag_filter = " AND tags && $4::varchar[]"
                 params.append(tags)
 
+            since_filter = ""
+            if since is not None:
+                since_idx = len(params) + 1
+                since_filter = f" AND updated_at >= ${since_idx}"
+                params.append(since)
+
             rows = await conn.fetch(
                 f"""
                 SELECT id, bank_id, text, proof_count, history, tags, source_memory_ids, created_at, updated_at
                 FROM {fq_table("memory_units")}
-                WHERE bank_id = $1 AND fact_type = 'observation' {tag_filter}
+                WHERE bank_id = $1 AND fact_type = 'observation' {tag_filter}{since_filter}
                 ORDER BY updated_at DESC NULLS LAST
                 LIMIT $2 OFFSET $3
                 """,
@@ -5879,6 +5894,7 @@ class MemoryEngine(MemoryEngineInterface):
         *,
         tags: list[str] | None = None,
         tags_match: str = "any",
+        since: "datetime | None" = None,
         limit: int = 100,
         offset: int = 0,
         request_context: "RequestContext",
@@ -5889,6 +5905,7 @@ class MemoryEngine(MemoryEngineInterface):
             bank_id: Bank identifier
             tags: Optional tags to filter by
             tags_match: How to match tags - 'any', 'all', or 'exact'
+            since: Only return models refreshed after this timestamp.
             limit: Maximum number of results
             offset: Offset for pagination
             request_context: Request context for authentication
@@ -5912,13 +5929,19 @@ class MemoryEngine(MemoryEngineInterface):
                     tag_filter = " AND tags && $4::varchar[]"
                 params.append(tags)
 
+            since_filter = ""
+            if since is not None:
+                since_idx = len(params) + 1
+                since_filter = f" AND last_refreshed_at >= ${since_idx}"
+                params.append(since)
+
             rows = await conn.fetch(
                 f"""
                 SELECT id, bank_id, name, source_query, content, tags,
                        last_refreshed_at, created_at, reflect_response,
                        max_tokens, trigger
                 FROM {fq_table("mental_models")}
-                WHERE bank_id = $1 {tag_filter}
+                WHERE bank_id = $1 {tag_filter}{since_filter}
                 ORDER BY last_refreshed_at DESC
                 LIMIT $2 OFFSET $3
                 """,

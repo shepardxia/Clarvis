@@ -233,7 +233,9 @@ class VoiceConfig(BaseModel):
 class ClarvisAgentConfig(BaseModel):
     """Configuration for the Clarvis agent (model, tools, timeouts)."""
 
-    model: str | None = Field(default=None, description="Claude model alias (e.g. 'sonnet', 'haiku', 'opus')")
+    model: str | None = Field(
+        default=None, description="Claude model ID (e.g. 'claude-sonnet-4-6', 'claude-haiku-4-5')"
+    )
     max_thinking_tokens: int | None = Field(default=None, description="Max thinking tokens (None = SDK default)")
     idle_timeout: float = Field(default=3600.0, description="Seconds before Clarvis agent disconnects")
     tools: dict[str, Any] = Field(
@@ -275,11 +277,11 @@ class WakeupConfig(BaseModel):
 
 
 class McpConfig(BaseModel):
-    """MCP server port assignments."""
+    """MCP server port assignment."""
 
-    standard_port: int = Field(default=7777, description="Standard MCP tools (ping, context, channels)")
-    clarvis_port: int = Field(default=7778, description="Clarvis agent tools (standard + memory + spotify + timers)")
-    factoria_port: int = Field(default=7779, description="Factoria agent MCP port")
+    model_config = ConfigDict(extra="ignore")
+
+    standard_port: int = Field(default=7777, description="MCP tools for Claude Code (ping, context, stage_memory)")
 
 
 # ── Channels extra ─────────────────────────────────────────────────
@@ -290,9 +292,6 @@ class ChannelsConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")  # per-channel dicts pass through
 
-    agent_backend: str = Field(
-        default="claude-code", description="Agent backend type: 'claude-code' (SDK) or 'pi' (local pi-agent)"
-    )
     model: str | None = Field(default=None, description="Claude model for Factoria (falls back to clarvis.model)")
     max_thinking_tokens: int | None = Field(
         default=None, description="Max thinking tokens (falls back to clarvis.max_thinking_tokens)"

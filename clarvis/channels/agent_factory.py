@@ -1,113 +1,45 @@
-"""Agent factory -- creates master and channel agents.
+"""Agent factory -- creates Clarvis and Factoria agents.
 
-Extracted from daemon.py to centralize agent construction logic.
-Reads ``channels.agent_backend`` from config to decide which backend
-(``claude-code`` or ``pi``) to construct and passes it to ``Agent``.
+Constructs PiBackend directly — no backend selection logic needed.
 """
 
-import asyncio
 import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def _get_backend_type() -> str:
-    """Read agent_backend from config, defaulting to 'claude-code'."""
-    try:
-        from ..display.config import get_config
-
-        cfg = get_config()
-        return cfg.channels.agent_backend
-    except Exception:
-        return "claude-code"
-
-
-def _create_backend(
-    profile,  # SessionProfile
-    backend_type: str,
-    model: str | None = None,
-    max_thinking_tokens: int | None = None,
-    force_new: bool = False,
-    system_prompt: str | None = None,
-):
-    """Create the appropriate backend based on config.
-
-    Returns:
-        An ``AgentBackend``-compatible instance.
-    """
-    from ..agent.backends.protocol import BackendConfig
-
-    config = BackendConfig(
-        session_key=profile.project_dir.name,  # "home" or "channels"
-        project_dir=profile.project_dir,
-        session_id_path=profile.session_id_path,
-        system_prompt=system_prompt,
-        model=model,
-        max_thinking_tokens=max_thinking_tokens,
-        mcp_port=profile.mcp_port,
-        allowed_tools=profile.allowed_tools,
-    )
-
-    if backend_type == "pi":
-        from ..agent.backends.pi import PiBackend
-
-        return PiBackend(config)
-    else:
-        from ..agent.backends.claude_code import ClaudeCodeBackend
-
-        return ClaudeCodeBackend(config, force_new=force_new)
-
-
 def _create_agent(
     session_key: str,
     project_dir: Path,
-    mcp_port: int,
-    event_loop: asyncio.AbstractEventLoop,
     model: str | None = None,
     max_thinking_tokens: int | None = None,
-    force_new: bool = False,
 ):
-    """Shared agent construction: profile → backend → Agent → ensure_project_dir."""
-    from ..agent.agent import VOICE_ALLOWED_TOOLS, Agent, SessionProfile
+    """Shared agent construction: config → Agent → ensure_project_dir."""
+    from ..agent.agent import Agent
+    from ..agent.backends.pi import PiConfig
 
-    profile = SessionProfile(
+    config = PiConfig(
+        session_key=session_key,
         project_dir=project_dir,
-        session_id_path=project_dir / "session_id",
-        allowed_tools=VOICE_ALLOWED_TOOLS,
-        mcp_port=mcp_port,
-    )
-    backend = _create_backend(
-        profile=profile,
-        backend_type=_get_backend_type(),
         model=model,
         max_thinking_tokens=max_thinking_tokens,
-        force_new=force_new,
     )
-    agent = Agent(
-        session_key=session_key,
-        profile=profile,
-        event_loop=event_loop,
-        backend=backend,
-        force_new=force_new,
-    )
+    agent = Agent(config)
     agent.ensure_project_dir()
     return agent
 
 
 def create_clarvis_agent(
-    event_loop: asyncio.AbstractEventLoop,
     model: str | None = None,
     max_thinking_tokens: int | None = None,
-    force_new: bool = False,
-    mcp_port: int = 7778,
 ):
     """Create the Clarvis agent (voice + terminal) at ~/.clarvis/home/."""
     clarvis_home = Path.home() / ".clarvis" / "home"
-    agent = _create_agent("voice", clarvis_home, mcp_port, event_loop, model, max_thinking_tokens, force_new)
+    agent = _create_agent("voice", clarvis_home, model, max_thinking_tokens)
 
-    # Scaffold CLAUDE.md if missing — both Claude Code and Pi read it
-    # (Pi's DefaultResourceLoader checks AGENTS.md then CLAUDE.md).
+    # Scaffold CLAUDE.md if missing — Pi's DefaultResourceLoader checks
+    # AGENTS.md then CLAUDE.md.
     claude_md = clarvis_home / "CLAUDE.md"
     if not claude_md.exists():
         claude_md.write_text(
@@ -130,17 +62,14 @@ def create_clarvis_agent(
 
 
 def create_factoria_agent(
-    event_loop: asyncio.AbstractEventLoop,
     model: str | None = None,
     max_thinking_tokens: int | None = None,
-    force_new: bool = False,
-    mcp_port: int = 7779,
 ):
     """Create the Factoria agent (online channels) at ~/.clarvis/channels/."""
     channels_dir = Path.home() / ".clarvis" / "channels"
-    agent = _create_agent("channels", channels_dir, mcp_port, event_loop, model, max_thinking_tokens, force_new)
+    agent = _create_agent("channels", channels_dir, model, max_thinking_tokens)
 
-    # Scaffold CLAUDE.md if missing — both Claude Code and Pi read it.
+    # Scaffold CLAUDE.md if missing — Pi's DefaultResourceLoader reads it.
     claude_md = channels_dir / "CLAUDE.md"
     if not claude_md.exists():
         claude_md.write_text(

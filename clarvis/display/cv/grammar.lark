@@ -35,6 +35,7 @@ preset_assign: NAME "=" NAME
 template_block: "template" NAME "{" template_body* "}"
 ?template_body: "edge" ESCAPED_STRING                 -> template_edge
               | "default_corners" NAME                -> template_default_corners
+              | "default_substrate" NAME               -> template_default_substrate
               | "eyes" kv_pair+                        -> template_eyes
               | "mouth" kv_pair+                       -> template_mouth
               | "substrate" kv_pair+                   -> template_substrate

@@ -11,11 +11,21 @@ import logging
 import os
 import signal
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 
-from .protocol import BackendConfig
-
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PiConfig:
+    """Configuration for the Pi bridge backend."""
+
+    session_key: str
+    project_dir: Path
+    model: str | None = None
+    max_thinking_tokens: int | None = None
+
 
 # Resolve pi-bridge relative to this file:
 #   backends/ → agent/ → pi-bridge/
@@ -30,7 +40,7 @@ def _subprocess_env() -> dict[str, str]:
 class PiBackend:
     """Backend that drives a pi-coding-agent bridge subprocess."""
 
-    def __init__(self, config: BackendConfig):
+    def __init__(self, config: PiConfig):
         self._config = config
         self._process: asyncio.subprocess.Process | None = None
         self._reader: asyncio.StreamReader | None = None
@@ -65,8 +75,6 @@ class PiBackend:
         env["PI_BRIDGE_CWD"] = str(self._config.project_dir)
         env["PI_BRIDGE_SESSION_FILE"] = str(self._session_file)
 
-        if self._config.mcp_port:
-            env["PI_BRIDGE_MCP_PORT"] = str(self._config.mcp_port)
         if self._config.model:
             env["PI_BRIDGE_MODEL"] = self._config.model
         # Read thinking level from PiConfig via widget config
@@ -212,6 +220,31 @@ class PiBackend:
                 return
             if event.get("event") == "error":
                 raise RuntimeError(f"Reload failed: {event.get('message')}")
+
+    async def reset(self) -> None:
+        """Reset the Pi session — starts a fresh conversation.
+
+        Calls session.newSession() on the bridge. The session file
+        retains full history (tree structure); active context is cleared.
+        """
+        if not self._connected or not self._writer or not self._reader:
+            raise RuntimeError("PiBackend not connected")
+
+        self._send_command({"method": "reset"})
+
+        while True:
+            line = await asyncio.wait_for(self._reader.readline(), timeout=30.0)
+            if not line:
+                raise RuntimeError("Bridge connection lost during reset")
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event") == "reset_done":
+                logger.info("PiBackend reset (session=%s)", self._config.session_key)
+                return
+            if event.get("event") == "error":
+                raise RuntimeError(f"Reset failed: {event.get('message')}")
 
     # ── Session ID (no-op — managed by bridge's SessionManager) ──
 

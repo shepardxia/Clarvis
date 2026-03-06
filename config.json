@@ -29,7 +29,7 @@
     "paused": false
   },
   "clarvis": {
-    "model": "sonnet",
+    "model": "claude-sonnet-4-6",
     "max_thinking_tokens": 0,
     "idle_timeout": 3600,
     "tools": {
@@ -82,7 +82,7 @@
   },
   "channels": {
     "agent_backend": "pi",
-    "model": "haiku",
+    "model": "claude-haiku-4-5",
     "max_thinking_tokens": null,
     "idle_timeout": null,
     "tools": {
