@@ -31,7 +31,7 @@ from .display.config import CONFIG_PATH, get_config
 from .display.display_manager import DisplayManager
 from .display.refresh_manager import RefreshManager
 from .display.socket_server import WidgetSocketServer, get_socket_server
-from .display.sprites.system import MicControl, build_default_scene
+from .display.sprites.system import MicControl
 from .hooks.hook_processor import HookProcessor
 from .services.context_accumulator import ContextAccumulator
 from .services.session_tracker import SessionTracker
@@ -126,7 +126,6 @@ class CentralHubDaemon:
         self.wake_word_service = None
         self._agents = {}  # str -> Agent, populated by _init_agents / _init_channel_manager
         self._force_new = False  # Set from CLARVIS_NEW_CONVERSATION env var
-        self.voice_agent = None
         self.voice_orchestrator = None
         self.channel_manager = None
         self.context_accumulator = None
@@ -200,8 +199,8 @@ class CentralHubDaemon:
         # Home project slug — only stage sessions from this project.
         # Encode path the same way Claude Code names its projects/ dirs:
         # replace "." → "-", then "/" → "-".
-        _home_path = str(Path.home() / ".clarvis" / "home")
-        self._home_slug = _home_path.replace(".", "-").replace("/", "-")
+        _clarvis_path = str(Path.home() / ".clarvis" / "clarvis")
+        self._clarvis_slug = _clarvis_path.replace(".", "-").replace("/", "-")
         self.ctx: AppContext | None = None
         self._mcp_task: asyncio.Task | None = None
         self._staleness_handle: asyncio.TimerHandle | None = None
@@ -213,16 +212,18 @@ class CentralHubDaemon:
         self._stopped = False
         self._shutdown_event: asyncio.Event | None = None
 
-        # Display manager with sprite scene
-        scene = build_default_scene(
+        # Display manager with sprite scene (DSL-driven)
+        from .display.cv.builder import SceneBuilder
+        from .display.cv.registry import CvRegistry
+
+        elements_dir = Path(__file__).parent / "display" / "elements"
+        self._cv_registry = CvRegistry(elements_dir)
+        self._cv_registry.load()
+        scene = SceneBuilder.build(
+            self._cv_registry,
+            scene_name="default",
             width=config.display.grid_width,
             height=config.display.grid_height,
-            avatar_x_offset=config.display.avatar_x_offset,
-            avatar_y_offset=config.display.avatar_y_offset,
-            bar_x_offset=config.display.bar_x_offset,
-            bar_y_offset=config.display.bar_y_offset,
-            mic_x_offset=config.display.mic_x_offset,
-            mic_y_offset=config.display.mic_y_offset,
         )
         self.socket_server = socket_server or get_socket_server()
         self.click_manager = ClickRegionManager(self.socket_server)
@@ -346,10 +347,10 @@ class CentralHubDaemon:
     # --- Voice pipeline ---
 
     def _init_agents(self) -> None:
-        """Create the master (voice/terminal) Agent.
+        """Create the Clarvis agent.
 
-        Called from run() after AppContext is set.  The master agent
-        serves voice and ``clarvis chat``.  Online channels get a shared
+        Called from run() after AppContext is set.  The Clarvis agent
+        serves voice and ``clarvis chat``.  Factoria gets a shared
         agent in ``_init_channel_manager()``.
         """
         if self.ctx is None:
@@ -366,25 +367,24 @@ class CentralHubDaemon:
         if not config.voice.enabled and not has_channels:
             return
 
-        # Main Clarvis agent — shared by voice and terminal chat
+        # Clarvis agent — shared by voice and terminal chat
         if config.voice.enabled:
-            from .channels.agent_factory import create_master_agent
+            from .channels.agent_factory import create_clarvis_agent
 
-            agent = create_master_agent(
+            agent = create_clarvis_agent(
                 event_loop=self.ctx.loop,
-                model=config.voice.model,
-                max_thinking_tokens=config.voice.max_thinking_tokens,
+                model=config.clarvis.model,
+                max_thinking_tokens=config.clarvis.max_thinking_tokens,
                 force_new=self._force_new,
-                mcp_port=config.mcp.home_port,
+                mcp_port=config.mcp.clarvis_port,
             )
-            self._agents["voice"] = agent
-            self.voice_agent = agent
+            self._agents["clarvis"] = agent
 
     def _init_voice_pipeline(self) -> None:
         """Initialize voice orchestrator with the captured event loop.
 
-        Called from run() after AppContext and voice agent are set.
-        The voice agent is already a self-contained Agent created in
+        Called from run() after AppContext and Clarvis agent are set.
+        The Clarvis agent is already a self-contained Agent created in
         ``_init_agents()``.
         """
         config = self.ctx.config
@@ -392,7 +392,7 @@ class CentralHubDaemon:
             config.voice.wake_word.enabled
             and config.voice.enabled
             and self.wake_word_service is not None
-            and self.voice_agent is not None
+            and self._agents.get("clarvis") is not None
         )
         if not needs_voice:
             return
@@ -408,7 +408,7 @@ class CentralHubDaemon:
         self.voice_orchestrator = VoiceCommandOrchestrator(
             event_loop=self.ctx.loop,
             socket_server=self.socket_server,
-            voice_agent=self.voice_agent,
+            agent=self._agents["clarvis"],
             state_store=self.state,
             wake_word_service=self.wake_word_service,
             asr_backend=asr_backend,
@@ -443,8 +443,8 @@ class CentralHubDaemon:
         if not config.channels.wakeup.enabled:
             return
 
-        voice_agent = self._agents.get("voice")
-        if not voice_agent:
+        clarvis_agent = self._agents.get("clarvis")
+        if not clarvis_agent:
             return
 
         from .services.wakeup import WakeupManager
@@ -459,10 +459,11 @@ class CentralHubDaemon:
                 return None
 
         self._wakeup_manager = WakeupManager(
-            agent=voice_agent,
+            agent=clarvis_agent,
             state_store=self.state,
             memory_service=self.hindsight_store,
             get_spotify_session=_get_spotify_session,
+            accumulator=self.context_accumulator,
         )
 
         # Register pulse wakeup with scheduler
@@ -472,6 +473,14 @@ class CentralHubDaemon:
             lambda: asyncio.create_task(self._wakeup_manager.on_pulse()),
             active_interval=pulse_secs,
             idle_interval=pulse_secs * 2,
+        )
+
+        # Register nudge for pending session processing
+        self.scheduler.register(
+            "nudge",
+            lambda: asyncio.create_task(self._wakeup_manager.on_nudge()),
+            active_interval=3600,
+            idle_interval=3600,
         )
 
         # Subscribe to timer:fired for wake_clarvis timers
@@ -485,11 +494,11 @@ class CentralHubDaemon:
         )
 
     async def _init_channel_manager(self) -> None:
-        """Initialize online channels with a single shared agent.
+        """Initialize online channels with a single shared Factoria agent.
 
         All online channels (Discord, Telegram, etc.) share one agent at
-        ``~/.clarvis/channels/`` with serialized access.  The master agent
-        (voice + terminal) is set up separately in ``_init_agents()``.
+        ``~/.clarvis/factoria/`` with serialized access.  The Clarvis agent
+        is set up separately in ``_init_agents()``.
         """
         channels_config = getattr(self, "_channels_config", None) or {}
         if not any(ch.get("enabled") for ch in channels_config.values() if isinstance(ch, dict)):
@@ -498,15 +507,15 @@ class CentralHubDaemon:
         config = self.ctx.config
 
         try:
-            from .channels.agent_factory import create_channel_agent
+            from .channels.agent_factory import create_factoria_agent
             from .channels.manager import ChannelManager
             from .channels.registry import UserRegistry
             from .channels.state import ChannelState
-            from .mcp.server import CHANNEL_DEFAULTS
+            from .mcp.server import FACTORIA_DEFAULTS
 
-            # Determine MCP port and tools config for shared channel agent
-            # Merge order: CHANNEL_DEFAULTS ← channels.tools ← per-channel tools
-            tools_cfg = dict(CHANNEL_DEFAULTS)
+            # Determine MCP port and tools config for Factoria
+            # Merge order: FACTORIA_DEFAULTS ← channels.tools ← per-channel tools
+            tools_cfg = dict(FACTORIA_DEFAULTS)
             if config.channels.tools:
                 tools_cfg.update(config.channels.tools)
             for ch_cfg in channels_config.values():
@@ -514,24 +523,24 @@ class CentralHubDaemon:
                     continue
                 if ch_cfg.get("enabled"):
                     tools_cfg.update(ch_cfg.get("tools", {}))
-            ch_port = config.mcp.channel_port
+            ch_port = config.mcp.factoria_port
             self._channel_ports = [(tools_cfg, ch_port)]
 
-            # Single shared agent for all online channels
-            channel_agent = create_channel_agent(
+            # Factoria agent for all online channels
+            factoria_agent = create_factoria_agent(
                 event_loop=self.ctx.loop,
-                model=config.channels.model or config.voice.model,
-                max_thinking_tokens=config.channels.max_thinking_tokens or config.voice.max_thinking_tokens,
+                model=config.channels.model or config.clarvis.model,
+                max_thinking_tokens=config.channels.max_thinking_tokens or config.clarvis.max_thinking_tokens,
                 force_new=self._force_new,
                 mcp_port=ch_port,
             )
-            self._agents["channels"] = channel_agent
+            self._agents["factoria"] = factoria_agent
 
             registry = UserRegistry(admin_user_ids=config.channels.admin_user_ids)
             state = ChannelState()
 
             self.channel_manager = ChannelManager(
-                agent=channel_agent,
+                agent=factoria_agent,
                 channels_config=channels_config,
                 registry=registry,
                 state=state,
@@ -731,14 +740,8 @@ class CentralHubDaemon:
             )
         )
 
-        # Memory maintenance — periodic reflect (retains internally)
-        if self.memory_maintenance is not None:
-            self.scheduler.register(
-                "memory_maintenance",
-                lambda: asyncio.create_task(self.memory_maintenance.maintenance_tick()),
-                active_interval=900,  # 15 min when active
-                idle_interval=3600,  # 60 min when idle
-            )
+        # Memory maintenance — nudge system handles reflect via WakeupManager.
+        # Legacy retain kept for watermark compatibility.
 
         self.scheduler.start()
 
@@ -820,12 +823,11 @@ class CentralHubDaemon:
         # Services that need AppContext — create here, before start()
         self.context_accumulator = ContextAccumulator(
             ctx=self.ctx,
-            home_slug=self._home_slug,
+            clarvis_slug=self._clarvis_slug,
         )
 
-        # Memory maintenance — automated retain + reflect (requires memory enabled)
+        # Memory maintenance — legacy retain (reflect now via nudge system)
         if self.hindsight_store is not None and self.transcript_reader is not None:
-            from .channels.agent_factory import create_master_agent
             from .services.memory_maintenance import MemoryMaintenanceService
 
             self.memory_maintenance = MemoryMaintenanceService(
@@ -833,7 +835,6 @@ class CentralHubDaemon:
                 store=self.hindsight_store,
                 context_accumulator=self.context_accumulator,
                 transcript_reader=self.transcript_reader,
-                agent_factory=lambda: create_master_agent(event_loop=self.ctx.loop, force_new=True),
             )
 
         self.commands = CommandHandlers(
@@ -847,6 +848,7 @@ class CentralHubDaemon:
                 "cognee": lambda: self.cognee_backend,
                 "agents": lambda: self._agents,
                 "maintenance": lambda: self.memory_maintenance,
+                "wakeup": lambda: self._wakeup_manager,
             },
         )
 
@@ -867,7 +869,7 @@ class CentralHubDaemon:
         from .mcp.server import run_embedded
 
         channel_ports = getattr(self, "_channel_ports", None)
-        voice_tools = self.ctx.config.voice.tools or None
+        clarvis_tools = self.ctx.config.clarvis.tools or None
         mcp_ready = asyncio.Event()
         mcp_error: list[BaseException] = []
 
@@ -884,9 +886,9 @@ class CentralHubDaemon:
             run_embedded(
                 self,
                 port=mcp_cfg.standard_port,
-                memory_port=mcp_cfg.home_port,
+                clarvis_port=mcp_cfg.clarvis_port,
                 channel_ports=channel_ports,
-                voice_tools_override=voice_tools,
+                clarvis_tools_override=clarvis_tools,
                 ready=mcp_ready,
             )
         )
@@ -901,7 +903,7 @@ class CentralHubDaemon:
         if mcp_error:
             raise RuntimeError(f"MCP server failed to start: {mcp_error[0]}")
 
-        port_info = f":{mcp_cfg.standard_port} :{mcp_cfg.home_port}"
+        port_info = f":{mcp_cfg.standard_port} :{mcp_cfg.clarvis_port}"
         for _, cp in channel_ports or []:
             port_info += f" :{cp}"
         logger.info("MCP ports ready: %s", port_info)

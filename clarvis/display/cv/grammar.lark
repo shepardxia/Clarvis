@@ -1,0 +1,102 @@
+// Clarvis Display Language (.cv) Grammar
+//
+// Declarative scene descriptions: palettes, templates, sequences, scenes.
+// Earley parser — handles nested blocks and flexible property syntax.
+
+start: block+
+
+?block: palette_block
+      | template_block
+      | sequence_block
+      | scene_block
+
+// === Palette ===
+
+palette_block: "palette" NAME "{" palette_body* "}"
+?palette_body: "tags" tag_list                        -> palette_tags
+             | "eyes" char_map                        -> palette_eyes
+             | "mouths" char_map                      -> palette_mouths
+             | "borders" char_map                     -> palette_borders
+             | "corners" corner_map                   -> palette_corners
+             | "substrates" char_map                  -> palette_substrates
+             | "presets" "{" preset_entry+ "}"        -> palette_presets
+
+char_map: "{" char_entry+ "}"
+char_entry: NAME ESCAPED_STRING
+
+corner_map: "{" corner_entry+ "}"
+corner_entry: NAME string_list
+
+preset_entry: NAME "{" preset_assign+ "}"
+preset_assign: NAME "=" NAME
+
+// === Template ===
+
+template_block: "template" NAME "{" template_body* "}"
+?template_body: "edge" ESCAPED_STRING                 -> template_edge
+              | "default_corners" NAME                -> template_default_corners
+              | "eyes" kv_pair+                        -> template_eyes
+              | "mouth" kv_pair+                       -> template_mouth
+              | "substrate" kv_pair+                   -> template_substrate
+
+kv_pair: NAME "=" value
+
+// === Sequence ===
+
+sequence_block: "sequence" NAME "{" sequence_body* "}"
+?sequence_body: "tags" tag_list                       -> sequence_tags
+              | "define" NAME frame_list              -> sequence_define
+              | "frames" frame_list                   -> sequence_frames
+
+frame_list: "[" frame_item+ "]"
+?frame_item: NAME                                     -> frame_preset_ref
+           | "$" NAME                                 -> frame_define_ref
+           | "{" preset_assign+ "}"                   -> frame_inline
+
+// === Scene ===
+
+scene_block: "scene" NAME dimensions "{" sprite_decl+ "}"
+dimensions: NUMBER "x" NUMBER
+
+sprite_decl: NAME placement sprite_props* ("{" sprite_body* "}")?
+placement: "fullscreen"                               -> place_fullscreen
+          | "center"                                  -> place_center
+          | "top"                                     -> place_top
+          | "bottom"                                  -> place_bottom
+          | NAME "(" NAME ("," kv_pair)* ")"          -> place_relative
+
+sprite_props: kv_pair
+
+sprite_body: kv_pair
+           | NAME value                               -> sprite_prop_positional
+           | on_block
+
+// === On blocks ===
+
+on_block: "on" NAME "{" on_case+ "}"
+on_case: NAME "{" case_prop+ "}"
+case_prop: NAME value
+
+// === Shared ===
+
+tag_list: "[" NAME+ "]"
+string_list: "[" ESCAPED_STRING+ "]"
+value_list: "[" value+ "]"
+
+?value: ESCAPED_STRING                                -> string_value
+      | SIGNED_NUMBER                                 -> number_value
+      | "true"                                        -> true_value
+      | "false"                                       -> false_value
+      | NAME                                          -> name_value
+      | value_list
+
+NAME: /[a-zA-Z_][a-zA-Z0-9_]*/
+
+COMMENT: /#[^\n]*/
+
+%import common.ESCAPED_STRING
+%import common.SIGNED_NUMBER
+%import common.NUMBER
+%import common.WS
+%ignore WS
+%ignore COMMENT

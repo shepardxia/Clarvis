@@ -39,6 +39,7 @@ class CommandHandlers:
         self._get_cognee_backend = svc.get("cognee", lambda: None)
         self._get_agents = svc.get("agents", lambda: {})
         self._get_maintenance = svc.get("maintenance", lambda: None)
+        self._get_wakeup = svc.get("wakeup", lambda: None)
 
     def register_all(self) -> None:
         """Register all command handlers with the IPC server."""
@@ -221,20 +222,33 @@ class CommandHandlers:
         return {"status": "ok", "reloaded": reloaded, "errors": errors}
 
     def memory_ingest(self, **kwargs) -> dict:
-        """Trigger manual memory ingestion (called by `clarvis rem`).
+        """Trigger memory maintenance (called by `clarvis rem`).
 
-        Delegates to MemoryMaintenanceService.on_force_rem() which runs
-        retain (ingest pending transcripts) followed by reflect (consolidation).
+        Sends a forced reflect nudge to the persistent Clarvis agent
+        via WakeupManager. The agent runs /reflect to extract facts
+        from pending sessions and consolidate.
         """
         import asyncio
 
+        wakeup = self._get_wakeup()
+        if wakeup:
+            try:
+                result = asyncio.run_coroutine_threadsafe(
+                    wakeup.on_force_reflect(),
+                    self.ctx.loop,
+                ).result(timeout=120)
+                return {"status": "ok", "response": result}
+            except Exception as exc:
+                return {"error": str(exc)}
+
+        # Fallback to legacy retain if wakeup not available
         maintenance = self._get_maintenance()
         if not maintenance:
             return {"error": "Memory maintenance not available"}
 
         try:
             result = asyncio.run_coroutine_threadsafe(
-                maintenance.on_force_rem(),
+                maintenance.retain_sessions(),
                 self.ctx.loop,
             ).result(timeout=120)
             return result

@@ -1,5 +1,0 @@
-kind: animation
-name: offline
-# Disconnected - static, no animation
-frames:
-  - offline

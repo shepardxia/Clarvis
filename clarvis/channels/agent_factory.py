@@ -95,14 +95,14 @@ def _create_agent(
     return agent
 
 
-def create_master_agent(
+def create_clarvis_agent(
     event_loop: asyncio.AbstractEventLoop,
     model: str | None = None,
     max_thinking_tokens: int | None = None,
     force_new: bool = False,
     mcp_port: int = 7778,
 ):
-    """Create the voice/terminal agent at ~/.clarvis/home/."""
+    """Create the Clarvis agent (voice + terminal) at ~/.clarvis/home/."""
     clarvis_home = Path.home() / ".clarvis" / "home"
     agent = _create_agent("voice", clarvis_home, mcp_port, event_loop, model, max_thinking_tokens, force_new)
 
@@ -113,19 +113,30 @@ def create_master_agent(
         claude_md.write_text(
             "# Clarvis\n\n"
             "Desktop companion with access to music (Spotify), "
-            "weather, time, memory, web search, and shell commands.\n"
+            "weather, time, memory, web search, and shell commands.\n\n"
+            "## Nudges\n\n"
+            "I occasionally receive nudges from the daemon with context about time,\n"
+            "weather, pending sessions, and memory stats. Based on the situation,\n"
+            "I decide what to do:\n\n"
+            "- Extract and store memories from pending session transcripts (run /reflect)\n"
+            "- Check context, set a wake timer for myself (minimum 1 hour)\n"
+            "- Say something via voice or send a message\n"
+            "- Do nothing — nudges are optional, not every one needs action\n\n"
+            "I can control my own wake schedule via set_timer(wake_clarvis=True).\n"
+            "I skip sleeping hours and idle periods unless something is urgent.\n\n"
+            "Nudge responses should be brief. The daemon logs but doesn't parse my response.\n"
         )
     return agent
 
 
-def create_channel_agent(
+def create_factoria_agent(
     event_loop: asyncio.AbstractEventLoop,
     model: str | None = None,
     max_thinking_tokens: int | None = None,
     force_new: bool = False,
     mcp_port: int = 7779,
 ):
-    """Create the shared online channel agent at ~/.clarvis/channels/."""
+    """Create the Factoria agent (online channels) at ~/.clarvis/channels/."""
     channels_dir = Path.home() / ".clarvis" / "channels"
     agent = _create_agent("channels", channels_dir, mcp_port, event_loop, model, max_thinking_tokens, force_new)
 

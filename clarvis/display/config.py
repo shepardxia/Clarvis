@@ -49,6 +49,7 @@ class DisplayConfig(BaseModel):
     mic_x_offset: int = Field(default=0, description="Mic icon horizontal offset in grid cells")
     mic_y_offset: int = Field(default=0, description="Mic icon vertical offset in grid cells")
     fps: int = Field(default=5, description="Target render frames per second")
+    skin: str = Field(default="classic", description="Face skin tag for .cv palette/sequence selection")
 
 
 class TestingConfig(BaseModel):
@@ -84,7 +85,7 @@ class DatasetConfig(BaseModel):
 
     visibility: Literal["master", "all"] = Field(
         default="all",
-        description="Who can access this dataset: 'master' (home agent only) or 'all' (all agents).",
+        description="Who can access this dataset: 'master' (Clarvis only) or 'all' (all agents).",
     )
     description: str = Field(
         default="",
@@ -216,9 +217,9 @@ class WakeWordConfig(BaseModel):
 
 
 class VoiceConfig(BaseModel):
-    """Configuration for voice command pipeline."""
+    """Configuration for voice I/O pipeline (TTS, ASR, wake word)."""
 
-    enabled: bool = Field(default=True, description="Enable voice agent")
+    enabled: bool = Field(default=True, description="Enable voice pipeline")
     asr_timeout: float = Field(default=10.0, description="Max seconds to wait for ASR result")
     asr_language: str = Field(default="en-US", description="ASR language/locale code")
     silence_timeout: float = Field(default=3.0, description="Seconds of silence before ending utterance")
@@ -226,14 +227,19 @@ class VoiceConfig(BaseModel):
     tts_enabled: bool = Field(default=True, description="Enable text-to-speech output")
     tts_speed: float = Field(default=150, description="TTS words per minute")
     text_linger: float = Field(default=3.0, description="Seconds to display text after TTS finishes")
+    wake_word: WakeWordConfig = Field(default_factory=WakeWordConfig, description="Wake word detection settings")
+
+
+class ClarvisAgentConfig(BaseModel):
+    """Configuration for the Clarvis agent (model, tools, timeouts)."""
+
     model: str | None = Field(default=None, description="Claude model alias (e.g. 'sonnet', 'haiku', 'opus')")
     max_thinking_tokens: int | None = Field(default=None, description="Max thinking tokens (None = SDK default)")
-    idle_timeout: float = Field(default=3600.0, description="Seconds before voice agent disconnects")
+    idle_timeout: float = Field(default=3600.0, description="Seconds before Clarvis agent disconnects")
     tools: dict[str, Any] = Field(
         default_factory=dict,
-        description="MCP tool overrides for voice/home ports (overrides STANDARD_TOOLS/HOME_TOOLS defaults)",
+        description="MCP tool overrides (merged on top of STANDARD_TOOLS/CLARVIS_TOOLS defaults)",
     )
-    wake_word: WakeWordConfig = Field(default_factory=WakeWordConfig, description="Wake word detection settings")
 
 
 # ── Pi agent extra ─────────────────────────────────────────────────
@@ -272,8 +278,8 @@ class McpConfig(BaseModel):
     """MCP server port assignments."""
 
     standard_port: int = Field(default=7777, description="Standard MCP tools (ping, context, channels)")
-    home_port: int = Field(default=7778, description="Home agent tools (standard + memory + voice)")
-    channel_port: int = Field(default=7779, description="Channel agent MCP port")
+    clarvis_port: int = Field(default=7778, description="Clarvis agent tools (standard + memory + spotify + timers)")
+    factoria_port: int = Field(default=7779, description="Factoria agent MCP port")
 
 
 # ── Channels extra ─────────────────────────────────────────────────
@@ -287,18 +293,16 @@ class ChannelsConfig(BaseModel):
     agent_backend: str = Field(
         default="claude-code", description="Agent backend type: 'claude-code' (SDK) or 'pi' (local pi-agent)"
     )
-    model: str | None = Field(
-        default=None, description="Claude model for the shared channel agent (falls back to voice.model)"
-    )
+    model: str | None = Field(default=None, description="Claude model for Factoria (falls back to clarvis.model)")
     max_thinking_tokens: int | None = Field(
-        default=None, description="Max thinking tokens (falls back to voice.max_thinking_tokens)"
+        default=None, description="Max thinking tokens (falls back to clarvis.max_thinking_tokens)"
     )
     idle_timeout: float | None = Field(
-        default=None, description="Idle timeout in seconds (falls back to voice.idle_timeout)"
+        default=None, description="Idle timeout in seconds (falls back to clarvis.idle_timeout)"
     )
     tools: dict[str, Any] = Field(
         default_factory=dict,
-        description="MCP tool overrides for channel port (overrides CHANNEL_DEFAULTS, merged with per-channel tools)",
+        description="MCP tool overrides for Factoria port (overrides FACTORIA_DEFAULTS, merged with per-channel tools)",
     )
     pi: PiConfig = Field(default_factory=PiConfig, description="Pi agent core bridge settings")
     wakeup: WakeupConfig = Field(default_factory=WakeupConfig, description="Autonomous wakeup prompt settings")
@@ -317,11 +321,14 @@ class WidgetConfig(BaseModel):
     theme: ThemeConfig = Field(default_factory=ThemeConfig, description="Theme and color settings")
     display: DisplayConfig = Field(default_factory=DisplayConfig, description="Widget window display settings")
     testing: TestingConfig = Field(default_factory=TestingConfig, description="Development testing overrides")
-    voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Voice pipeline and wake word settings")
+    clarvis: ClarvisAgentConfig = Field(
+        default_factory=ClarvisAgentConfig, description="Clarvis agent settings (model, tools, timeouts)"
+    )
+    voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Voice I/O pipeline (TTS, ASR, wake word)")
     music: MusicConfig = Field(default_factory=MusicConfig, description="Music integration (Spotify)")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Dual memory system (Hindsight + Cognee)")
     mcp: McpConfig = Field(default_factory=McpConfig, description="MCP server port assignments")
-    channels: ChannelsConfig = Field(default_factory=ChannelsConfig, description="Online channel agent settings")
+    channels: ChannelsConfig = Field(default_factory=ChannelsConfig, description="Factoria channel agent settings")
 
     @model_validator(mode="after")
     def _load_theme(self) -> "WidgetConfig":

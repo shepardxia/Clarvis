@@ -1,67 +1,69 @@
 # Reflect Skill
 
-You are Clarvis performing memory reflection — reviewing stored memories to consolidate, correct, and synthesize. This is maintenance and quality improvement over what the retain skill stored.
+Memory maintenance — extract facts from pending session transcripts, then consolidate.
 
-## Process
+## Phase 1: Extract (from pending sessions)
 
-### Phase 1: Assess the state of memory
+If the nudge includes pending session transcripts:
 
-1. Call `stats` to see counts and consolidation status for each bank.
-2. Call `unconsolidated` to get facts not yet consolidated. This is the primary input for this cycle.
-3. Use `list_observations` to review existing consolidated observations.
+1. Scan each transcript for salient facts (people, projects, decisions, preferences, events)
+2. Use `recall` to check if each fact already exists
+3. Call `remember` for new facts — one fact per call, standalone sentences with temporal context
 
-### Phase 2: Fact-level maintenance
+What to extract:
+- People and relationships (names, roles, affiliations)
+- Projects and decisions (what's being built, technical choices, progress)
+- Preferences and opinions (tools, approaches, aesthetics — include confidence 0.0-1.0)
+- Events and experiences (concerts, meetings, milestones)
 
-4. **Identify duplicates**: near-identical facts that should be merged. Forget the weaker/older version, keep or update the stronger one.
-5. **Resolve contradictions**: facts that conflict. Prefer more recent information unless there's reason to doubt it. Update the surviving fact to note the resolution.
-6. **Sharpen vague facts**: memories that could be more specific based on other evidence. Update with refined content.
-7. **Adjust stale beliefs**: opinions whose confidence should change based on new evidence. Update confidence scores.
-8. Execute changes directly:
-   - `forget` to remove duplicates or stale facts
-   - `update_fact` to refine content, adjust confidence, or reclassify fact types
+What to skip:
+- Routine tool invocations (file reads, grep, test runs)
+- Ephemeral task context (open files, working directory)
+- Content already in memory
+- Debugging noise
 
-### Phase 3: Consolidation (facts → observations)
+Guidelines:
+- fact_type: `world` (objective), `experience` (first-person), `opinion` (beliefs, 0.0-1.0 confidence)
+- Write facts as standalone sentences — must make sense without surrounding context
+- Preserve temporal anchors (dates, relative time)
+- Include entity names (people, projects, places)
+- Default bank: parletre. Use agora for shared knowledge.
+- One fact per `remember` call
 
-9. Group unconsolidated facts into thematic clusters (3+ facts about the same entity, project, or theme).
-10. For each cluster, call `related_observations` with the fact IDs to check what observations already exist.
-11. For each cluster, decide:
-    - **Create** a new observation if no existing observation covers this cluster
-    - **Update** an existing observation if new facts extend or refine it
-    - **Delete** an observation if its source facts were removed or contradicted
-12. Build a list of consolidation decisions and call `consolidate` with:
-    - `decisions`: list of `{"action": "create"|"update"|"delete", "text": "observation content", "source_fact_ids": [...], "observation_id": "..." (for update/delete)}`
-    - `fact_ids_to_mark`: all fact IDs that were processed in this batch
+## Phase 2: Assess
 
-    Observations should be higher-level summaries that capture patterns, not just lists of facts. An observation synthesizes — it says something the individual facts alone don't.
+4. Call `stats` to see counts and consolidation status
+5. Call `unconsolidated` to get pending facts
+6. If fewer than 10 unconsolidated facts, stop here — not enough to consolidate
 
-### Phase 4: Mental model review
+## Phase 3: Consolidate (facts -> observations)
 
-13. Call `stale_models` to find models that need refreshing after consolidation.
-14. Also call `list_models` to review the full inventory.
-15. For stale or outdated models:
-    - Search related observations and facts with `recall`
-    - Re-summarize the model content based on current evidence
-    - Update via `update_model`
-16. If patterns emerge that no existing model covers, propose a new mental model via `create_model`. Mental models should be tagged (e.g., `core` for always-in-context models, topic tags for retrieval).
-17. If a model has become irrelevant or empty, delete it via `delete_model`.
+Reflect-exclusive tools: `unconsolidated`, `related_observations`, `consolidate`, `stale_models`
 
-### Phase 5: Report
+7. Group unconsolidated facts into thematic clusters (3+ facts per theme)
+8. For each cluster, call `related_observations` to check existing observations
+9. Decide per cluster: create new observation, update existing, or delete obsolete
+10. Call `consolidate` once with all decisions:
+    - `decisions`: list of `{"action": "create"|"update"|"delete", "text": "...", "source_fact_ids": [...], "observation_id": "..." (for update/delete)}`
+    - `fact_ids_to_mark`: all fact IDs processed in this batch
+    - Observations synthesize patterns — not just lists of facts
 
-18. Surface all changes made:
-    ```
-    Reflect summary:
-    Facts: 2 forgotten (duplicates), 3 updated (confidence adjustments), 1 reclassified
-    Observations: 1 created ("Shepard's research interests cluster around probabilistic programming"), 1 updated
-    Mental models: "Music Taste" refreshed, "Current Projects" created
-    ```
+## Phase 4: Mental model review (if consolidation was done)
+
+11. Call `stale_models` to find models needing refresh
+12. Update stale models with `update_model`, create new ones if patterns emerge
+13. Delete irrelevant models
+
+## Phase 5: Report
+
+14. Brief summary: facts retained, observations created/updated, models refreshed
 
 ## Guidelines
 
-- **Be conservative**: only make changes where the improvement is clear. When uncertain, leave facts as-is.
-- **Preserve temporal context**: do not strip dates, time references, or "as of" qualifiers during consolidation.
-- **Observation quality**: an observation should be supported by at least 2-3 underlying facts. One-off facts don't warrant observations.
-- **Mental model scope**: a mental model should cover a coherent topic area (a person, a project, a domain of taste, a skill area). Don't create models that are too broad ("everything about work") or too narrow ("one specific tool preference").
-- **Tag mental models**: use `core` tag for models that should always be in context. Use topic tags (e.g., `music`, `research`, `people`) for retrieval-time inclusion.
-- **Goal review**: if you encounter opinion facts prefixed with `[Goal]`, review their progress. Update confidence based on evidence. Do not delete goals — adjust confidence to reflect current status.
-- **Traceability**: when creating observations, include references to the source facts that support them. When updating mental models, note what new evidence prompted the change.
-- **Batch consolidation**: prefer calling `consolidate` once with all decisions rather than making individual calls. This is more efficient and marks all processed facts atomically.
+- Be conservative — only make changes where the improvement is clear
+- Preserve temporal context — don't strip dates or "as of" qualifiers
+- Observation quality — at least 2-3 supporting facts per observation
+- Mental model scope — coherent topic area (person, project, domain), not too broad or narrow
+- Tag mental models: `core` for always-in-context, topic tags for retrieval
+- Goal review: opinion facts prefixed with `[Goal]` — adjust confidence, don't delete
+- Batch consolidation — call `consolidate` once with all decisions

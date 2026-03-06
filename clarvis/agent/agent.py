@@ -67,6 +67,7 @@ class Agent:
         # Per-session state
         self._connected = False
         self._lock = asyncio.Lock()
+        self._currently_sending: bool = False
         self._last_session_id: str | None = None
 
         # Build backend if not injected
@@ -215,14 +216,18 @@ class Agent:
 
     async def _send_inner(self, text: str) -> AsyncGenerator[str | None]:
         """Core send logic -- delegates to backend, syncs session ID back."""
-        await self.connect()
-        async for chunk in self._backend.send(text):
-            yield chunk
-        # Sync session ID back from backend
-        new_id = self._backend.get_session_id()
-        if new_id and new_id != self._last_session_id:
-            self._last_session_id = new_id
-            self._write_session_id(new_id)
+        self._currently_sending = True
+        try:
+            await self.connect()
+            async for chunk in self._backend.send(text):
+                yield chunk
+            # Sync session ID back from backend
+            new_id = self._backend.get_session_id()
+            if new_id and new_id != self._last_session_id:
+                self._last_session_id = new_id
+                self._write_session_id(new_id)
+        finally:
+            self._currently_sending = False
 
     async def interrupt(self) -> None:
         """Interrupt the current query."""

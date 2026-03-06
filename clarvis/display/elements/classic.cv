@@ -1,0 +1,423 @@
+# Classic skin — palette, template, and all animation sequences
+
+template box_face {
+    edge "│"
+    default_corners round
+    eyes row=0.0 cols=[0.33 0.56]
+    mouth row=0.5 col=0.5
+    substrate row=1.0
+}
+
+palette classic {
+    tags [classic]
+
+    eyes {
+        open "◕"  closed "─"  half "◔"  wide "◎"
+        dot "●"  intense "◉"
+        left "◐"  right "◑"  up "◔"  down "◕"
+        sleepy "◡"  sparkle "✧"  star "★"  bright "✦"  hollow_star "☆"
+        heart "♥"  dead "×"  dizzy "@"  cat "•"  wink "◕"
+        uwu "◠"  happy_closed "◡"  blush "●"
+    }
+
+    mouths {
+        smile "◡"  grin "◠"  neutral "─"  flat "━"
+        open "○"  sleep "ω"  soft "‿"  hmm "∪"  frown "△"
+        big_grin "D"  surprised "O"  tongue "P"  wavy "~"  cat "ω"  sad "n"
+        kawaii "◡"  uwu "ω"  triangle "▽"  blush "‿"
+    }
+
+    borders {
+        thin "─"  medium "━"  thick "═"
+        dotted "┉"  dotted_sparse "┅"
+        arrow "▸"  arrow_thin "▹"  arrow_thick "►"
+        sparkle "✧"  star "✦"  bright_star "★"
+    }
+
+    corners {
+        round ["╭" "╮" "╰" "╯"]
+        light ["┌" "┐" "└" "┘"]
+        heavy ["┏" "┓" "┗" "┛"]
+        double ["╔" "╗" "╚" "╝"]
+    }
+
+    substrates {
+        idle " .  .  . "
+        thinking " * . * . "
+    }
+
+    presets {
+        # Basic expressions
+        happy { eyes=open mouth=smile border=thin }
+        neutral { eyes=open mouth=neutral border=thin }
+        sad { eyes=half mouth=neutral border=thin }
+
+        # Active states
+        thinking { eyes=half mouth=neutral border=thin }
+        focused { eyes=dot mouth=flat border=arrow corners=heavy }
+        intense { eyes=intense mouth=flat border=thick corners=heavy }
+
+        # Blink frames
+        blink_start { eyes=half mouth=smile border=thin }
+        blink_closed { eyes=closed mouth=smile border=thin }
+        blink_end { eyes=half mouth=smile border=thin }
+
+        # Sleep/rest
+        asleep { eyes=sleepy mouth=sleep border=thin }
+        dreaming { eyes=sleepy mouth=soft border=thin }
+
+        # Surprise/eureka
+        surprised { eyes=wide mouth=open border=thick corners=heavy }
+        eureka { eyes=sparkle mouth=smile border=star }
+
+        # Celebration
+        party { eyes=star mouth=grin border=star corners=heavy }
+        sparkle { eyes=sparkle mouth=smile border=sparkle }
+        satisfied { eyes=open mouth=smile border=thin }
+
+        # Running/executing
+        running { eyes=dot mouth=flat border=arrow corners=heavy }
+        running_intense { eyes=intense mouth=flat border=arrow_thick corners=heavy }
+
+        # Reading
+        scan_left { eyes=left mouth=neutral border=thin }
+        scan_right { eyes=right mouth=neutral border=thin }
+        reading { eyes=open mouth=neutral border=thin }
+
+        # Writing
+        creating { eyes=open mouth=smile border=star }
+        inspired { eyes=sparkle mouth=grin border=star }
+
+        # Awaiting
+        waiting { eyes=open mouth=smile border=dotted }
+        curious { eyes=wide mouth=smile border=dotted }
+
+        # Thinking (deep)
+        pondering { eyes=open mouth=neutral border=medium corners=heavy }
+
+        # Reviewing
+        reviewing { eyes=open mouth=neutral border=thick }
+        examining { eyes=wide mouth=neutral border=thick }
+
+        # Offline
+        offline { eyes=closed mouth=neutral border=thin }
+
+        # Activated
+        activated { eyes=sparkle mouth=open border=star corners=heavy }
+        alert { eyes=wide mouth=open border=thick corners=heavy }
+    }
+}
+
+# --- Animation sequences ---
+
+sequence idle {
+    tags [classic]
+    define blink [
+        {eyes=half mouth=smile border=thin}
+        {eyes=closed mouth=smile border=thin}
+        {eyes=half mouth=smile border=thin}
+    ]
+    define rest [ happy happy happy happy ]
+    define glance_up [
+        {eyes=up mouth=smile border=thin}
+        {eyes=up mouth=smile border=thin}
+        happy
+    ]
+    define soft_smile [
+        {eyes=open mouth=soft border=thin}
+        {eyes=open mouth=soft border=thin}
+        happy
+    ]
+    frames [
+        $rest $rest $blink $rest
+        neutral happy
+        $rest $glance_up $rest $rest $blink $rest $soft_smile $rest
+    ]
+}
+
+sequence thinking {
+    tags [classic]
+    define focus [ pondering pondering ]
+    define look_up [
+        {eyes=half mouth=neutral border=medium corners=heavy}
+        {eyes=half mouth=neutral border=medium corners=heavy}
+        pondering
+    ]
+    define look_left [
+        {eyes=left mouth=neutral border=medium corners=heavy}
+        {eyes=left mouth=neutral border=medium corners=heavy}
+        pondering
+    ]
+    define look_right [
+        {eyes=right mouth=neutral border=medium corners=heavy}
+        {eyes=right mouth=neutral border=medium corners=heavy}
+        pondering
+    ]
+    define ponder [
+        {eyes=open mouth=hmm border=medium corners=heavy}
+        {eyes=open mouth=hmm border=thick corners=heavy}
+        pondering
+    ]
+    define getting_somewhere [
+        {eyes=open mouth=smile border=medium corners=heavy}
+        {eyes=open mouth=smile border=thick corners=heavy}
+        pondering
+    ]
+    frames [
+        $focus $look_up $focus $look_left $ponder $focus
+        $look_right $focus $look_up $getting_somewhere $focus $look_left $focus
+    ]
+}
+
+sequence reading {
+    tags [classic]
+    define scan_l [ scan_left scan_left ]
+    define scan_r [ scan_right scan_right ]
+    define center [ reading reading ]
+    define ooh [
+        {eyes=open mouth=smile border=thin}
+        {eyes=wide mouth=open border=medium}
+        {eyes=wide mouth=open border=medium}
+        {eyes=open mouth=smile border=thin}
+        reading
+    ]
+    define hmm_seq [
+        reading
+        {eyes=half mouth=neutral border=thin}
+        reading
+    ]
+    frames [
+        $scan_l $center $scan_r $center
+        $scan_l $center $scan_r $center
+        $ooh $center
+        $scan_l $center $scan_r $hmm_seq $center $scan_l $center
+    ]
+}
+
+sequence writing {
+    tags [classic]
+    define create [ creating creating ]
+    define talk [
+        {eyes=open mouth=open border=sparkle}
+        creating
+        {eyes=open mouth=open border=sparkle}
+        creating
+    ]
+    define think_words [
+        {eyes=half mouth=smile border=star}
+        {eyes=half mouth=smile border=star}
+        creating
+    ]
+    define inspired_seq [
+        inspired
+        {eyes=sparkle mouth=grin border=sparkle}
+        {eyes=bright mouth=grin border=star}
+        creating
+    ]
+    define flow [
+        {eyes=open mouth=open border=sparkle}
+        creating
+        {eyes=open mouth=open border=sparkle}
+        {eyes=open mouth=neutral border=star}
+        creating
+    ]
+    frames [
+        $create $talk $create $think_words $talk $create
+        $flow $create $inspired_seq $create $talk $think_words $create
+    ]
+}
+
+sequence executing {
+    tags [classic]
+    define focus [ focused focused ]
+    define pulse [
+        {eyes=dot mouth=flat border=arrow_thick corners=heavy}
+        focused
+        {eyes=dot mouth=flat border=thick corners=heavy}
+        focused
+    ]
+    define intense_seq [
+        intense
+        intense
+        focused
+    ]
+    define output [
+        {eyes=dot mouth=open border=thick corners=heavy}
+        {eyes=dot mouth=open border=thick corners=heavy}
+        focused
+    ]
+    frames [
+        $focus $pulse $focus $pulse $intense_seq $focus $pulse $output $focus $pulse $focus
+    ]
+}
+
+sequence running {
+    tags [classic]
+    define steady [ running running ]
+    define arrow_pulse [
+        {eyes=dot mouth=flat border=arrow_thin corners=heavy}
+        running
+        {eyes=dot mouth=flat border=arrow_thick corners=heavy}
+        running
+    ]
+    define brief_smile [
+        {eyes=open mouth=smile border=arrow corners=heavy}
+        {eyes=open mouth=smile border=arrow corners=heavy}
+        running
+    ]
+    define intense_seq [
+        running_intense
+        {eyes=intense mouth=flat border=arrow_thick corners=heavy}
+        running
+    ]
+    frames [
+        $steady $arrow_pulse $steady $arrow_pulse $brief_smile
+        $steady $arrow_pulse $intense_seq $steady $arrow_pulse $steady
+    ]
+}
+
+sequence reviewing {
+    tags [classic]
+    frames [
+        reviewing
+        examining
+        {eyes=wide mouth=frown border=thick}
+        reviewing
+        {eyes=open mouth=smile border=thick}
+        reviewing
+    ]
+}
+
+sequence awaiting {
+    tags [classic]
+    define wait [ waiting waiting waiting ]
+    define glance_up [
+        {eyes=half mouth=smile border=dotted}
+        {eyes=half mouth=smile border=dotted}
+        waiting
+    ]
+    define curious_seq [
+        curious
+        {eyes=wide mouth=smile border=dotted_sparse}
+        waiting
+    ]
+    define hmm_seq [
+        {eyes=open mouth=open border=dotted}
+        {eyes=open mouth=open border=dotted_sparse}
+        waiting
+    ]
+    define border_shift [
+        {eyes=open mouth=smile border=dotted_sparse}
+        waiting
+    ]
+    frames [
+        $wait $wait $glance_up $wait $border_shift $wait
+        $curious_seq $wait $wait $hmm_seq $wait $glance_up $wait $border_shift $wait
+    ]
+}
+
+sequence resting {
+    tags [classic]
+    define sleep [ asleep asleep asleep asleep ]
+    define breathe_in [ asleep asleep ]
+    define breathe_out [ asleep asleep ]
+    define dream_smile [
+        dreaming
+        dreaming
+        asleep
+    ]
+    frames [
+        $sleep $breathe_in $sleep $breathe_out $sleep
+        $dream_smile $sleep $breathe_in $sleep $breathe_out $sleep
+    ]
+}
+
+sequence offline {
+    tags [classic]
+    frames [ offline ]
+}
+
+sequence celebration {
+    tags [classic]
+    define finishing [
+        {eyes=open mouth=smile border=thin}
+        {eyes=open mouth=grin border=medium}
+        {eyes=open mouth=grin border=medium}
+    ]
+    define party_seq [
+        party
+        {eyes=hollow_star mouth=smile border=sparkle}
+        party
+        {eyes=bright mouth=smile border=bright_star}
+        {eyes=hollow_star mouth=grin border=sparkle}
+        {eyes=star mouth=grin border=star}
+    ]
+    define sparkle_down [
+        sparkle
+        {eyes=sparkle mouth=smile border=sparkle}
+        satisfied
+    ]
+    define satisfied_seq [
+        satisfied
+        satisfied
+        satisfied
+        {eyes=open mouth=soft border=thin}
+    ]
+    frames [
+        $finishing $party_seq $party_seq $sparkle_down $satisfied_seq $satisfied_seq
+    ]
+}
+
+sequence eureka {
+    tags [classic]
+    define thinking_seq [
+        {eyes=open mouth=neutral border=medium corners=heavy}
+        {eyes=open mouth=neutral border=medium corners=heavy}
+    ]
+    define realizing [
+        {eyes=open mouth=open border=medium corners=heavy}
+        surprised
+        surprised
+    ]
+    define eureka_burst [
+        eureka
+        {eyes=bright mouth=grin border=sparkle}
+        {eyes=star mouth=grin border=star}
+        {eyes=star mouth=grin border=sparkle}
+        {eyes=bright mouth=grin border=star}
+        eureka
+    ]
+    define happy_settle [
+        {eyes=sparkle mouth=smile border=thin}
+        satisfied
+        satisfied
+        satisfied
+    ]
+    frames [
+        $thinking_seq $thinking_seq $realizing $eureka_burst $eureka_burst
+        $happy_settle $happy_settle
+    ]
+}
+
+sequence activated {
+    tags [classic]
+    define alert_eyes [
+        {eyes=wide mouth=open border=thick corners=heavy}
+        {eyes=sparkle mouth=open border=star corners=heavy}
+        activated
+        activated
+    ]
+    define sparkle_burst [
+        activated
+        {eyes=bright mouth=grin border=star corners=heavy}
+        {eyes=sparkle mouth=grin border=sparkle corners=heavy}
+        activated
+    ]
+    define settle [
+        {eyes=wide mouth=smile border=medium corners=heavy}
+        {eyes=open mouth=smile border=thin}
+    ]
+    frames [
+        $alert_eyes $sparkle_burst $settle
+    ]
+}
