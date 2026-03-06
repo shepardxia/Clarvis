@@ -147,7 +147,7 @@ def create_knowledge_server(daemon, visibility: str = "master") -> FastMCP:
 
         return f"Results ({len(results)}):\n" + "\n".join(lines)
 
-    # -- Home-only tools (Clarvis only, not Clarvisus Factoria) -----------
+    # -- Clarvis-only tools (not available to Factoria) -------------------
 
     if visibility == "master":
 

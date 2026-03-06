@@ -62,7 +62,7 @@ class CommandHandlers:
         reg("get_voice_context", self.get_voice_context)
 
         # Voice session management
-        reg("reset_voice_session", self.reset_voice_session)
+        reg("reset_clarvis_session", self.reset_clarvis_session)
 
         # Memory
         reg("memory_ingest", self.memory_ingest)
@@ -168,19 +168,19 @@ class CommandHandlers:
 
     # --- Voice session management ---
 
-    def reset_voice_session(self) -> str:
-        """Disconnect voice agent so next interaction starts a fresh session."""
+    def reset_clarvis_session(self) -> str:
+        """Disconnect Clarvis agent so next interaction starts a fresh session."""
         import asyncio
         from pathlib import Path
 
         # Remove agent session ID files so next interaction starts fresh
         for sid_file in [
-            Path.home() / ".clarvis" / "home" / "session_id",
-            Path.home() / ".clarvis" / "channels" / "session_id",
+            Path.home() / ".clarvis" / "clarvis" / "session_id",
+            Path.home() / ".clarvis" / "factoria" / "session_id",
         ]:
             sid_file.unlink(missing_ok=True)
 
-        # Disconnect voice agent (it'll reconnect fresh on next voice command)
+        # Disconnect Clarvis agent (it'll reconnect fresh on next interaction)
         orchestrator = self._get_voice_orchestrator()
         if orchestrator and orchestrator.agent.connected:
             asyncio.run_coroutine_threadsafe(orchestrator.agent.disconnect(), orchestrator._loop)
@@ -272,7 +272,7 @@ class CommandHandlers:
         result: dict = {"status": "ok", "goals_seeded": 0}
 
         # Scaffold checkin files (seed_goals.yaml, skills/checkin.md)
-        home_dir = Path.home() / ".clarvis" / "home"
+        home_dir = Path.home() / ".clarvis" / "clarvis"
         scaffolded = scaffold_checkin_files(home_dir)
         result["scaffolded"] = scaffolded
 

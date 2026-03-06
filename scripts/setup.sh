@@ -127,10 +127,10 @@ install_cli() {
     print_success "CLI installed: clarvis (-> $link_dir/clarvis)"
 }
 
-setup_home() {
-    print_header "Setting up home directory..."
+setup_clarvis_dir() {
+    print_header "Setting up Clarvis directory..."
 
-    local home_dir="$HOME/.clarvis/home"
+    local home_dir="$HOME/.clarvis/clarvis"
     mkdir -p "$home_dir"
     if [ ! -f "$home_dir/.mcp.json" ]; then
         cat > "$home_dir/.mcp.json" << MCPEOF
@@ -144,7 +144,7 @@ setup_home() {
 }
 MCPEOF
     fi
-    print_success "Home directory ready at $home_dir (memory tools on port 7778)"
+    print_success "Clarvis directory ready at $home_dir (memory tools on port 7778)"
 }
 
 check_env() {
@@ -156,7 +156,7 @@ check_env() {
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
         print_success "ANTHROPIC_API_KEY set in environment"
     else
-        print_warning "ANTHROPIC_API_KEY not set (needed for voice agent + memory consolidation)"
+        print_warning "ANTHROPIC_API_KEY not set (needed for Clarvis agent + memory consolidation)"
         echo "  Create $REPO_DIR/.env with:"
         echo "    ANTHROPIC_API_KEY=sk-ant-..."
         echo "  Or export it in your shell profile."
@@ -226,7 +226,7 @@ main() {
     setup_spotify
     configure_mcp
     install_cli
-    setup_home
+    setup_clarvis_dir
 
     print_success "Setup complete!"
     print_next_steps

@@ -28,15 +28,7 @@
     "context_percent": 75.0,
     "paused": false
   },
-  "voice": {
-    "enabled": true,
-    "asr_timeout": 6.0,
-    "asr_language": "en-US",
-    "silence_timeout": 5.0,
-    "tts_voice": "Fred",
-    "tts_enabled": true,
-    "tts_speed": 190,
-    "text_linger": 3.0,
+  "clarvis": {
     "model": "sonnet",
     "max_thinking_tokens": 0,
     "idle_timeout": 3600,
@@ -46,7 +38,17 @@
       "channels": true,
       "prompt_response": true,
       "memory": true
-    },
+    }
+  },
+  "voice": {
+    "enabled": true,
+    "asr_timeout": 6.0,
+    "asr_language": "en-US",
+    "silence_timeout": 5.0,
+    "tts_voice": "Fred",
+    "tts_enabled": true,
+    "tts_speed": 190,
+    "text_linger": 3.0,
     "wake_word": {
       "enabled": true,
       "model": "r7_ebf",

@@ -93,9 +93,9 @@ case "${1:-status}" in
             esac
         done
         if [ -n "$_chat_channel" ]; then
-            _chat_dir="$HOME/.clarvis/channels/$_chat_channel"
+            _chat_dir="$HOME/.clarvis/factoria/$_chat_channel"
         else
-            _chat_dir="$HOME/.clarvis/home"
+            _chat_dir="$HOME/.clarvis/clarvis"
         fi
         if [ ! -d "$_chat_dir" ]; then
             echo "Channel directory not found: $_chat_dir"
@@ -244,9 +244,9 @@ except Exception as e:
     print(f'Error: {e}')
     sys.exit(1)
 " || exit 1
-        # Step 2: Launch interactive Claude session at ~/.clarvis/home/
+        # Step 2: Launch interactive Claude session at ~/.clarvis/clarvis/
         # Uses the checkin skill — Claude reads skills/ from the project dir
-        _checkin_dir="$HOME/.clarvis/home"
+        _checkin_dir="$HOME/.clarvis/clarvis"
         if [ ! -d "$_checkin_dir" ]; then
             echo "Error: home directory not found: $_checkin_dir"
             echo "Has the daemon started at least once?"
@@ -280,10 +280,10 @@ except Exception:
         fi
         ;;
     new)
-        rm -f "$HOME/.clarvis/home/session_id"
-        rm -f "$HOME/.clarvis/home/pi-session.jsonl"
-        # Tell daemon to disconnect voice agent (best-effort)
-        echo '{"method":"reset_voice_session","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null || true
+        rm -f "$HOME/.clarvis/clarvis/session_id"
+        rm -f "$HOME/.clarvis/clarvis/pi-session.jsonl"
+        # Tell daemon to disconnect Clarvis agent (best-effort)
+        echo '{"method":"reset_clarvis_session","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null || true
         echo "Session reset — next voice/chat starts fresh"
         ;;
     reload)
@@ -313,9 +313,9 @@ except Exception as e:
         echo "Usage: clarvis <command>"
         echo ""
         echo "Commands:"
-        echo "  start     Start daemon and widget (--new for fresh voice session)"
+        echo "  start     Start daemon and widget (--new for fresh session)"
         echo "  stop      Stop all processes"
-        echo "  restart   Stop then start (--new for fresh voice session)"
+        echo "  restart   Stop then start (--new for fresh session)"
         echo "  status    Show running processes (default)"
         echo "  logs      Tail daemon logs"
         echo "  chat      Chat with Clarvis in terminal (--new for fresh session)"

@@ -4,7 +4,7 @@ Goals are stored as opinion-type facts in Hindsight with confidence scores.
 Only seeds if no goals exist yet (first-run detection).
 
 Also provides scaffolding for the checkin skill prompt and seed goals YAML
-in ``~/.clarvis/home/``.
+in ``~/.clarvis/clarvis/``.
 """
 
 import logging
@@ -70,7 +70,7 @@ You are Clarvis performing a memory check-in with Shepard. This is an interactiv
 2. When done, summarize what was changed in this checkin session
 
 ### Phase 5: Grounding Review
-1. Read current grounding files from `~/.clarvis/home/grounding/` (placeholder files don't count)
+1. Read current grounding files from `~/.clarvis/clarvis/grounding/` (placeholder files don't count)
 2. Review memory state vs grounding content using recall, list_models, stats, list_directives, get_profile
 3. Draft updated grounding files:
    - `01-personality.md`: directives + personality disposition + behavioral rules
@@ -113,7 +113,7 @@ def scaffold_checkin_files(home_dir: Path | None = None) -> dict[str, bool]:
     Returns a dict mapping filename to whether it was created.
     """
     if home_dir is None:
-        home_dir = Path.home() / ".clarvis" / "home"
+        home_dir = Path.home() / ".clarvis" / "clarvis"
 
     home_dir = Path(home_dir).expanduser()
     created: dict[str, bool] = {}

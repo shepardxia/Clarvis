@@ -27,6 +27,11 @@
     "context_percent": 50.0,
     "paused": false
   },
+  "clarvis": {
+    "model": null,
+    "max_thinking_tokens": null,
+    "idle_timeout": 3600.0
+  },
   "voice": {
     "enabled": true,
     "asr_timeout": 10.0,
@@ -36,9 +41,6 @@
     "tts_enabled": true,
     "tts_speed": 150,
     "text_linger": 3.0,
-    "model": null,
-    "max_thinking_tokens": null,
-    "idle_timeout": 3600.0,
     "wake_word": {
       "enabled": false,
       "model": null,

@@ -38,7 +38,7 @@ log = logging.getLogger("migrate")
 
 ADD_LOG = Path.home() / ".clarvis/memory/add_log.jsonl"
 DATA_DIR = Path.home() / ".clarvis/memory"
-MUSIC_DIR = Path.home() / ".clarvis/home/music_knowledge"
+MUSIC_DIR = Path.home() / ".clarvis/clarvis/music_knowledge"
 TARGET_BANK = "parletre"
 
 # Entries to drop by 1-based line number in the original staged shepard preview.
@@ -93,7 +93,7 @@ EXTRA_ENTRIES = [
     "parletre (Lacan's parletre -- the speaking-being) holds all personal memory: "
     "Shepard's facts, Clarvis's observations, research, music taste. "
     "agora (Greek public square) holds shared knowledge visible to all agents. "
-    "Clarvis (home agent) accesses both; Clarvisus Factoria (channel agents) only sees agora.",
+    "Clarvis accesses both banks; Factoria only sees agora.",
     "Clarvisus Factoria is the channel-facing version of Clarvis -- a Sinthome worker agent "
     "on Discord and other channels, helping comrades with tasks, web searches, and conversation. "
     "Clarvisus can only access the agora dataset; parletre is Clarvis's alone.",

@@ -122,7 +122,7 @@ class VoiceCommandOrchestrator:
         self,
         event_loop: asyncio.AbstractEventLoop,
         socket_server: "WidgetSocketServer",
-        voice_agent: "Agent",
+        agent: "Agent",
         state_store: "StateStore",
         wake_word_service: "WakeWordService",
         asr_backend: "ASRBackend",
@@ -137,7 +137,7 @@ class VoiceCommandOrchestrator:
     ):
         self._loop = event_loop
         self.socket = socket_server
-        self.agent = voice_agent
+        self.agent = agent
         self.state = state_store
         self.wake = wake_word_service
         self._asr_backend = asr_backend
@@ -329,7 +329,7 @@ class VoiceCommandOrchestrator:
     async def notify(self, prompt: str) -> None:
         """Programmatic voice notification — skips wake word + ASR.
 
-        Sends *prompt* directly to the voice agent through the full
+        Sends *prompt* directly to the Clarvis agent through the full
         pipeline (context enrichment, Claude streaming, TTS).  Follow-up
         conversation via ASR is supported if Claude requests it.
 

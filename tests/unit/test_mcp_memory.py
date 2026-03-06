@@ -15,7 +15,7 @@ pytest.importorskip("asyncpg", reason="asyncpg not installed (memory extra requi
 
 from fastmcp import Client
 
-from clarvis.mcp.server import HOME_TOOLS, create_app
+from clarvis.mcp.server import CLARVIS_TOOLS, create_app
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ def mock_daemon(loop):
 
 @pytest_asyncio.fixture
 async def memory_client(mock_daemon):
-    app = create_app(daemon=mock_daemon, tool_config=HOME_TOOLS)
+    app = create_app(daemon=mock_daemon, tool_config=CLARVIS_TOOLS)
     async with Client(app) as c:
         yield c
 
@@ -175,7 +175,7 @@ async def test_no_ctx_leakage(memory_client):
 
 @pytest.mark.asyncio
 async def test_recall_restricted_bank(mock_daemon):
-    """Masked agent (visibility=all) cannot search parletre."""
+    """Factoria (visibility=all) cannot search parletre."""
     tool_config = {
         "memory": {"visibility": "all"},
         "spotify": False,
@@ -194,7 +194,7 @@ async def test_recall_restricted_bank(mock_daemon):
 
 @pytest.mark.asyncio
 async def test_channel_agent_only_gets_recall(mock_daemon):
-    """Channel agents (visibility=all) only get recall, no write tools."""
+    """Factoria (visibility=all) only gets recall, no write tools."""
     tool_config = {
         "memory": {"visibility": "all"},
         "spotify": False,
@@ -209,7 +209,7 @@ async def test_channel_agent_only_gets_recall(mock_daemon):
         tools = await c.list_tools()
         names = {t.name for t in tools}
         assert "recall" in names
-        home_only = {
+        clarvis_only = {
             "remember",
             "update_fact",
             "forget",
@@ -231,8 +231,8 @@ async def test_channel_agent_only_gets_recall(mock_daemon):
             "set_mission",
             "set_disposition",
         }
-        for tool_name in home_only:
-            assert tool_name not in names, f"{tool_name} should not be available to channel agents"
+        for tool_name in clarvis_only:
+            assert tool_name not in names, f"{tool_name} should not be available to Factoria"
 
 
 # ── Field mapping & validation ──────────────────────────────────────
@@ -291,7 +291,7 @@ async def test_audit_uses_last_checkin(memory_client, mock_daemon):
 async def test_recall_store_not_ready(mock_daemon):
     """Returns error when store is not ready."""
     mock_daemon.memory_store.ready = False
-    app = create_app(daemon=mock_daemon, tool_config=HOME_TOOLS)
+    app = create_app(daemon=mock_daemon, tool_config=CLARVIS_TOOLS)
     async with Client(app) as c:
         r = await c.call_tool("recall", {"query": "test"})
         assert "Error" in r.content[0].text
@@ -302,7 +302,7 @@ async def test_recall_store_not_ready(mock_daemon):
 async def test_remember_store_not_ready(mock_daemon):
     """Returns error when store is not ready."""
     mock_daemon.memory_store.ready = False
-    app = create_app(daemon=mock_daemon, tool_config=HOME_TOOLS)
+    app = create_app(daemon=mock_daemon, tool_config=CLARVIS_TOOLS)
     async with Client(app) as c:
         r = await c.call_tool("remember", {"content": "test"})
         assert "Error" in r.content[0].text

@@ -76,7 +76,7 @@ Features are split into optional extras in `pyproject.toml`. The setup script in
 
 ```bash
 uv sync                    # Core only (MCP server, display, weather)
-uv sync --extra voice      # + wake word detection, voice agent
+uv sync --extra voice      # + wake word detection, voice pipeline
 uv sync --extra memory     # + knowledge graph memory (Graphiti + memU)
 uv sync --extra music      # + Spotify control (clautify)
 uv sync --extra particles  # + JIT weather particles (numba)

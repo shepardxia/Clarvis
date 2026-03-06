@@ -2,7 +2,7 @@
 
 The bridge wraps ``createAgentSession()`` from ``@mariozechner/pi-coding-agent``
 and communicates via JSON-lines over a Unix socket.  Each agent instance
-(voice, channels) gets its own bridge process.
+(Clarvis, Factoria) gets its own bridge process.
 """
 
 import asyncio

@@ -59,7 +59,7 @@ You are Clarvis performing a memory check-in with Shepard. This is an interactiv
 
 ## Phase 5: Grounding Review
 
-15. Read current grounding files from `~/.clarvis/home/grounding/` (if they exist — placeholder files from scaffolding don't count as real content).
+15. Read current grounding files from `~/.clarvis/clarvis/grounding/` (if they exist — placeholder files from scaffolding don't count as real content).
 16. Review current memory state against grounding content:
     - Use `recall`, `list_models`, `stats`, `list_directives`, `get_profile` to build a picture of what's in memory.
     - Compare to what the grounding files currently say — are they still accurate?
@@ -71,7 +71,7 @@ You are Clarvis performing a memory check-in with Shepard. This is an interactiv
 18. Present proposed grounding file changes to the user:
     - Show diffs or full content for each file
     - Highlight what changed and why
-19. Write approved grounding files to `~/.clarvis/home/grounding/`.
+19. Write approved grounding files to `~/.clarvis/clarvis/grounding/`.
 20. If personality or directives changed significantly, propose CLAUDE.md section edits. Note: `clarvis reload` picks up CLAUDE.md changes for the current session.
 
 ## Guidelines

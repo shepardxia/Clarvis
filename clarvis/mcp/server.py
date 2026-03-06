@@ -103,7 +103,7 @@ STANDARD_TOOLS = {
     "memory": False,
 }
 
-HOME_TOOLS = {
+CLARVIS_TOOLS = {
     "spotify": True,
     "timers": True,
     "channels": True,
@@ -111,7 +111,7 @@ HOME_TOOLS = {
     "memory": True,
 }
 
-CHANNEL_DEFAULTS = {
+FACTORIA_DEFAULTS = {
     "spotify": False,
     "timers": False,
     "channels": True,
@@ -133,7 +133,7 @@ def create_app(daemon, tool_config, get_session=None):
             ``prompt_response``.
             Values: ``True`` (enabled), ``False`` (disabled), or
             ``{key: value}`` (enabled with constraints).
-            Use STANDARD_TOOLS, HOME_TOOLS, or CHANNEL_DEFAULTS.
+            Use STANDARD_TOOLS, CLARVIS_TOOLS, or FACTORIA_DEFAULTS.
         get_session: Callable returning SpotifySession instance. Passed through
             to spotify sub-server. Pass a mock factory for testing.
     """
@@ -179,33 +179,33 @@ async def run_embedded(
     daemon,
     host="127.0.0.1",
     port=7777,
-    memory_port=7778,
+    clarvis_port=7778,
     channel_ports=None,
-    voice_tools_override=None,
+    clarvis_tools_override=None,
     ready: asyncio.Event | None = None,
 ):
     """Run MCP servers embedded in daemon's event loop.
 
     Port 7777: standard tools (ping, context, channels).
-    Port 7778: standard + memory + knowledge + voice tools (for ~/.clarvis/home/ sessions).
+    Port 7778: Clarvis agent tools (standard + memory + knowledge + spotify + timers).
     Additional channel ports: one per unique tool_config across channels.
 
     Args:
         channel_ports: list of ``(tool_config, port)`` tuples.  Each gets
             its own uvicorn server with a restricted tool surface.
-        voice_tools_override: dict of tool overrides from config.json voice.tools,
-            applied on top of STANDARD_TOOLS and HOME_TOOLS defaults.
+        clarvis_tools_override: dict of tool overrides from config.json clarvis.tools,
+            applied on top of STANDARD_TOOLS and CLARVIS_TOOLS defaults.
         ready: if provided, set after all servers have bound their ports.
     """
     import socket
 
     import uvicorn
 
-    standard_cfg = {**STANDARD_TOOLS, **(voice_tools_override or {})}
-    home_cfg = {**HOME_TOOLS, **(voice_tools_override or {})}
+    standard_cfg = {**STANDARD_TOOLS, **(clarvis_tools_override or {})}
+    clarvis_cfg = {**CLARVIS_TOOLS, **(clarvis_tools_override or {})}
 
-    main_app = create_app(daemon, tool_config=standard_cfg)
-    mem_app = create_app(daemon, tool_config=home_cfg)
+    standard_app = create_app(daemon, tool_config=standard_cfg)
+    clarvis_app = create_app(daemon, tool_config=clarvis_cfg)
 
     entries: list[tuple[uvicorn.Server, socket.socket]] = []
 
@@ -217,11 +217,11 @@ async def run_embedded(
         cfg = uvicorn.Config(asgi_app, host=host, port=bind_port, log_level="warning")
         return uvicorn.Server(cfg), sock
 
-    main_asgi = main_app.http_app(transport="streamable-http")
-    mem_asgi = mem_app.http_app(transport="streamable-http")
+    standard_asgi = standard_app.http_app(transport="streamable-http")
+    clarvis_asgi = clarvis_app.http_app(transport="streamable-http")
 
-    entries.append(_bind(main_asgi, port))
-    entries.append(_bind(mem_asgi, memory_port))
+    entries.append(_bind(standard_asgi, port))
+    entries.append(_bind(clarvis_asgi, clarvis_port))
 
     for tool_cfg, ch_port in channel_ports or []:
         ch_app = create_app(daemon, tool_config=tool_cfg)

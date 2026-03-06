@@ -14,7 +14,7 @@ from fastmcp import Client
 
 from clarvis.core.context import AppContext
 from clarvis.core.signals import SignalBus
-from clarvis.mcp.server import HOME_TOOLS, STANDARD_TOOLS, create_app
+from clarvis.mcp.server import CLARVIS_TOOLS, STANDARD_TOOLS, create_app
 from clarvis.services.timer_service import TimerService
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ async def client(mock_daemon, mock_spotify):
 
 @pytest_asyncio.fixture
 async def memory_client(mock_daemon, mock_spotify):
-    app = create_app(daemon=mock_daemon, tool_config=HOME_TOOLS, get_session=lambda: mock_spotify)
+    app = create_app(daemon=mock_daemon, tool_config=CLARVIS_TOOLS, get_session=lambda: mock_spotify)
     async with Client(app) as c:
         yield c
 
@@ -167,7 +167,7 @@ async def test_spotify_error(mock_daemon):
     """Spotify exceptions are surfaced as error text, not crashes."""
     broken = MagicMock()
     broken.run.side_effect = Exception("Connection failed")
-    app = create_app(daemon=mock_daemon, tool_config=HOME_TOOLS, get_session=lambda: broken)
+    app = create_app(daemon=mock_daemon, tool_config=CLARVIS_TOOLS, get_session=lambda: broken)
     async with Client(app) as c:
         r = await c.call_tool("clautify", {"command": "now playing"})
         assert "Connection failed" in r.data
@@ -178,7 +178,7 @@ async def test_spotify_error(mock_daemon):
 
 @pytest.mark.asyncio
 async def test_recall_restricted_bank(mock_daemon, mock_spotify):
-    """Masked agent (visibility=all) cannot search parletre."""
+    """Factoria (visibility=all) cannot search parletre."""
     tool_config = {
         "memory": {"visibility": "all"},
         "spotify": True,
@@ -197,7 +197,7 @@ async def test_recall_restricted_bank(mock_daemon, mock_spotify):
 
 @pytest.mark.asyncio
 async def test_channel_agent_no_write_tools(mock_daemon, mock_spotify):
-    """Channel agents (visibility=all) only get search tools, no write/ingest/delete."""
+    """Factoria (visibility=all) only gets search tools, no write/ingest/delete."""
     tool_config = {
         "memory": {"visibility": "all"},
         "spotify": False,
@@ -213,7 +213,7 @@ async def test_channel_agent_no_write_tools(mock_daemon, mock_spotify):
         names = {t.name for t in tools}
         assert "recall" in names
         assert "knowledge" in names
-        # Write/home-only tools must NOT be present
+        # Clarvis-only tools must NOT be present
         assert "remember" not in names
         assert "update_fact" not in names
         assert "forget" not in names

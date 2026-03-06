@@ -24,7 +24,7 @@ def _sdk():
     return claude_agent_sdk
 
 
-VOICE_ALLOWED_TOOLS = [
+AGENT_ALLOWED_TOOLS = [
     "mcp__clarvis__*",
     "Bash",
     "WebSearch",

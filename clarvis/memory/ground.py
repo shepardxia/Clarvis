@@ -2,7 +2,7 @@
 
 Composes session-start context from multiple layers in priority order:
 
-1. **Authored grounding files** — curated prose in ``~/.clarvis/home/grounding/*.md``,
+1. **Authored grounding files** — curated prose in ``~/.clarvis/clarvis/grounding/*.md``,
    written by Clarvis during checkin (personality, directives, user profile, etc.).
 2. **Core mental models** — always included (tagged ``core``).
 3. **Bank stats** — compact summary of memory state.
@@ -53,14 +53,14 @@ async def build_memory_context(
         visibility: "master" or "all" -- determines bank access.
         token_budget: Approximate token budget for the entire block.
         grounding_dir: Directory containing authored ``*.md`` grounding files.
-            Defaults to ``~/.clarvis/home/grounding/``.
+            Defaults to ``~/.clarvis/clarvis/grounding/``.
 
     Returns:
         Formatted ``<memory_context>`` string for system prompt injection.
         Empty string if store is not ready and no grounding files exist.
     """
     if grounding_dir is None:
-        grounding_dir = Path.home() / ".clarvis" / "home" / "grounding"
+        grounding_dir = Path.home() / ".clarvis" / "clarvis" / "grounding"
     else:
         grounding_dir = Path(grounding_dir).expanduser()
 

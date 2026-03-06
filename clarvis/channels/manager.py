@@ -59,7 +59,7 @@ class ChannelManager:
         self._inflight: set[asyncio.Task] = set()
         self._outbound_hooks: dict[str, OutboundHook] = {}
         self._voice_channel = None
-        self._transcript_path = Path.home() / ".clarvis" / "channels" / "transcript.jsonl"
+        self._transcript_path = Path.home() / ".clarvis" / "factoria" / "transcript.jsonl"
         self._memory_service = memory_service  # HindsightStore instance
         self._session_grounded = False
 

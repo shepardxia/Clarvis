@@ -185,7 +185,7 @@ def create_memory_server(daemon, visibility: str = "master") -> FastMCP:
 
         return f"Results:\n{_fmt_facts(results)}"
 
-    # ── Home-only tools (Clarvis only, not Clarvisus Factoria) ────────
+    # ── Clarvis-only tools (not available to Factoria) ────────────────
 
     if visibility == "master":
 

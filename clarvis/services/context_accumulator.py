@@ -98,14 +98,14 @@ class ContextAccumulator:
     - **Staged items**: Manually added text items.
     """
 
-    def __init__(self, ctx: "AppContext", home_slug: str, state_dir: str = "~/.clarvis/staging"):
+    def __init__(self, ctx: "AppContext", clarvis_slug: str, state_dir: str = "~/.clarvis/staging"):
         self._ctx = ctx
         self._state_dir = Path(state_dir).expanduser()
         self._state_file = self._state_dir / "state.json"
         self._last_check_in: datetime = datetime.now(timezone.utc)
         self._staged_items: list[dict[str, Any]] = []
         self._session_refs: list[dict[str, Any]] = []
-        self._home_slug = home_slug
+        self._clarvis_slug = clarvis_slug
 
         self._lock = threading.Lock()
         self._state_dir.mkdir(parents=True, exist_ok=True)
@@ -119,7 +119,7 @@ class ContextAccumulator:
         if event_name != "Stop" or not transcript_path:
             return
         slug = Path(transcript_path).parent.name
-        if slug == self._home_slug:
+        if slug == self._clarvis_slug:
             self._ctx.loop.run_in_executor(None, self.stage_session, session_id, transcript_path)
 
     # ------------------------------------------------------------------
