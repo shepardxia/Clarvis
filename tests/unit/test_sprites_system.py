@@ -95,6 +95,17 @@ class TestWeatherSandbox:
         out_k = np.zeros((17, 43), dtype=np.uint8)
         weather.render(out_c, out_k)
 
+    def test_rain_renders_particles(self):
+        """After several ticks of rain, some non-SPACE chars should appear."""
+        scene = build_default_scene(width=43, height=17)
+        weather = next(s for s in scene.registry.alive() if isinstance(s, WeatherSandbox))
+        for _ in range(20):
+            weather.tick(weather_type="rain", weather_intensity=0.8)
+        out_c = np.full((17, 43), SPACE, dtype=np.uint32)
+        out_k = np.zeros((17, 43), dtype=np.uint8)
+        weather.render(out_c, out_k)
+        assert np.any(out_c != SPACE)
+
     def test_exclusion_zones_from_registry(self):
         scene = build_default_scene(width=43, height=17)
         weather = next(s for s in scene.registry.alive() if isinstance(s, WeatherSandbox))

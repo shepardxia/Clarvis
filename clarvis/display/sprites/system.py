@@ -4,20 +4,26 @@ FaceCel, WeatherSandbox, CelestialCel, BarSprite, and build_default_scene()
 produce the standard Clarvis visual output using the sprite/pattern system.
 """
 
+import random
 from datetime import datetime
 
 import numpy as np
 
-from ..archetypes import WeatherArchetype
-from ..archetypes.weather import BoundingBox
 from ..colors import StatusColors
 from ..elements.registry import ElementRegistry
-from ..pipeline import Layer
 from .cel import Cel
 from .control import Control
 from .core import SPACE, BBox, Sprite
 from .reel import Reel, ReelMode
 from .scenes import SceneManager
+from .weather_physics import (
+    BoundingBox,
+    Particle,
+    Shape,
+    compute_render_cells,
+    spawn_particles,
+    tick_physics_batch,
+)
 
 # Priority constants for sprite compositing order
 WEATHER = 0
@@ -173,11 +179,7 @@ class FaceCel(Cel):
 
 
 class WeatherSandbox(Sprite):
-    """Weather as a Sprite. WeatherArchetype provides the particle engine.
-
-    Delegates to the archetype for tick/render but bridges between
-    the Layer-based archetype API and the sprite's numpy arrays.
-    """
+    """Weather particle simulation sprite. Renders directly to output arrays."""
 
     def __init__(
         self,
@@ -189,18 +191,145 @@ class WeatherSandbox(Sprite):
         super().__init__(priority=priority, transparent=False)
         self._width = width
         self._height = height
-        self._archetype = WeatherArchetype(registry, width, height)
-        self._archetype.prewarm_shapes()
-        # Scratch layer for bridging archetype render → numpy
-        self._layer = Layer("weather_scratch", 0, width, height, transparent=True)
+        self._registry = registry
         self._scene_registry = None  # Set by build_default_scene
+
+        # Load physics config from elements/archetypes/weather.yaml
+        config = registry.get("archetypes", "weather") or {}
+        physics = config.get("physics", {})
+        self._death_prob = physics.get("death_prob", 0.08)
+        self._max_particles_base = physics.get("max_particles_base", 40)
+        self._speed_multiplier = physics.get("speed_multiplier", 2.0)
+        self._batch_size = physics.get("batch_size", 128)
+
+        ambient = config.get("ambient", {})
+        self._ambient_shapes = ambient.get("shapes", ["cloud_small", "cloud_wisp", "cloud_puff"])
+        self._ambient_max_clouds = ambient.get("max_clouds", 3)
+        self._ambient_spawn_rate = ambient.get("spawn_rate", 0.03)
+        self._ambient_spawn_zone = ambient.get("spawn_zone", 0.35)
+
+        # Weather state
+        self._weather_type: str | None = None
+        self._intensity = 0.0
+        self._wind_speed = 0.0
+        self._exclusion_zones: list[BoundingBox] = []
+
+        # Particle SoA arrays
+        n = self._batch_size
+        self.p_x = np.zeros(n, dtype=np.float64)
+        self.p_y = np.zeros(n, dtype=np.float64)
+        self.p_vx = np.zeros(n, dtype=np.float64)
+        self.p_vy = np.zeros(n, dtype=np.float64)
+        self.p_age = np.zeros(n, dtype=np.int64)
+        self.p_lifetime = np.zeros(n, dtype=np.int64)
+        self.p_shape_idx = np.zeros(n, dtype=np.int64)
+        self.p_count = 0
+
+        # Ambient clouds
+        self._ambient_clouds: list[Particle] = []
+
+        # Shape cache
+        self._shape_cache: list[Shape] = []
+        self._shape_offsets: np.ndarray | None = None
+        self._shape_cell_counts: np.ndarray | None = None
+        self._shape_chars: list[list[str]] = []
+        self._render_out_x: np.ndarray = np.zeros(0, dtype=np.int32)
+        self._render_out_y: np.ndarray = np.zeros(0, dtype=np.int32)
+        self._render_out_shape: np.ndarray = np.zeros(0, dtype=np.int32)
+        self._render_out_cell: np.ndarray = np.zeros(0, dtype=np.int32)
+
+        # Prewarm shape arrays for all weather types
+        self._prewarm_shapes()
 
     @property
     def bbox(self) -> BBox:
         return BBox(0, 0, self._width, self._height)
 
+    def _prewarm_shapes(self) -> None:
+        original = self._weather_type
+        for name in self._registry.list_names("weather"):
+            self._weather_type = name
+            self._rebuild_shape_cache()
+        self._weather_type = original
+        if original:
+            self._rebuild_shape_cache()
+
+    def _get_shape(self, name: str) -> Shape | None:
+        elem = self._registry.get("particles", name)
+        if not elem:
+            return None
+        return Shape.parse(elem.get("pattern", ""))
+
+    def _rebuild_shape_cache(self) -> None:
+        self._shape_cache = []
+        if not self._weather_type:
+            self._shape_offsets = None
+            return
+        weather_def = self._registry.get("weather", self._weather_type)
+        if not weather_def:
+            self._shape_offsets = None
+            return
+        for name in weather_def.get("particles", []):
+            shape = self._get_shape(name)
+            if shape:
+                self._shape_cache.append(shape)
+        if not self._shape_cache:
+            self._shape_offsets = None
+            return
+        self._build_shape_arrays()
+
+    def _build_shape_arrays(self) -> None:
+        num_shapes = len(self._shape_cache)
+        max_cells = 0
+        shape_cells = []
+        for shape in self._shape_cache:
+            cells = []
+            for row_idx, row in enumerate(shape.pattern):
+                for col_idx, char in enumerate(row):
+                    if char != " ":
+                        cells.append((col_idx, row_idx, char))
+            shape_cells.append(cells)
+            max_cells = max(max_cells, len(cells))
+
+        self._shape_offsets = np.zeros((num_shapes, max_cells, 2), dtype=np.int32)
+        self._shape_cell_counts = np.zeros(num_shapes, dtype=np.int32)
+        self._shape_chars = []
+        for i, cells in enumerate(shape_cells):
+            self._shape_cell_counts[i] = len(cells)
+            chars = []
+            for j, (dx, dy, char) in enumerate(cells):
+                self._shape_offsets[i, j, 0] = dx
+                self._shape_offsets[i, j, 1] = dy
+                chars.append(char)
+            self._shape_chars.append(chars)
+
+        max_output = self._batch_size * max_cells
+        self._render_out_x = np.zeros(max_output, dtype=np.int32)
+        self._render_out_y = np.zeros(max_output, dtype=np.int32)
+        self._render_out_shape = np.zeros(max_output, dtype=np.int32)
+        self._render_out_cell = np.zeros(max_output, dtype=np.int32)
+
+    def _grow_arrays(self) -> None:
+        old_size = len(self.p_x)
+        new_size = old_size * 2
+        for attr in ("p_x", "p_y", "p_vx", "p_vy"):
+            old = getattr(self, attr)
+            new = np.zeros(new_size, dtype=np.float64)
+            new[:old_size] = old
+            setattr(self, attr, new)
+        for attr in ("p_age", "p_lifetime", "p_shape_idx"):
+            old = getattr(self, attr)
+            new = np.zeros(new_size, dtype=np.int64)
+            new[:old_size] = old
+            setattr(self, attr, new)
+
     def set_weather(self, weather_type: str, intensity: float = 0.6, wind_speed: float = 0.0):
-        self._archetype.set_weather(weather_type, intensity, wind_speed)
+        if weather_type != self._weather_type:
+            self._weather_type = weather_type
+            self.p_count = 0
+            self._rebuild_shape_cache()
+        self._intensity = intensity
+        self._wind_speed = wind_speed
 
     def tick(self, **ctx) -> None:
         weather_type = ctx.get("weather_type")
@@ -208,34 +337,171 @@ class WeatherSandbox(Sprite):
             intensity = ctx.get("weather_intensity", 0.6)
             wind_speed = ctx.get("wind_speed", 0.0)
             self.set_weather(weather_type, intensity, wind_speed)
-        self._archetype.tick()
+
+        self._tick_ambient_clouds()
+
+        if not self._weather_type or not self._shape_cache:
+            return
+
+        if self.p_count > 0:
+            self.p_count = tick_physics_batch(
+                self.p_x,
+                self.p_y,
+                self.p_vx,
+                self.p_vy,
+                self.p_age,
+                self.p_lifetime,
+                self.p_shape_idx,
+                self.p_count,
+                1,
+                float(self._width),
+                float(self._height),
+                self._death_prob,
+            )
+
+        max_particles = int(self._intensity * self._max_particles_base)
+        spawn_rate = self._intensity * 2.0
+        spawn_count = min(np.random.poisson(spawn_rate * 3), max_particles - self.p_count)
+        if spawn_count > 0:
+            self._spawn_batch(spawn_count)
+
+    def _tick_ambient_clouds(self) -> None:
+        alive = []
+        for p in self._ambient_clouds:
+            p.x += p.vx
+            p.y += p.vy
+            if (
+                p.x < self._width + 1
+                and p.x + p.shape.width > -1
+                and p.y < self._height + 1
+                and p.y + p.shape.height > -1
+            ):
+                alive.append(p)
+        self._ambient_clouds = alive
+
+        if self._weather_type and self._weather_type not in ("clear", None):
+            return
+
+        if len(self._ambient_clouds) < self._ambient_max_clouds and random.random() < self._ambient_spawn_rate:
+            shape_name = random.choice(self._ambient_shapes)
+            shape = self._get_shape(shape_name)
+            if shape:
+                s = self._speed_multiplier
+                self._ambient_clouds.append(
+                    Particle(
+                        x=random.uniform(-shape.width * 2, -shape.width),
+                        y=random.uniform(0, int(self._height * self._ambient_spawn_zone)),
+                        vx=random.uniform(0.25, 0.45) * s,
+                        vy=random.uniform(-0.08, 0.08) * s,
+                        shape=shape,
+                        lifetime=999999,
+                    )
+                )
+
+    def _spawn_batch(self, count: int) -> None:
+        while self.p_count + count > len(self.p_x):
+            self._grow_arrays()
+
+        s = self._speed_multiplier
+        w, h = float(self._width), float(self._height)
+
+        if self._weather_type == "snow":
+            wf = min(self._wind_speed / 30.0, 1.0)
+            vx_var = (0.02 + wf * 0.03) * s
+            params = (0, w, -2, 2, wf * 0.15 * s - vx_var, 2 * vx_var, 0.15 * s, 0.2 * s, 40, 60)
+        elif self._weather_type == "rain":
+            params = (0, w, -2, 2, -0.03 * s, 0.06 * s, 0.5 * s, 0.4 * s, 20, 30)
+        elif self._weather_type == "windy":
+            params = (-2, 2, 0, h, 0.4 * s, 0.4 * s, -0.1 * s, 0.2 * s, 30, 30)
+        else:  # cloudy, fog
+            params = (0, w, 0, h, -0.05 * s, 0.1 * s, -0.03 * s, 0.06 * s, 60, 90)
+
+        spawn_particles(
+            self.p_x,
+            self.p_y,
+            self.p_vx,
+            self.p_vy,
+            self.p_age,
+            self.p_lifetime,
+            self.p_shape_idx,
+            self.p_count,
+            count,
+            len(self._shape_cache),
+            *params,
+        )
+        self.p_count += count
+
+    def _build_exclusion_set(self) -> set:
+        blocked = set()
+        for zone in self._exclusion_zones:
+            for x in range(zone.x, zone.x + zone.w):
+                for y in range(zone.y, zone.y + zone.h):
+                    blocked.add((x, y))
+        return blocked
 
     def render(self, out_chars: np.ndarray, out_colors: np.ndarray) -> None:
         # Build exclusion zones from face sprites in the registry
-        exclusion_zones = []
+        self._exclusion_zones = []
         if self._scene_registry:
             for s in self._scene_registry.alive():
                 if isinstance(s, FaceCel):
                     b = s.bbox
-                    exclusion_zones.append(BoundingBox(x=b.x, y=b.y, w=b.w, h=b.h))
-        self._archetype.set_exclusion_zones(exclusion_zones)
+                    self._exclusion_zones.append(BoundingBox(x=b.x, y=b.y, w=b.w, h=b.h))
 
-        # Render into scratch layer, then copy to output
-        self._layer.clear()
-        self._archetype.render(self._layer, color=15)
+        blocked = self._build_exclusion_set()
+        color = 15
+        w, h = self._width, self._height
 
-        # Copy scratch layer content to output arrays
-        bbox = self._layer.bbox
-        if bbox is not None:
-            x1, y1, x2, y2 = bbox
-            region = self._layer.chars[y1:y2, x1:x2]
-            mask = region != SPACE
-            out_chars[y1:y2, x1:x2] = np.where(mask, region, out_chars[y1:y2, x1:x2])
-            out_colors[y1:y2, x1:x2] = np.where(
-                mask,
-                self._layer.colors[y1:y2, x1:x2],
-                out_colors[y1:y2, x1:x2],
-            )
+        # Render ambient clouds
+        for p in self._ambient_clouds:
+            px, py = int(p.x), int(p.y)
+            for row_idx, row in enumerate(p.shape.pattern):
+                for col_idx, char in enumerate(row):
+                    if char == " ":
+                        continue
+                    cx, cy = px + col_idx, py + row_idx
+                    if (cx, cy) in blocked:
+                        continue
+                    if 0 <= cx < w and 0 <= cy < h:
+                        out_chars[cy, cx] = ord(char)
+                        out_colors[cy, cx] = color
+
+        # Render JIT particles
+        n = self.p_count
+        if n == 0 or self._shape_offsets is None:
+            return
+
+        max_cells = self._shape_offsets.shape[1]
+        needed_size = n * max_cells
+        if len(self._render_out_x) < needed_size:
+            new_size = needed_size * 2
+            self._render_out_x = np.zeros(new_size, dtype=np.int32)
+            self._render_out_y = np.zeros(new_size, dtype=np.int32)
+            self._render_out_shape = np.zeros(new_size, dtype=np.int32)
+            self._render_out_cell = np.zeros(new_size, dtype=np.int32)
+
+        num_cells = compute_render_cells(
+            self.p_x,
+            self.p_y,
+            self.p_shape_idx,
+            n,
+            self._shape_offsets,
+            self._shape_cell_counts,
+            self._render_out_x,
+            self._render_out_y,
+            self._render_out_shape,
+            self._render_out_cell,
+        )
+
+        xs = self._render_out_x[:num_cells].tolist()
+        ys = self._render_out_y[:num_cells].tolist()
+        shapes = self._render_out_shape[:num_cells].tolist()
+        cells = self._render_out_cell[:num_cells].tolist()
+
+        for cx, cy, shape_idx, cell_idx in zip(xs, ys, shapes, cells):
+            if (cx, cy) not in blocked and 0 <= cx < w and 0 <= cy < h:
+                out_chars[cy, cx] = ord(self._shape_chars[shape_idx][cell_idx])
+                out_colors[cy, cx] = color
 
 
 class CelestialCel(Sprite):
