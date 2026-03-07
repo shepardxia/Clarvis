@@ -27,6 +27,7 @@ clarvis = "clarvis.daemon:main"
 [project.optional-dependencies]
 voice = ["claude-agent-sdk", "nanobuddy[detect]"]
 memory = [
+    "hindsight-api>=0.4.15",
     "cognee[graphiti,anthropic]",
     "falkordblite>=0.8.0",
     "redis>=7.2",

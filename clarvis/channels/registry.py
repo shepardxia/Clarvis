@@ -10,11 +10,12 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from ..core.paths import CLARVIS_HOME
 from ..core.persistence import json_load_safe, json_save_atomic
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PATH = Path.home() / ".clarvis" / "registry.json"
+_DEFAULT_PATH = CLARVIS_HOME / "registry.json"
 
 
 class UserRegistry:

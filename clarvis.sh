@@ -170,8 +170,8 @@ else:
             *)  echo "Unknown list target: $2 (try: org)" ;;
         esac
         ;;
-    rem)
-        # Trigger memory ingestion (like REM sleep — consolidates memories)
+    reflect)
+        # Trigger memory reflection (consolidates memories)
         result=$(echo '{"method":"memory_ingest","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null)
         if [ -z "$result" ]; then
             echo "Error: daemon not running (start with 'clarvis start')"
@@ -287,7 +287,7 @@ except Exception as e:
         echo "  add org   Add an org (e.g. clarvis add org CS Lab)"
         echo "  remove org Remove an org"
         echo "  list org  List all orgs"
-        echo "  rem       Consolidate memories (ingest active sessions into memory)"
+        echo "  reflect   Consolidate memories (ingest active sessions into memory)"
         echo "  checkin   Interactive memory check-in (review staged changes + goals)"
         echo "  new       Reset session — next voice/chat starts a fresh conversation"
         echo "  reload    Reload agent prompts (CLAUDE.md, skills, extensions)"

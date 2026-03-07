@@ -1,0 +1,234 @@
+"""Seed initial cross-session goals from YAML config.
+
+Goals are stored as opinion-type facts in memory with confidence scores.
+Only seeds if no goals exist yet (first-run detection).
+
+Also provides scaffolding for seed goals YAML, skills, and grounding files
+in ``~/.clarvis/clarvis/``.
+"""
+
+import logging
+import shutil
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import yaml
+
+from clarvis.core.paths import agent_home
+
+if TYPE_CHECKING:
+    from clarvis.memory.store import MemoryStore
+
+logger = logging.getLogger(__name__)
+
+# ── Bundled data paths ────────────────────────────────────────────────────
+
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_SKILLS_DIR = _DATA_DIR / "skills"
+
+# ── Default content for scaffolded files ─────────────────────────────────
+
+DEFAULT_SEED_GOALS_YAML = """\
+goals:
+  - description: "Keep the document knowledge graph clean — merge duplicates, build community summaries, identify gaps"
+    status: active
+    confidence: 0.8
+  - description: "Track music recommendation outcomes — update confidence on taste beliefs based on feedback"
+    status: active
+    confidence: 0.7
+  - description: "Keep agora current with Sinthome organizational knowledge across all branches"
+    status: active
+    confidence: 0.7
+  - description: "Build understanding of people and relationship dynamics, not just isolated facts"
+    status: active
+    confidence: 0.6
+  - description: "Reflect on own performance — what worked, what didn't, what to adjust"
+    status: active
+    confidence: 0.5
+"""
+
+
+# Placeholder content for grounding files — filled in by Clarvis during first checkin.
+_GROUNDING_PLACEHOLDERS: dict[str, str] = {
+    "01-personality.md": """\
+<!-- Clarvis personality & directives — authored during checkin -->
+<!-- Replace this with personality description, active directives, and behavioral rules -->
+""",
+    "02-profile.md": """\
+<!-- User profile — authored during checkin -->
+<!-- Replace this with user preferences, communication style, and key context -->
+""",
+    "03-knowledge.md": """\
+<!-- Knowledge summary — authored during checkin -->
+<!-- Replace this with a breadth indicator of what's in memory: topics, entities, domains -->
+""",
+}
+
+# Skills to scaffold from bundled data/skills/ templates.
+_SCAFFOLD_SKILLS = ["checkin", "reflect"]
+
+
+def scaffold_checkin_files(home_dir: Path | None = None) -> dict[str, bool]:
+    """Ensure checkin-related files exist in the home project directory.
+
+    Creates ``seed_goals.yaml``, ``.pi/skills/*/SKILL.md``, and
+    ``grounding/*.md`` placeholder files if they don't already exist.
+    Skill content is copied from bundled templates in ``data/skills/``.
+    Does not overwrite existing files.
+
+    Returns a dict mapping filename to whether it was created.
+    """
+    if home_dir is None:
+        home_dir = agent_home("clarvis")
+
+    home_dir = Path(home_dir).expanduser()
+    created: dict[str, bool] = {}
+
+    # seed_goals.yaml
+    seed_path = home_dir / "seed_goals.yaml"
+    if not seed_path.exists():
+        seed_path.parent.mkdir(parents=True, exist_ok=True)
+        seed_path.write_text(DEFAULT_SEED_GOALS_YAML, encoding="utf-8")
+        created["seed_goals.yaml"] = True
+        logger.info("Scaffolded %s", seed_path)
+    else:
+        created["seed_goals.yaml"] = False
+
+    # .pi/skills/*/SKILL.md — copied from bundled data/skills/ templates
+    for skill_name in _SCAFFOLD_SKILLS:
+        template = _SKILLS_DIR / skill_name / "SKILL.md"
+        skill_path = home_dir / ".pi" / "skills" / skill_name / "SKILL.md"
+        skill_key = f".pi/skills/{skill_name}/SKILL.md"
+
+        if not skill_path.exists():
+            if template.exists():
+                skill_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(template), str(skill_path))
+                created[skill_key] = True
+                logger.info("Scaffolded %s from %s", skill_path, template)
+            else:
+                logger.warning("Skill template not found: %s", template)
+                created[skill_key] = False
+        else:
+            created[skill_key] = False
+
+    # grounding/*.md placeholders
+    grounding_dir = home_dir / "grounding"
+    for filename, content in _GROUNDING_PLACEHOLDERS.items():
+        rel_key = f"grounding/{filename}"
+        file_path = grounding_dir / filename
+        if not file_path.exists():
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content, encoding="utf-8")
+            created[rel_key] = True
+            logger.info("Scaffolded %s", file_path)
+        else:
+            created[rel_key] = False
+
+    return created
+
+
+class GoalSeeder:
+    """Seeds initial cross-session goals from YAML config.
+
+    Goals are stored as opinion-type facts in memory with confidence scores.
+    Only seeds if no goals exist yet (first-run detection).
+    """
+
+    def __init__(self, seed_path: Path, backend: "MemoryStore") -> None:
+        self._seed_path = Path(seed_path).expanduser()
+        self._backend = backend
+
+    def _load_seed_goals(self) -> list[dict[str, Any]]:
+        """Read seed goals from YAML file.
+
+        Returns a list of goal dicts with keys: description, status, confidence.
+        """
+        if not self._seed_path.exists():
+            logger.debug("Seed goals file not found: %s", self._seed_path)
+            return []
+
+        try:
+            raw = yaml.safe_load(self._seed_path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Failed to parse seed goals YAML: %s", self._seed_path, exc_info=True)
+            return []
+
+        if not isinstance(raw, dict) or "goals" not in raw:
+            logger.warning("Seed goals YAML missing 'goals' key: %s", self._seed_path)
+            return []
+
+        goals = raw["goals"]
+        if not isinstance(goals, list):
+            logger.warning("Seed goals 'goals' is not a list: %s", self._seed_path)
+            return []
+
+        return goals
+
+    async def _goals_exist(self) -> bool:
+        """Check if any goals already exist in memory.
+
+        Searches for opinion-type facts containing 'active goal' or with
+        descriptions matching seed goal patterns.
+        """
+        try:
+            result = await self._backend.recall(
+                "active goal",
+                bank="parletre",
+                max_tokens=1024,
+                fact_type=["opinion"],
+            )
+            facts = result.get("results") or result.get("facts") or []
+            return len(facts) > 0
+        except Exception:
+            logger.debug("Goal existence check failed — assuming no goals exist", exc_info=True)
+            return False
+
+    async def seed_if_needed(self) -> list[dict[str, Any]]:
+        """Check if goals exist, seed from YAML if not. Returns seeded goals."""
+        if not self._backend.ready:
+            logger.warning("MemoryStore not ready — skipping goal seeding")
+            return []
+
+        goals = self._load_seed_goals()
+        if not goals:
+            return []
+
+        if await self._goals_exist():
+            logger.debug("Goals already exist in memory — skipping seed")
+            return []
+
+        from clarvis.memory.store import FactInput
+
+        fact_inputs: list[FactInput] = []
+        goal_meta: list[dict[str, Any]] = []
+
+        for goal in goals:
+            description = goal.get("description", "")
+            if not description:
+                continue
+
+            confidence = goal.get("confidence", 0.5)
+            status = goal.get("status", "active")
+            content = f"[Goal] {description} (status: {status})"
+
+            fact_inputs.append(
+                FactInput(
+                    fact_text=content,
+                    fact_type="opinion",
+                    confidence=confidence,
+                )
+            )
+            goal_meta.append({"description": description, "status": status, "confidence": confidence})
+
+        if not fact_inputs:
+            return []
+
+        try:
+            fact_ids = await self._backend.store_facts(fact_inputs, bank="parletre")
+            seeded = [{**meta, "fact_id": fid} for meta, fid in zip(goal_meta, fact_ids)]
+            logger.info("Seeded %d goal(s) from %s", len(seeded), self._seed_path)
+            return seeded
+        except Exception:
+            logger.warning("Failed to seed goals from %s", self._seed_path, exc_info=True)
+            return []

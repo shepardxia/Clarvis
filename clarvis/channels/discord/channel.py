@@ -4,11 +4,12 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import httpx
 import websockets
+
+from clarvis.core.paths import CLARVIS_HOME
 
 from ..base import BaseChannel
 from ..bus import MessageBus
@@ -218,7 +219,7 @@ class DiscordChannel(BaseChannel):
 
         content_parts = [content] if content else []
         media_paths: list[str] = []
-        media_dir = Path.home() / ".clarvis" / "media"
+        media_dir = CLARVIS_HOME / "media"
 
         for attachment in payload.get("attachments") or []:
             url = attachment.get("url")

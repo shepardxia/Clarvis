@@ -1,102 +1,54 @@
-"""WakeupManager — context-rich autonomous prompts for the Pi agent.
+"""Nudge — context-rich autonomous prompts for the Pi agent.
 
 Builds situational prompts gathering time, weather, and music context,
 then sends them to the agent. The agent decides autonomously what to do
 based on the situation.
 """
 
-import asyncio
 import logging
 from typing import Any
 
-from ..core.context_helpers import build_ambient_context, now_playing_summary
+from ..core.context_helpers import build_ambient_context
 
 logger = logging.getLogger(__name__)
 
 
-class WakeupManager:
-    """Builds situational prompts and sends them to the agent.
+async def nudge(
+    agent: Any,
+    reason: str,
+    state_store: Any = None,
+    **context,
+) -> str | None:
+    """Send a context-rich prompt to the agent. Returns response text or None."""
+    prompt = _build_prompt(reason, state_store, **context)
+    logger.info("Nudge (%s): sending prompt (%d chars)", reason, len(prompt))
 
-    Wire into the system:
-    - ``bus.on("timer:fired", wakeup.on_timer_fired)``
-    - ``scheduler.register("wakeup_pulse", wakeup.on_pulse, ...)``
-    """
+    chunks: list[str] = []
+    try:
+        async for chunk in agent.send(prompt):
+            if chunk is not None:
+                chunks.append(chunk)
+    except Exception as e:
+        logger.warning("Nudge (%s) failed: %s", reason, e)
+        return None
 
-    def __init__(
-        self,
-        agent: Any,
-        state_store: Any = None,
-        get_spotify_session: Any = None,
-    ):
-        self._agent = agent
-        self._state = state_store
-        self._get_spotify_session = get_spotify_session
+    response = "".join(chunks).strip() if chunks else None
+    if response:
+        logger.info("Nudge response (%s): %s", reason, response[:200])
+    return response
 
-    # ------------------------------------------------------------------
-    # Trigger handlers
-    # ------------------------------------------------------------------
 
-    async def on_timer_fired(
-        self, signal_name: str, *, name: str, label: str = "", wake_clarvis: bool = False, **kw
-    ) -> None:
-        """Handle timer:fired signal. Only wakes if wake_clarvis is set."""
-        if wake_clarvis:
-            await self._wakeup(reason="timer", timer_name=name, timer_label=label)
+def _build_prompt(reason: str, state_store: Any, **context) -> str:
+    """Minimal situational context for nudge."""
+    parts: list[str] = [f"[{reason}]"]
+    parts.append(build_ambient_context(state_store))
 
-    async def on_pulse(self) -> None:
-        """Regular check-in pulse from Scheduler."""
-        await self._wakeup(reason="pulse")
+    # Reason-specific context
+    if reason == "timer":
+        name = context.get("timer_name", "?")
+        label = context.get("timer_label", "")
+        parts.append(f"Timer '{name}' fired" + (f": {label}" if label else ""))
+    elif reason == "reflect":
+        parts.append("Reflect requested. Run /reflect to process pending sessions and consolidate memories.")
 
-    async def on_force_reflect(self) -> str | None:
-        """Forced reflect. Called by ``clarvis rem``."""
-        return await self._wakeup(reason="reflect")
-
-    # ------------------------------------------------------------------
-    # Core
-    # ------------------------------------------------------------------
-
-    async def _wakeup(self, reason: str, **context) -> str | None:
-        """Build a context prompt and send to the agent.
-
-        Returns the agent's response text, or None if no response.
-        """
-        # Gather now-playing in executor (sync Spotify call)
-        np = None
-        if self._get_spotify_session:
-            loop = asyncio.get_running_loop()
-            np = await loop.run_in_executor(None, now_playing_summary, self._get_spotify_session)
-
-        prompt = self._build_context_prompt(reason, now_playing=np, **context)
-        logger.info("Wakeup (%s): sending prompt (%d chars)", reason, len(prompt))
-
-        chunks: list[str] = []
-        try:
-            async for chunk in self._agent.send(prompt):
-                if chunk is not None:
-                    chunks.append(chunk)
-        except Exception as e:
-            logger.warning("Wakeup (%s) failed: %s", reason, e)
-            return None
-
-        response = "".join(chunks).strip() if chunks else None
-        if response:
-            logger.info("Wakeup response (%s): %s", reason, response[:200])
-        return response
-
-    def _build_context_prompt(self, reason: str, **context) -> str:
-        """Minimal situational context for nudge."""
-        state_getter = self._state.get if self._state else lambda _: {}
-        np = context.pop("now_playing", None)
-
-        parts: list[str] = [f"[{reason}]"]
-        parts.extend(build_ambient_context(state_getter, now_playing=np))
-
-        # Reason-specific context
-        if reason == "timer":
-            name = context.get("timer_name", "?")
-            label = context.get("timer_label", "")
-            parts.append(f"Timer '{name}' fired" + (f": {label}" if label else ""))
-        elif reason == "reflect":
-            parts.append("Reflect requested. Run /reflect to process pending sessions and consolidate memories.")
-
-        return "\n".join(parts)
+    return "\n".join(parts)

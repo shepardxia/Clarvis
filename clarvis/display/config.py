@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..core.paths import CLARVIS_HOME
 from ..core.persistence import json_load_safe
 from .colors import (
     DEFAULT_THEME,
@@ -139,12 +140,12 @@ class DocumentsConfig(BaseModel):
     """Configuration for the document watcher service."""
 
     watch_dir: str = Field(
-        default="~/.clarvis/documents",
+        default=str(CLARVIS_HOME / "documents"),
         description="Directory to watch for new/changed files to ingest via Cognee.",
     )
     poll_interval: int = Field(default=60, ge=5, description="Seconds between directory scans.")
     hash_store_path: str = Field(
-        default="~/.clarvis/memory/doc_hashes.json",
+        default=str(CLARVIS_HOME / "memory" / "doc_hashes.json"),
         description="Path to persist content-hash state for dedup.",
     )
 
@@ -158,7 +159,7 @@ class MemoryConfig(BaseModel):
     """
 
     enabled: bool = Field(default=False, description="Enable memory system (Hindsight + Cognee)")
-    data_dir: str = Field(default="~/.clarvis/memory", description="Root directory for memory storage")
+    data_dir: str = Field(default=str(CLARVIS_HOME / "memory"), description="Root directory for memory storage")
 
     # Reflect: consolidate facts into observations + refresh mental models
     reflect_fact_threshold: int = Field(

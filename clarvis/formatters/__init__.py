@@ -1,5 +1,5 @@
-"""Shared formatting helpers for daemon IPC and MCP tools.
+"""Shared formatting helpers for daemon IPC commands.
 
 Base formatters convert raw API results into concise agent-readable strings.
-Used by both command_handlers (ctools) and MCP tool sub-servers.
+Used by command handlers (ctools).
 """

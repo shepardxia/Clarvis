@@ -19,9 +19,10 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout
 
-from .core.command_handlers import CommandHandlers
+from .core.commands import CommandHandlers
 from .core.context import AppContext
 from .core.ipc import DaemonServer
+from .core.paths import CLARVIS_HOME
 from .core.persistence import json_load_safe
 from .core.scheduler import Scheduler
 from .core.signals import SignalBus
@@ -126,58 +127,48 @@ class CentralHubDaemon:
         self._agents = {}  # str -> Agent, populated by _init_agents / _init_channel_manager
         self.voice_orchestrator = None
         self.channel_manager = None
-        self.staging_dir = Path.home() / ".clarvis" / "staging"
-        self._wakeup_manager = None
+        self.staging_dir = CLARVIS_HOME / "staging"
         self._session_reader = None
         self._owned_services: list = []  # services with no other refs (prevent GC)
 
-        # Memory backends (optional — requires hindsight + cognee)
-        self.hindsight_store = None  # HindsightStore (Level 2 interface)
-        self.cognee_backend = None
+        # Memory backend (optional — unified MemoryStore)
+        self.memory = None
         self.document_watcher = None
         if config.memory.enabled:
             try:
-                from .memory.store import HindsightStore
+                from .memory.store import MemoryStore
 
                 h_cfg = config.memory.hindsight
-                self.hindsight_store = HindsightStore(
+                c_cfg = config.memory.cognee
+                self.memory = MemoryStore(
                     db_url=h_cfg.db_url,
                     banks={name: {"visibility": dc.visibility} for name, dc in h_cfg.banks.items()},
+                    kg_db_host=c_cfg.db_host,
+                    kg_db_port=c_cfg.db_port,
+                    kg_db_name=c_cfg.db_name,
+                    kg_db_username=c_cfg.db_username,
+                    kg_db_password=c_cfg.db_password,
+                    kg_graph_path=c_cfg.graph_path,
+                    kg_llm_provider=c_cfg.llm_provider,
+                    kg_llm_model=c_cfg.llm_model,
+                    kg_llm_api_key=c_cfg.llm_api_key,
                 )
             except ImportError:
-                logger.info("hindsight not installed — conversational memory disabled")
+                logger.info("memory deps not installed — memory disabled")
 
-            try:
-                from .agent.memory.cognee_backend import CogneeBackend
-
-                c_cfg = config.memory.cognee
-                self.cognee_backend = CogneeBackend(
-                    db_host=c_cfg.db_host,
-                    db_port=c_cfg.db_port,
-                    db_name=c_cfg.db_name,
-                    db_username=c_cfg.db_username,
-                    db_password=c_cfg.db_password,
-                    graph_path=c_cfg.graph_path,
-                    llm_provider=c_cfg.llm_provider,
-                    llm_model=c_cfg.llm_model,
-                    llm_api_key=c_cfg.llm_api_key,
-                )
-            except ImportError:
-                logger.info("cognee not installed — knowledge graph disabled")
-
-            if self.cognee_backend is not None:
+            if self.memory is not None:
                 try:
-                    from .agent.memory.document_watcher import DocumentWatcher
+                    from .memory.document_watcher import DocumentWatcher
 
                     d_cfg = config.memory.documents
                     self.document_watcher = DocumentWatcher(
                         watch_dir=Path(d_cfg.watch_dir),
-                        cognee_backend=self.cognee_backend,
+                        memory=self.memory,
                         hash_store_path=Path(d_cfg.hash_store_path),
                         poll_interval=d_cfg.poll_interval,
                     )
                 except ImportError:
-                    logger.info("document_watcher deps not available")
+                    logger.info("document watcher deps not installed")
         self.ctx: AppContext | None = None
         self._staleness_handle: asyncio.TimerHandle | None = None
         self.scheduler: Scheduler | None = None
@@ -221,7 +212,7 @@ class CentralHubDaemon:
             session_tracker=self.session_tracker,
         )
 
-        # Command handlers (IPC request handlers for MCP server)
+        # Command handlers (daemon IPC commands)
         # CommandHandlers created in run() after AppContext is available
         self.commands = None
 
@@ -344,23 +335,18 @@ class CentralHubDaemon:
             return
 
         config = self.ctx.config
-        # Read channels config early — needed by both voice gate and _init_channel_manager
+        # Read channels config early — needed by _init_channel_manager
         raw_config = json_load_safe(CONFIG_PATH) or {}
         self._channels_config = raw_config.get("channels") or {}
-        has_channels = any(ch.get("enabled") for ch in self._channels_config.values() if isinstance(ch, dict))
 
-        if not config.voice.enabled and not has_channels:
-            return
+        # Clarvis agent — always created (serves voice, terminal chat, wakeup)
+        from .agent.factory import create_clarvis_agent
 
-        # Clarvis agent — shared by voice and terminal chat
-        if config.voice.enabled:
-            from .channels.agent_factory import create_clarvis_agent
-
-            agent = create_clarvis_agent(
-                model=config.clarvis.model,
-                max_thinking_tokens=config.clarvis.max_thinking_tokens,
-            )
-            self._agents["clarvis"] = agent
+        agent = create_clarvis_agent(
+            model=config.clarvis.model,
+            max_thinking_tokens=config.clarvis.max_thinking_tokens,
+        )
+        self._agents["clarvis"] = agent
 
     def _init_voice_pipeline(self) -> None:
         """Initialize voice orchestrator with the captured event loop.
@@ -403,7 +389,7 @@ class CentralHubDaemon:
             silence_timeout=config.voice.silence_timeout,
             text_linger=config.voice.text_linger,
         )
-        self.voice_orchestrator.memory_service = self.hindsight_store
+        self.voice_orchestrator.memory_service = self.memory
         # Orchestrator now self-subscribes to wake_word signals via bus;
         # remove the daemon fallback so both don't fire.
         if self.bus:
@@ -412,46 +398,6 @@ class CentralHubDaemon:
         # Register mic toggle region
         self._register_mic_region()
         logger.info("Voice command pipeline initialized")
-
-    def _init_wakeup(self) -> None:
-        """Wire WakeupManager for autonomous context-rich prompts.
-
-        Called from run() after agents are created.
-        """
-        config = self.ctx.config
-        if not config.channels.wakeup.enabled:
-            return
-
-        clarvis_agent = self._agents.get("clarvis")
-        if not clarvis_agent:
-            return
-
-        from .services.wakeup import WakeupManager
-
-        self._wakeup_manager = WakeupManager(
-            agent=clarvis_agent,
-            state_store=self.state,
-            get_spotify_session=self._get_spotify_session,
-        )
-
-        # Register pulse wakeup with scheduler
-        pulse_secs = config.channels.wakeup.pulse_interval_minutes * 60
-        self.scheduler.register(
-            "wakeup_pulse",
-            lambda: asyncio.create_task(self._wakeup_manager.on_pulse()),
-            active_interval=pulse_secs,
-            idle_interval=pulse_secs * 2,
-        )
-
-        # Subscribe to timer:fired for wake_clarvis timers
-        self.bus.on(
-            "timer:fired", lambda sig, **kw: asyncio.create_task(self._wakeup_manager.on_timer_fired(sig, **kw))
-        )
-
-        logger.info(
-            "WakeupManager active (pulse=%dm)",
-            config.channels.wakeup.pulse_interval_minutes,
-        )
 
     async def _init_channel_manager(self) -> None:
         """Initialize online channels with a single shared Factoria agent.
@@ -467,7 +413,7 @@ class CentralHubDaemon:
         config = self.ctx.config
 
         try:
-            from .channels.agent_factory import create_factoria_agent
+            from .agent.factory import create_factoria_agent
             from .channels.manager import ChannelManager
             from .channels.registry import UserRegistry
             from .channels.state import ChannelState
@@ -487,7 +433,7 @@ class CentralHubDaemon:
                 channels_config=channels_config,
                 registry=registry,
                 state=state,
-                memory_service=self.hindsight_store,
+                memory_service=self.memory,
             )
             await self.channel_manager.start()
 
@@ -588,22 +534,14 @@ class CentralHubDaemon:
         self.socket_server.on_message(self._handle_widget_message)
         self.socket_server.on_connect(self.click_manager.push_regions)
 
-        # Memory backends (start — heavy imports run in executor)
-        if self.hindsight_store is not None:
+        # Memory backend (start — heavy imports run in executor)
+        if self.memory is not None:
             try:
-                await self.hindsight_store.start()
-                logger.info("HindsightStore started")
+                await self.memory.start()
+                logger.info("MemoryStore started (facts=%s, kg=%s)", self.memory.facts_ready, self.memory.kg_ready)
             except Exception:
-                logger.exception("Failed to start HindsightStore")
-                self.hindsight_store = None
-
-        if self.cognee_backend is not None:
-            try:
-                await self.cognee_backend.start()
-                logger.info("CogneeBackend started")
-            except Exception:
-                logger.exception("Failed to start Cognee backend")
-                self.cognee_backend = None
+                logger.exception("Failed to start MemoryStore")
+                self.memory = None
 
         if self.document_watcher is not None:
             try:
@@ -730,15 +668,9 @@ class CentralHubDaemon:
             except Exception:
                 pass
 
-        if self.hindsight_store is not None and self.hindsight_store.ready:
+        if self.memory is not None and self.memory.ready:
             try:
-                await asyncio.wait_for(self.hindsight_store.stop(), timeout=5.0)
-            except Exception:
-                pass
-
-        if self.cognee_backend is not None and self.cognee_backend.ready:
-            try:
-                await asyncio.wait_for(self.cognee_backend.stop(), timeout=5.0)
+                await asyncio.wait_for(self.memory.stop(), timeout=5.0)
             except Exception:
                 pass
 
@@ -775,13 +707,13 @@ class CentralHubDaemon:
         self._shutdown_event = asyncio.Event()
 
         # Create SessionReader for Pi session files
-        from .agent.memory.session_reader import SessionReader
+        from .core.paths import agent_home
+        from .memory.session_reader import SessionReader
 
-        home = Path.home() / ".clarvis"
         self._session_reader = SessionReader(
             sources={
-                "clarvis": home / "home" / "pi-session.jsonl",
-                "factoria": home / "channels" / "pi-session.jsonl",
+                "clarvis": agent_home("clarvis") / "pi-session.jsonl",
+                "factoria": agent_home("factoria") / "pi-session.jsonl",
             },
             watermark_file=self.staging_dir / "session_watermarks.json",
         )
@@ -793,10 +725,8 @@ class CentralHubDaemon:
             command_server=self.command_server,
             services={
                 "voice": lambda: self.voice_orchestrator,
-                "hindsight_store": lambda: self.hindsight_store,
-                "cognee_backend": lambda: self.cognee_backend,
+                "memory": lambda: self.memory,
                 "agents": lambda: self._agents,
-                "wakeup": lambda: self._wakeup_manager,
                 "spotify_session": lambda: self._get_spotify_session(),
                 "timer_service": lambda: self.timer_service,
                 "channel_manager": lambda: self.channel_manager,
@@ -812,8 +742,20 @@ class CentralHubDaemon:
 
         self._init_agents()
         self._init_voice_pipeline()
-        self._init_wakeup()
 
+        # Wire timer:fired → nudge for wake_clarvis timers
+        clarvis_agent = self._agents.get("clarvis")
+        if clarvis_agent:
+            from .services.wakeup import nudge
+
+            self.bus.on(
+                "timer:fired",
+                lambda sig, *, wake_clarvis=False, name="", label="", **kw: (
+                    asyncio.create_task(nudge(clarvis_agent, "timer", self.state, timer_name=name, timer_label=label))
+                    if wake_clarvis
+                    else None
+                ),
+            )
         # Start channel manager (chat channels, gated behind channels extra)
         await self._init_channel_manager()
 
@@ -831,6 +773,19 @@ class CentralHubDaemon:
                 else:
                     logger.info("Agent %s eager-connect done", name)
             logger.info("All agent connect_eager() calls completed")
+
+        # Warm up Spotify session in background (player init + device discovery)
+        async def _warm_spotify():
+            try:
+                await self.ctx.loop.run_in_executor(None, self._get_spotify_session)
+                session = self._get_spotify_session()
+                if session:
+                    await self.ctx.loop.run_in_executor(None, session.run, "status")
+                    logger.info("Spotify session warmed up")
+            except Exception as e:
+                logger.debug("Spotify warm-up skipped: %s", e)
+
+        asyncio.create_task(_warm_spotify())
 
         logger.info("Daemon startup complete")
         try:

@@ -20,9 +20,11 @@ def loop():
 
 
 @pytest.fixture
-def mock_store():
+def mock_memory():
+    """Unified MemoryStore mock — covers both fact (Hindsight) and KG (Cognee) methods."""
     store = MagicMock()
     store.ready = True
+    # Hindsight fact methods
     store.recall = AsyncMock(
         return_value={"results": [{"text": "likes dark roast coffee", "score": 0.9, "fact_type": "world"}]}
     )
@@ -43,34 +45,21 @@ def mock_store():
     store.get_related_observations = AsyncMock(return_value={"observations": []})
     store.apply_consolidation_decisions = AsyncMock(return_value={"created": 1})
     store.list_models_needing_refresh = AsyncMock(return_value=[])
-    store.list_directives = AsyncMock(return_value=[])
-    store.create_directive = AsyncMock(return_value={"id": "d-1"})
-    store.update_directive = AsyncMock(return_value={})
-    store.delete_directive = AsyncMock(return_value={})
-    store.get_bank_profile = AsyncMock(return_value={"mission": "test"})
-    store.set_bank_mission = AsyncMock(return_value={})
-    store.update_bank_disposition = AsyncMock(return_value={})
+    # Knowledge graph methods
+    store.kg_search = AsyncMock(return_value="Results (1):\n  1. test result")
+    store.kg_ingest = AsyncMock(return_value="Ingested into 'knowledge' (status: ok)")
+    store.kg_list_entities = AsyncMock(return_value="No entities found.")
+    store.kg_list_relations = AsyncMock(return_value="No relationships found.")
+    store.kg_update_entity = AsyncMock(return_value="Updated entity abcdef123456: name")
+    store.kg_merge_entities = AsyncMock(return_value="Merged 1 entities into abcdef123456")
+    store.kg_delete_entity = AsyncMock(return_value="Deleted: abcdef123456")
+    store.kg_build_communities = AsyncMock(return_value="Community summaries built (status: ok)")
     return store
-
-
-@pytest.fixture
-def mock_cognee():
-    backend = MagicMock()
-    backend.ready = True
-    backend.search = AsyncMock(return_value="Results (1):\n  1. test result")
-    backend.ingest = AsyncMock(return_value="Ingested into 'knowledge' (status: ok)")
-    backend.list_entities = AsyncMock(return_value="No entities found.")
-    backend.list_facts = AsyncMock(return_value="No relationships found.")
-    backend.update_entity = AsyncMock(return_value="Updated entity abcdef123456: name")
-    backend.merge_entities = AsyncMock(return_value="Merged 1 entities into abcdef123456")
-    backend.delete = AsyncMock(return_value="Deleted: abcdef123456")
-    backend.build_communities = AsyncMock(return_value="Community summaries built (status: ok)")
-    return backend
 
 
 def _make_handlers(loop, **services):
     """Helper: create CommandHandlers with a running loop and given services."""
-    from clarvis.core.command_handlers import CommandHandlers
+    from clarvis.core.commands import CommandHandlers
 
     ctx = MagicMock()
     ctx.loop = loop
@@ -88,11 +77,10 @@ def _make_handlers(loop, **services):
 
 
 @pytest.fixture
-def handlers(loop, mock_store, mock_cognee):
+def handlers(loop, mock_memory):
     return _make_handlers(
         loop,
-        hindsight_store=lambda: mock_store,
-        cognee_backend=lambda: mock_cognee,
+        memory=lambda: mock_memory,
     )
 
 
@@ -100,21 +88,21 @@ def handlers(loop, mock_store, mock_cognee):
 
 
 class TestRecallCommand:
-    def test_recall_returns_results(self, handlers, mock_store):
+    def test_recall_returns_results(self, handlers, mock_memory):
         result = handlers.recall_memory(query="coffee preferences")
         assert "dark roast coffee" in result
-        mock_store.recall.assert_called_once()
+        mock_memory.recall.assert_called_once()
 
-    def test_recall_passes_bank(self, handlers, mock_store):
+    def test_recall_passes_bank(self, handlers, mock_memory):
         handlers.recall_memory(query="test", bank="agora")
-        mock_store.recall.assert_called_once_with("test", bank="agora", fact_type=None, tags=None)
+        mock_memory.recall.assert_called_once_with("test", bank="agora", fact_type=None, tags=None)
 
     def test_recall_requires_query(self, handlers):
         with pytest.raises(TypeError):
             handlers.recall_memory()
 
-    def test_recall_when_store_not_ready(self, handlers, mock_store):
-        mock_store.ready = False
+    def test_recall_when_store_not_ready(self, handlers, mock_memory):
+        mock_memory.ready = False
         result = handlers.recall_memory(query="test")
         assert result == {"error": "Memory not available"}
 
@@ -125,15 +113,15 @@ class TestRecallCommand:
 
 
 class TestRememberCommand:
-    def test_remember_stores_fact(self, handlers, mock_store):
+    def test_remember_stores_fact(self, handlers, mock_memory):
         result = handlers.remember_fact(text="prefers dark roast coffee")
         assert "Stored" in result
         assert "id-1" in result
-        mock_store.store_facts.assert_called_once()
+        mock_memory.store_facts.assert_called_once()
 
-    def test_remember_defaults_to_world_type(self, handlers, mock_store):
+    def test_remember_defaults_to_world_type(self, handlers, mock_memory):
         handlers.remember_fact(text="some fact")
-        facts = mock_store.store_facts.call_args[0][0]
+        facts = mock_memory.store_facts.call_args[0][0]
         assert facts[0].fact_type == "world"
 
     def test_remember_requires_text(self, handlers):
@@ -142,31 +130,31 @@ class TestRememberCommand:
 
 
 class TestFactCRUD:
-    def test_update_fact(self, handlers, mock_store):
-        result = handlers.update_fact(fact_id="abc", content="updated text")
+    def test_update_fact(self, handlers, mock_memory):
+        result = handlers.update_fact(id="abc", text="updated text")
         assert "Updated" in result
-        mock_store.update_fact.assert_called_once()
+        mock_memory.update_fact.assert_called_once()
 
-    def test_forget(self, handlers, mock_store):
-        result = handlers.forget(fact_id="abc")
+    def test_forget(self, handlers, mock_memory):
+        result = handlers.forget(id="abc")
         assert "Forgotten" in result
-        mock_store.delete_fact.assert_called_once_with("abc")
+        mock_memory.delete_fact.assert_called_once_with("abc")
 
-    def test_list_facts(self, handlers, mock_store):
+    def test_list_facts(self, handlers, mock_memory):
         result = handlers.list_facts(bank="parletre")
         assert "No memories found" in result
-        mock_store.list_facts.assert_called_once()
+        mock_memory.list_facts.assert_called_once()
 
 
 # ── Memory: stats & audit ──────────────────────────────────────────
 
 
 class TestStatsAndAudit:
-    def test_stats(self, handlers, mock_store):
+    def test_stats(self, handlers, mock_memory):
         result = handlers.stats(bank="parletre")
         assert "fact_count: 42" in result
 
-    def test_audit_returns_all_categories(self, handlers, mock_store):
+    def test_audit_returns_all_categories(self, handlers, mock_memory):
         result = handlers.audit()
         assert "Facts since" in result
         assert "Observations since" in result
@@ -177,7 +165,7 @@ class TestStatsAndAudit:
 
 
 class TestMentalModels:
-    def test_create_model(self, handlers, mock_store):
+    def test_create_model(self, handlers, mock_memory):
         result = handlers.create_model(name="Test", content="body", source_query="q")
         assert "Created mental model 'Test'" in result
         assert "mm-1" in result
@@ -187,17 +175,17 @@ class TestMentalModels:
 
 
 class TestObservations:
-    def test_get_observation(self, handlers, mock_store):
+    def test_get_observation(self, handlers, mock_memory):
         result = handlers.get_observation(id="obs-1")
         assert "test obs" in result
 
-    def test_related_observations(self, handlers, mock_store):
+    def test_related_observations(self, handlers, mock_memory):
         """Verifies N+1 fact lookup and aggregation into related_observations call."""
         handlers.related_observations(fact_ids=["f1", "f2"])
-        assert mock_store.get_fact.call_count == 2
-        mock_store.get_related_observations.assert_called_once()
+        assert mock_memory.get_fact.call_count == 2
+        mock_memory.get_related_observations.assert_called_once()
 
-    def test_consolidate(self, handlers, mock_store):
+    def test_consolidate(self, handlers, mock_memory):
         result = handlers.consolidate(
             decisions=[{"action": "create", "text": "obs text", "source_fact_ids": ["f1"]}],
             fact_ids_to_mark=["f1"],
@@ -209,47 +197,28 @@ class TestObservations:
         assert "error" in result
 
 
-# ── Memory: directives ─────────────────────────────────────────────
-
-
-class TestDirectives:
-    def test_create_directive(self, handlers, mock_store):
-        result = handlers.create_directive(name="No hardcoded paths", content="Always derive paths")
-        assert "Created directive 'No hardcoded paths'" in result
-        assert "d-1" in result
-
-
-# ── Memory: bank profile ──────────────────────────────────────────
-
-
-class TestBankProfile:
-    def test_get_profile(self, handlers, mock_store):
-        result = handlers.get_profile()
-        assert "mission: test" in result
-
-
 # ── Knowledge graph (Cognee) ───────────────────────────────────────
 
 
 class TestKnowledge:
-    def test_knowledge_search(self, handlers, mock_cognee):
+    def test_knowledge_search(self, handlers, mock_memory):
         result = handlers.knowledge(query="test")
         assert "Results (1)" in result
 
-    def test_ingest(self, handlers, mock_cognee):
+    def test_ingest(self, handlers, mock_memory):
         result = handlers.ingest(content_or_path="some text")
         assert "Ingested" in result
         assert "status: ok" in result
 
-    def test_merge_entities_requires_two(self, handlers, mock_cognee):
-        mock_cognee.merge_entities = AsyncMock(return_value="Error: need at least 2 entity IDs to merge")
+    def test_merge_entities_requires_two(self, handlers, mock_memory):
+        mock_memory.kg_merge_entities = AsyncMock(return_value="Error: need at least 2 entity IDs to merge")
         result = handlers.merge_entities(entity_ids=["e1"])
         assert "Error" in result
 
     def test_knowledge_when_no_backend(self, loop):
         h = _make_handlers(loop)
         result = h.knowledge(query="test")
-        assert result == {"error": "Knowledge service not available"}
+        assert result == {"error": "Memory not available"}
 
 
 # ── Spotify ────────────────────────────────────────────────────────
@@ -351,6 +320,6 @@ class TestChannels:
 
 
 class TestCoreTools:
-    def test_prompt_response(self, handlers):
-        result = handlers.prompt_response()
+    def test_listen(self, handlers):
+        result = handlers.listen()
         assert result["status"] == "listening"

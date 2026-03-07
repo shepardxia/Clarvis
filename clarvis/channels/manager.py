@@ -10,9 +10,9 @@ import logging
 import os
 from contextlib import aclosing
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from ..core.paths import agent_home
 from .bus import MessageBus
 from .context import build_context_prefix
 from .events import InboundMessage, OutboundMessage
@@ -59,8 +59,8 @@ class ChannelManager:
         self._inflight: set[asyncio.Task] = set()
         self._outbound_hooks: dict[str, OutboundHook] = {}
         self._voice_channel = None
-        self._transcript_path = Path.home() / ".clarvis" / "factoria" / "transcript.jsonl"
-        self._memory_service = memory_service  # HindsightStore instance
+        self._transcript_path = agent_home("factoria") / "transcript.jsonl"
+        self._memory_service = memory_service  # MemoryStore instance
         self._session_grounded = False
 
     @property

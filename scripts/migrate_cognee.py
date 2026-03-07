@@ -22,10 +22,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hindsight_api.engine.memory_engine import MemoryEngine
+
 # Ensure Clarvis package is importable when run from scripts/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from clarvis.agent.memory.hindsight_backend import HindsightBackend
 
 logging.basicConfig(
     level=logging.INFO,
@@ -230,24 +230,20 @@ async def migrate(*, execute: bool, include_files: bool):
         print("Run with --execute to ingest.")
         return
 
-    # Initialize HindsightBackend (standalone -- not going through daemon)
+    # Initialize MemoryEngine (standalone -- not going through daemon)
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         log.error("ANTHROPIC_API_KEY not set")
         sys.exit(1)
 
-    backend = HindsightBackend(
+    backend = MemoryEngine(
         db_url="pg0",
-        llm_provider="anthropic",
-        api_key=api_key,
-        model="claude-sonnet-4-6",
-        banks={
-            "parletre": {"visibility": "master"},
-            "agora": {"visibility": "all"},
-        },
+        memory_llm_provider="anthropic",
+        memory_llm_api_key=api_key,
+        memory_llm_model="claude-sonnet-4-6",
     )
     await backend.start()
-    log.info("HindsightBackend started")
+    log.info("MemoryEngine started")
 
     # Ingest text entries via retain()
     ok, errors = 0, 0
@@ -272,15 +268,15 @@ async def migrate(*, execute: bool, include_files: bool):
     md_ok, md_err = 0, 0
     if md_files:
         try:
-            from clarvis.agent.memory.cognee_backend import CogneeBackend
+            from clarvis.memory.store import MemoryStore
 
-            cognee = CogneeBackend(llm_api_key=api_key)
+            cognee = MemoryStore(kg_llm_api_key=api_key)
             await cognee.start()
-            log.info("CogneeBackend started for file ingestion")
+            log.info("MemoryStore started for file ingestion")
 
             for f in md_files:
                 try:
-                    result = await cognee.ingest(str(f), tags=["music_knowledge", "migration"])
+                    result = await cognee.kg_ingest(str(f), tags=["music_knowledge", "migration"])
                     if result.get("status") == "ok":
                         log.info("  FILE OK:   %s (%d KB)", f.name, f.stat().st_size // 1024)
                         md_ok += 1

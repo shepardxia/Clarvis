@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("asyncpg", reason="asyncpg not installed (memory extra required)")
 
-from clarvis.agent.memory.goals import (
+from clarvis.memory.goals import (
     DEFAULT_SEED_GOALS_YAML,
     GoalSeeder,
     scaffold_checkin_files,

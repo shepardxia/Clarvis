@@ -23,7 +23,7 @@ def _write_pi_messages(path: Path, messages: list[dict]) -> None:
 
 class TestSessionReader:
     def test_reads_new_messages(self, tmp_path):
-        from clarvis.agent.memory.session_reader import SessionReader
+        from clarvis.memory.session_reader import SessionReader
 
         session_file = tmp_path / "session.jsonl"
         _write_pi_messages(
@@ -46,7 +46,7 @@ class TestSessionReader:
         assert pending["clarvis"][0]["text"] == "hello"
 
     def test_watermark_skips_already_read(self, tmp_path):
-        from clarvis.agent.memory.session_reader import SessionReader
+        from clarvis.memory.session_reader import SessionReader
 
         session_file = tmp_path / "session.jsonl"
         _write_pi_messages(
@@ -76,7 +76,7 @@ class TestSessionReader:
         assert pending["clarvis"][0]["text"] == "second"
 
     def test_multiple_sources(self, tmp_path):
-        from clarvis.agent.memory.session_reader import SessionReader
+        from clarvis.memory.session_reader import SessionReader
 
         clarvis_file = tmp_path / "clarvis.jsonl"
         factoria_file = tmp_path / "factoria.jsonl"
@@ -104,7 +104,7 @@ class TestSessionReader:
         assert len(pending["factoria"]) == 1
 
     def test_skips_non_message_entries(self, tmp_path):
-        from clarvis.agent.memory.session_reader import SessionReader
+        from clarvis.memory.session_reader import SessionReader
 
         session_file = tmp_path / "session.jsonl"
         with open(session_file, "w") as f:
@@ -131,7 +131,7 @@ class TestSessionReader:
         assert len(pending["test"]) == 1
 
     def test_missing_source_file(self, tmp_path):
-        from clarvis.agent.memory.session_reader import SessionReader
+        from clarvis.memory.session_reader import SessionReader
 
         reader = SessionReader(
             sources={"missing": tmp_path / "nope.jsonl"},
@@ -141,7 +141,7 @@ class TestSessionReader:
         assert pending["missing"] == []
 
     def test_advance_persists(self, tmp_path):
-        from clarvis.agent.memory.session_reader import SessionReader
+        from clarvis.memory.session_reader import SessionReader
 
         session_file = tmp_path / "session.jsonl"
         _write_pi_messages(

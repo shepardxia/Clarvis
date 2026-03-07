@@ -17,8 +17,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clarvis.core.paths import agent_home
+
 if TYPE_CHECKING:
-    from clarvis.memory.store import HindsightStore
+    from clarvis.memory.store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ _DEFAULT_TOKEN_BUDGET = 4096
 
 
 async def build_memory_context(
-    store: "HindsightStore",
+    store: "MemoryStore",
     visibility: str,
     *,
     token_budget: int = _DEFAULT_TOKEN_BUDGET,
@@ -49,7 +51,7 @@ async def build_memory_context(
     Falls back to mental-models-only if no grounding files exist (pre-first-checkin).
 
     Args:
-        store: HindsightStore instance.
+        store: MemoryStore instance.
         visibility: "master" or "all" -- determines bank access.
         token_budget: Approximate token budget for the entire block.
         grounding_dir: Directory containing authored ``*.md`` grounding files.
@@ -60,7 +62,7 @@ async def build_memory_context(
         Empty string if store is not ready and no grounding files exist.
     """
     if grounding_dir is None:
-        grounding_dir = Path.home() / ".clarvis" / "clarvis" / "grounding"
+        grounding_dir = agent_home("clarvis") / "grounding"
     else:
         grounding_dir = Path(grounding_dir).expanduser()
 
@@ -123,7 +125,7 @@ def _read_grounding_files(grounding_dir: Path) -> str:
 
 
 async def _build_bank_section(
-    store: "HindsightStore",
+    store: "MemoryStore",
     bank: str,
     char_budget: int,
     chars_used: int,

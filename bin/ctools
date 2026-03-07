@@ -2,17 +2,65 @@
 # ctools — Agent CLI for Clarvis daemon services.
 # Usage: ctools <command> [json_params]
 # Example: ctools recall '{"query": "music taste"}'
-#          ctools ping
+#          ctools timer '{"action": "set", "name": "tea", "duration": "5m"}'
 
 set -euo pipefail
 
+# Resolve project root (follows symlinks)
+REAL_SCRIPT="$(readlink -f "$0" 2>/dev/null || python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")/.." && pwd)"
+PYTHON="${SCRIPT_DIR}/.venv/bin/python"
+[[ -x "$PYTHON" ]] || PYTHON="python3"
+
+# --- Help ---
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || -z "${1:-}" ]]; then
+    "$PYTHON" - "$SCRIPT_DIR" <<'PYEOF'
+import sys, importlib, inspect
+
+sys.path.insert(0, sys.argv[1])
+from clarvis.core.commands import _DOMAIN_MODULES
+
+for mod in _DOMAIN_MODULES:
+    mod_label = mod.__name__.rsplit(".", 1)[-1]
+    cmds = getattr(mod, "COMMANDS", {})
+    if not cmds:
+        continue
+    print(f"\n  {mod_label}")
+    print(f"  {'─' * 40}")
+    for ipc_name, fn_name in cmds.items():
+        fn = getattr(mod, fn_name, None)
+        if fn is None:
+            continue
+        sig = inspect.signature(fn)
+        params = [
+            p for p in sig.parameters.values()
+            if p.name not in ("self", "kw") and p.kind != p.VAR_KEYWORD
+        ]
+        param_strs = []
+        for p in params:
+            if p.default is inspect.Parameter.empty:
+                param_strs.append(p.name)
+            else:
+                param_strs.append(f"{p.name}={p.default!r}")
+        param_line = f"  ({', '.join(param_strs)})" if param_strs else ""
+        doc = (fn.__doc__ or "").strip().split("\n")[0]
+        print(f"    {ipc_name}{param_line}")
+        if doc:
+            print(f"      {doc}")
+print()
+PYEOF
+    exit 0
+fi
+
+# --- Execute command ---
 SOCKET="/tmp/clarvis-daemon.sock"
-METHOD="${1:?Usage: ctools <command> [json_params]}"
-PARAMS="${2:-{}}"
+METHOD="$1"
+EMPTY='{}'
+PARAMS="${2:-$EMPTY}"
 
 echo "{\"method\": \"$METHOD\", \"params\": $PARAMS}" \
   | nc -U "$SOCKET" -w 5 \
-  | python3 -c "
+  | "$PYTHON" -c "
 import sys, json
 data = json.load(sys.stdin)
 if 'error' in data:

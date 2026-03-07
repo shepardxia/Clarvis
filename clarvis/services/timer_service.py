@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
     from clarvis.core.context import AppContext
 
 import pytimeparse2 as pytimeparse
+
+from clarvis.core.paths import CLARVIS_HOME
 
 from ..core.persistence import json_load_safe, json_save_atomic
 
@@ -43,6 +46,81 @@ def parse_duration(s: str) -> float:
     return float(result)
 
 
+_SIMPLE_TIME_RE = re.compile(
+    r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$",
+    re.IGNORECASE,
+)
+
+_24H_TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+
+def parse_time(s: str) -> float:
+    """Parse an absolute time string into seconds-until-fire.
+
+    Accepted formats:
+        "2026-03-07T15:00"      -> ISO datetime
+        "2026-03-07T15:00:00"   -> ISO datetime with seconds
+        "3pm"                   -> today (or tomorrow if past)
+        "3:30pm"                -> today (or tomorrow if past)
+        "3:30 PM"               -> today (or tomorrow if past)
+        "15:00"                 -> 24h time, today (or tomorrow if past)
+
+    Returns seconds until the target time.
+    Raises ValueError if unparseable or if an ISO date is in the past.
+    """
+    s = s.strip()
+    if not s:
+        raise ValueError(f"Invalid time: {s!r}")
+
+    now = datetime.now()
+
+    # Try ISO format first
+    if "T" in s or (len(s) >= 10 and s[4:5] == "-"):
+        try:
+            target = datetime.fromisoformat(s)
+        except ValueError:
+            raise ValueError(f"Invalid time: {s!r}")
+        delta = (target - now).total_seconds()
+        if delta <= 0:
+            raise ValueError(f"Time is in the past: {s!r}")
+        return delta
+
+    # Try simple time-of-day: "3pm", "3:30pm", "3:30 PM"
+    m = _SIMPLE_TIME_RE.match(s)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2)) if m.group(2) else 0
+        ampm = m.group(3).lower()
+        if hour < 1 or hour > 12:
+            raise ValueError(f"Invalid time: {s!r}")
+        if ampm == "am":
+            hour = 0 if hour == 12 else hour
+        else:
+            hour = hour if hour == 12 else hour + 12
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            from datetime import timedelta
+
+            target += timedelta(days=1)
+        return (target - now).total_seconds()
+
+    # Try 24h format: "15:00"
+    m = _24H_TIME_RE.match(s)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2))
+        if hour > 23 or minute > 59:
+            raise ValueError(f"Invalid time: {s!r}")
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            from datetime import timedelta
+
+            target += timedelta(days=1)
+        return (target - now).total_seconds()
+
+    raise ValueError(f"Invalid time: {s!r}")
+
+
 @dataclass
 class Timer:
     """A named timer."""
@@ -67,11 +145,11 @@ class TimerService:
     def __init__(
         self,
         ctx: "AppContext",
-        state_file: str = "~/.clarvis/timers.json",
+        state_file: Path | None = None,
     ) -> None:
         self._bus = ctx.bus
         self._loop = ctx.loop
-        self._state_file = Path(state_file).expanduser()
+        self._state_file = state_file if state_file else CLARVIS_HOME / "timers.json"
         self._timers: dict[str, Timer] = {}
         self._handles: dict[str, asyncio.TimerHandle] = {}
         self._lock = threading.Lock()
@@ -83,17 +161,22 @@ class TimerService:
         recurring: bool = False,
         label: str = "",
         wake_clarvis: bool = False,
+        at: float | None = None,
     ) -> Timer:
         """Create or replace a named timer.
 
         May be called from any thread. The underlying ``loop.call_later``
         is scheduled via ``call_soon_threadsafe``.
+
+        If *at* is provided (seconds-until-fire from an absolute time),
+        it is used instead of *duration* for scheduling.
         """
+        delay = at if at is not None else duration
         now = time.time()
         timer = Timer(
             name=name,
-            duration=duration,
-            fire_at=now + duration,
+            duration=delay,
+            fire_at=now + delay,
             recurring=recurring,
             created_at=now,
             label=label,
@@ -107,8 +190,8 @@ class TimerService:
             self._persist()
 
         # Schedule on event loop (thread-safe)
-        self._loop.call_soon_threadsafe(self._schedule, name, duration)
-        logger.info("Timer set: %s (%.1fs, recurring=%s)", name, duration, recurring)
+        self._loop.call_soon_threadsafe(self._schedule, name, delay)
+        logger.info("Timer set: %s (%.1fs, recurring=%s)", name, delay, recurring)
         return timer
 
     def cancel(self, name: str) -> bool:

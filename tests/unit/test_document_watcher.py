@@ -1,11 +1,11 @@
-"""Tests for DocumentWatcher — content-hashed file watcher for Cognee."""
+"""Tests for DocumentWatcher — content-hashed file watcher for knowledge graph ingestion."""
 
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-from clarvis.agent.memory.document_watcher import DocumentWatcher
+from clarvis.memory.document_watcher import DocumentWatcher
 
 # -- Tests ------------------------------------------------------------------
 
@@ -17,8 +17,8 @@ async def test_document_scan_lifecycle(tmp_path: Path):
     watch_dir.mkdir()
     hash_store = tmp_path / "doc_hashes.json"
     backend = AsyncMock()
-    backend.ingest = AsyncMock(return_value={"status": "ok", "dataset": "documents"})
-    watcher = DocumentWatcher(watch_dir=watch_dir, cognee_backend=backend, hash_store_path=hash_store, poll_interval=60)
+    backend.kg_ingest = AsyncMock(return_value={"status": "ok", "dataset": "documents"})
+    watcher = DocumentWatcher(watch_dir=watch_dir, memory=backend, hash_store_path=hash_store, poll_interval=60)
 
     # first scan ingests new file
     (watch_dir / "notes.md").write_text("some notes")
@@ -26,27 +26,27 @@ async def test_document_scan_lifecycle(tmp_path: Path):
     assert len(results) == 1
     assert results[0]["status"] == "ok"
     assert results[0]["file"] == "notes.md"
-    backend.ingest.assert_awaited_once()
+    backend.kg_ingest.assert_awaited_once()
 
     # rescan unchanged file — skipped
-    backend.ingest.reset_mock()
+    backend.kg_ingest.reset_mock()
     results = await watcher.scan()
     assert len(results) == 0
-    backend.ingest.assert_not_awaited()
+    backend.kg_ingest.assert_not_awaited()
 
     # modify file — re-ingested
     (watch_dir / "notes.md").write_text("updated notes")
     results = await watcher.scan()
     assert len(results) == 1
     assert results[0]["file"] == "notes.md"
-    backend.ingest.assert_awaited_once()
+    backend.kg_ingest.assert_awaited_once()
 
     # hash state persists across instances
-    backend.ingest.reset_mock()
+    backend.kg_ingest.reset_mock()
     (watch_dir / "stable.txt").write_text("content")
     w2_backend = AsyncMock()
-    w2_backend.ingest = AsyncMock(return_value={"status": "ok", "dataset": "documents"})
-    w2 = DocumentWatcher(watch_dir=watch_dir, cognee_backend=w2_backend, hash_store_path=hash_store, poll_interval=60)
+    w2_backend.kg_ingest = AsyncMock(return_value={"status": "ok", "dataset": "documents"})
+    w2 = DocumentWatcher(watch_dir=watch_dir, memory=w2_backend, hash_store_path=hash_store, poll_interval=60)
     results = await w2.scan()
     # only stable.txt is new; notes.md hash persisted from previous instance
     assert len(results) == 1
@@ -60,8 +60,8 @@ async def test_document_scan_structure(tmp_path: Path):
     watch_dir.mkdir()
     hash_store = tmp_path / "doc_hashes.json"
     backend = AsyncMock()
-    backend.ingest = AsyncMock(side_effect=lambda *a, **kw: {"status": "ok", "dataset": "documents"})
-    watcher = DocumentWatcher(watch_dir=watch_dir, cognee_backend=backend, hash_store_path=hash_store, poll_interval=60)
+    backend.kg_ingest = AsyncMock(side_effect=lambda *a, **kw: {"status": "ok", "dataset": "documents"})
+    watcher = DocumentWatcher(watch_dir=watch_dir, memory=backend, hash_store_path=hash_store, poll_interval=60)
 
     # subdirectories are recursed
     sub = watch_dir / "subdir"
@@ -99,8 +99,8 @@ async def test_document_scan_error_resilience(tmp_path: Path):
             raise RuntimeError("ingest failed")
         return {"status": "ok", "dataset": "documents"}
 
-    backend.ingest = flaky_ingest
-    watcher = DocumentWatcher(watch_dir=watch_dir, cognee_backend=backend, hash_store_path=hash_store, poll_interval=60)
+    backend.kg_ingest = flaky_ingest
+    watcher = DocumentWatcher(watch_dir=watch_dir, memory=backend, hash_store_path=hash_store, poll_interval=60)
 
     (watch_dir / "good.txt").write_text("good")
     (watch_dir / "bad.txt").write_text("bad")
@@ -112,10 +112,8 @@ async def test_document_scan_error_resilience(tmp_path: Path):
 
     # failed ingest does not update hash — retry is possible
     backend2 = AsyncMock()
-    backend2.ingest = AsyncMock(side_effect=RuntimeError("boom"))
-    watcher2 = DocumentWatcher(
-        watch_dir=watch_dir, cognee_backend=backend2, hash_store_path=hash_store, poll_interval=60
-    )
+    backend2.kg_ingest = AsyncMock(side_effect=RuntimeError("boom"))
+    watcher2 = DocumentWatcher(watch_dir=watch_dir, memory=backend2, hash_store_path=hash_store, poll_interval=60)
     (watch_dir / "retry.txt").write_text("content")
 
     await watcher2.scan()

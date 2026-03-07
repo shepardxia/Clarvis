@@ -1,5 +1,5 @@
 ---
-description: Summarize this session into Clarvis memory
+description: Stage a session summary for Clarvis's next reflect cycle (not Claude Code's own memory)
 ---
 
 Write a single concise summary of this session's knowledge-level takeaways.

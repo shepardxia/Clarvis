@@ -1,4 +1,4 @@
-"""CogneeBackend — configuration, search, merge with self-loop prevention."""
+"""MemoryStore KG methods — configuration, search, merge with self-loop prevention."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6,23 +6,23 @@ import pytest
 
 pytest.importorskip("cognee", reason="cognee not installed (memory extra required)")
 
-from clarvis.agent.memory.cognee_backend import CogneeBackend
+from clarvis.memory.store import MemoryStore
 
 # -- Fixtures ---------------------------------------------------------------
 
 
 @pytest.fixture()
-def backend():
-    return CogneeBackend(
-        db_host="localhost",
-        db_port=5432,
-        db_name="test_knowledge",
-        db_username="testuser",
-        db_password="",
-        graph_path="/tmp/test_graph_kuzu",
-        llm_provider="anthropic",
-        llm_model="claude-sonnet-4-6",
-        llm_api_key="test-key",
+def store():
+    return MemoryStore(
+        kg_db_host="localhost",
+        kg_db_port=5432,
+        kg_db_name="test_knowledge",
+        kg_db_username="testuser",
+        kg_db_password="",
+        kg_graph_path="/tmp/test_graph_kuzu",
+        kg_llm_provider="anthropic",
+        kg_llm_model="claude-sonnet-4-6",
+        kg_llm_api_key="test-key",
     )
 
 
@@ -30,20 +30,21 @@ def backend():
 
 
 @pytest.mark.asyncio
-async def test_cognee_configuration_and_search(backend):
-    """start() configures cognee backends → search() maps results correctly."""
+async def test_cognee_configuration_and_search(store):
+    """start() configures cognee backends → kg_search() maps results correctly."""
     import cognee
 
-    # configuration phase
+    # configuration phase — patch hindsight to avoid real DB, cognee to avoid real config
     with (
+        patch("hindsight_api.engine.memory_engine.MemoryEngine", side_effect=RuntimeError("no db")),
         patch.object(cognee.config, "set_relational_db_config") as mock_rel,
         patch.object(cognee.config, "set_vector_db_config") as mock_vec,
         patch.object(cognee.config, "set_graph_db_config") as mock_graph,
         patch.object(cognee.config, "set_llm_config") as mock_llm,
     ):
-        await backend.start()
+        await store.start()
 
-    assert backend.ready is True
+    assert store.kg_ready is True
     assert mock_rel.call_args[0][0]["db_provider"] == "postgres"
     assert mock_vec.call_args[0][0]["vector_db_provider"] == "pgvector"
     assert mock_graph.call_args[0][0]["graph_database_provider"] == "kuzu"
@@ -56,7 +57,7 @@ async def test_cognee_configuration_and_search(backend):
     mock_result.dataset_name = "test_ds"
 
     with patch("cognee.search", new_callable=AsyncMock, return_value=[mock_result]):
-        results = await backend.search("test query", search_type="graph_completion")
+        results = await store.kg_search("test query", search_type="graph_completion")
 
     assert len(results) == 1
     assert results[0]["result"] == {"name": "Test Entity"}
@@ -64,9 +65,9 @@ async def test_cognee_configuration_and_search(backend):
 
 
 @pytest.mark.asyncio
-async def test_cognee_entity_merge(backend):
+async def test_cognee_entity_merge(store):
     """Merge re-points edges to survivor, self-loops are skipped."""
-    backend._ready = True
+    store._kg_ready = True
 
     # normal merge: edges re-pointed to survivor
     mock_engine = AsyncMock()
@@ -79,7 +80,7 @@ async def test_cognee_entity_merge(backend):
         new_callable=AsyncMock,
         return_value=mock_engine,
     ):
-        result = await backend.merge_entities(["id1", "id2"])
+        result = await store.kg_merge_entities(["id1", "id2"])
 
     assert result["status"] == "ok"
     assert result["survivor_id"] == "id1"
@@ -97,7 +98,7 @@ async def test_cognee_entity_merge(backend):
         new_callable=AsyncMock,
         return_value=mock_engine2,
     ):
-        result2 = await backend.merge_entities(["id1", "id2"])
+        result2 = await store.kg_merge_entities(["id1", "id2"])
 
     assert result2["status"] == "ok"
     mock_engine2.add_edge.assert_not_awaited()
