@@ -78,7 +78,6 @@ class DisplayManager:
         """Build tick context from state store and cached values."""
         ctx = {
             "status": self._status,
-            "context_percent": 0.0,
             "weather_type": self._weather_type,
             "weather_intensity": self._weather_intensity,
             "wind_speed": self._wind_speed,
@@ -117,7 +116,7 @@ class DisplayManager:
 
         return ctx
 
-    def _loop(self, get_state: Callable[[], tuple[str, float]]) -> None:
+    def _loop(self, get_state: Callable[[], str]) -> None:
         """Display rendering loop.
 
         tick() acquires the lock separately, then state reads and rendering
@@ -138,10 +137,9 @@ class DisplayManager:
             start = time.time()
 
             with self._lock:
-                status, context_percent = get_state()
+                status = get_state()
                 self._status = status
                 ctx = self._build_tick_context()
-                ctx["context_percent"] = context_percent
                 self.scene.tick(**ctx)
                 color_def = StatusColors.get(status)
                 rows, cell_colors = self.scene.to_grid()
@@ -156,11 +154,11 @@ class DisplayManager:
             sleep_time = max(0, interval - elapsed)
             time.sleep(sleep_time)
 
-    def start(self, get_state: Callable[[], tuple[str, float]], state_store: "StateStore | None" = None) -> None:
+    def start(self, get_state: Callable[[], str], state_store: "StateStore | None" = None) -> None:
         """Start the display loop.
 
         Args:
-            get_state: Callable returning (status, context_percent)
+            get_state: Callable returning status string
             state_store: Optional StateStore for voice text reveal calculation
         """
         if self._thread is not None and self._thread.is_alive():

@@ -14,7 +14,7 @@ from clarvis.display.cv.specs import (
     TemplateSpec,
 )
 from clarvis.display.sprites.core import SPACE
-from clarvis.display.sprites.system import BarSprite, FaceCel
+from clarvis.display.sprites.system import FaceCel
 
 
 def _make_palette():
@@ -61,8 +61,7 @@ def _make_scene_registry(tmp_path):
             face center priority=50 {
                 skin classic
             }
-            bar below(face, gap=1) width=0.65 priority=80
-            mic right(bar, gap=1) priority=92
+            mic bottom_right priority=92
             voice bottom width=1.0 priority=95
         }
     """)
@@ -150,24 +149,20 @@ def test_face_cel_construction_from_specs():
 
 
 def test_scene_builder_layout(tmp_path):
-    """Build scene, verify sprite count, centering, bar placement, render, and priority order."""
+    """Build scene, verify sprite count, centering, render, and priority order."""
     reg = _make_scene_registry(tmp_path)
     scene = SceneBuilder.build(reg, scene_name="default")
     sprites = scene.registry.alive()
 
     # sprite count
-    assert len(sprites) == 6
+    assert len(sprites) == 5
 
     # face is centered in 43-wide canvas: (43 - 11) // 2 = 16
     face = next(s for s in sprites if isinstance(s, FaceCel))
     assert face.bbox.x == 16
 
-    # bar sits below face with gap=1
-    bar = next(s for s in sprites if isinstance(s, BarSprite))
-    assert bar.bbox.y == face.bbox.y2 + 1
-
     # tick and render produces correct grid dimensions
-    scene.tick(status="idle", context_percent=50.0, weather_type="clear", hour=12)
+    scene.tick(status="idle", weather_type="clear", hour=12)
     rows, colors = scene.to_grid()
     assert len(rows) == 17
     assert all(len(r) == 43 for r in rows)
@@ -289,14 +284,14 @@ def test_production_cv_files():
     # smoke test: default build produces expected sprites
     scene = SceneBuilder.build(reg, scene_name="default")
     sprites = scene.registry.alive()
-    assert len(sprites) == 6
+    assert len(sprites) == 5
 
     # renders with visible content
-    scene.tick(status="idle", context_percent=50.0, weather_type="clear", hour=12)
+    scene.tick(status="idle", weather_type="clear", hour=12)
     rows, colors = scene.to_grid()
     assert len(rows) == 17
     non_space = sum(1 for r in rows for c in r if c != " ")
-    assert non_space > 20  # face + bar at minimum
+    assert non_space > 20  # face at minimum
 
     # all required statuses have classic sequences
     required = [

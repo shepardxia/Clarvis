@@ -224,6 +224,9 @@ class CvTransformer(Transformer):
     def place_bottom(self, _items):
         return Placement(kind="bottom")
 
+    def place_bottom_right(self, _items):
+        return Placement(kind="bottom_right")
+
     def place_relative(self, items):
         kind = str(items[0])
         ref = str(items[1])

@@ -33,10 +33,6 @@ class HookProcessor:
         event = raw_data.get("hook_event_name", "")
         tool_name = raw_data.get("tool_name", "")
         tool_error = raw_data.get("tool_error")
-        context_window = raw_data.get("context_window") or {}
-        context_percent = context_window.get("used_percentage") or 0
-
-        existing_status = self.state.get("status")
 
         if event == "PreToolUse":
             status = classify_tool(tool_name)
@@ -48,27 +44,19 @@ class HookProcessor:
             status = self._check_special_animation(session_id) or "awaiting"
         elif event == "Notification":
             status = "awaiting"
-        elif context_window:
-            status = existing_status.get("status", "idle")
         else:
             status = "idle"
 
         # Update session history with tool info and outcome
         tool_succeeded = not bool(tool_error) if event == "PostToolUse" else None
-        self.session_tracker.update(session_id, status, context_percent, tool_name, tool_succeeded)
-
-        # Use last known context if current is 0
-        effective_context = context_percent or self.session_tracker.get_last_context(session_id)
+        self.session_tracker.update(session_id, status, tool_name, tool_succeeded)
 
         session = self.session_tracker.get(session_id)
 
         return {
             "session_id": session_id,
             "status": status,
-            "context_percent": effective_context,
-            "high_context": effective_context >= 70,
             "status_history": session.get("status_history", []).copy(),
-            "context_history": session.get("context_history", []).copy(),
             "tool_history": session.get("tool_history", []).copy(),
             "tool_outcomes": session.get("tool_outcomes", []).copy(),
             "timestamp": datetime.now().isoformat(),

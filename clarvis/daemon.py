@@ -291,12 +291,8 @@ class CentralHubDaemon:
 
     # --- Display state ---
 
-    def _get_display_state(self) -> tuple[str, float]:
-        """Get current display state for rendering.
-
-        Returns:
-            Tuple of (status, context_percent)
-        """
+    def _get_display_state(self) -> str:
+        """Get current display status for rendering."""
         config = self.ctx.config
 
         if config.testing.enabled:
@@ -304,12 +300,10 @@ class CentralHubDaemon:
             self.display.set_weather(
                 config.testing.weather, config.testing.weather_intensity, config.testing.wind_speed
             )
-            return config.testing.status, config.testing.context_percent
+            return config.testing.status
 
         status = self.state.get("status")
-        context_percent = status.get("context_percent", 0) if status else 0
-        display_status = status.get("status", "idle") if status else "idle"
-        return display_status, context_percent
+        return status.get("status", "idle") if status else "idle"
 
     # --- Service getters for ctools ---
 

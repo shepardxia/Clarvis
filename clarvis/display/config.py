@@ -63,7 +63,6 @@ class TestingConfig(BaseModel):
     weather: str = Field(default="clear", description="Fixed weather type")
     weather_intensity: float = Field(default=0.5, description="Weather particle intensity (0.0–1.0)")
     wind_speed: float = Field(default=5.0, description="Wind speed for weather particles")
-    context_percent: float = Field(default=50.0, description="Fixed context window percentage")
     paused: bool = Field(default=False, description="Pause all animations")
 
 

@@ -118,8 +118,7 @@ def test_celestial_day_night_cycle():
 
 def test_bar_fill_rendering():
     """Bar at 50% should have both filled (#) and empty (-) chars."""
-    scene = _build_scene()
-    bar = next(s for s in scene.registry.alive() if isinstance(s, BarSprite))
+    bar = BarSprite(x=0, y=0, width=20, priority=80)
     bar.tick(context_percent=50.0)
     out_c = np.full((17, 43), SPACE, dtype=np.uint32)
     out_k = np.zeros((17, 43), dtype=np.uint8)
@@ -143,12 +142,11 @@ def test_full_scene_from_cv_files():
 
     # Phase 1: correct sprite count
     sprites = scene.registry.alive()
-    assert len(sprites) == 6
+    assert len(sprites) == 5
 
     # Phase 2: tick and render without crash
     scene.tick(
         status="idle",
-        context_percent=50.0,
         weather_type="clear",
         hour=12,
     )

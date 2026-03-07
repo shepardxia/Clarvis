@@ -1,4 +1,4 @@
-"""Tracks Claude Code sessions with status and context history."""
+"""Tracks Claude Code sessions with status and tool history."""
 
 import time
 from typing import TYPE_CHECKING
@@ -11,18 +11,16 @@ def _default_session() -> dict:
     """Return a fresh session data dict with empty history."""
     return {
         "status_history": [],
-        "context_history": [],
         "tool_history": [],
         "tool_outcomes": [],
         "last_status": "idle",
-        "last_context": 0.0,
         "last_tool": "",
         "last_seen": time.time(),
     }
 
 
 class SessionTracker:
-    """Tracks Claude Code sessions with status and context history."""
+    """Tracks Claude Code sessions with status and tool history."""
 
     HISTORY_SIZE = 20
     TIMEOUT = 300  # 5 minutes
@@ -52,11 +50,10 @@ class SessionTracker:
         self,
         session_id: str,
         status: str,
-        context: float,
         tool_name: str = "",
         tool_succeeded: bool | None = None,
     ) -> None:
-        """Update session with new status, context, tool info, and outcome."""
+        """Update session with new status, tool info, and outcome."""
         sessions = self.state.get("sessions")
         session = sessions.get(session_id) or _default_session()
 
@@ -72,11 +69,6 @@ class SessionTracker:
             self._append_capped(session, "status_history", status, self.HISTORY_SIZE)
         session["last_status"] = status
 
-        # Add context if valid
-        if context > 0:
-            self._append_capped(session, "context_history", context, self.HISTORY_SIZE)
-            session["last_context"] = context
-
         # Add tool if provided
         if tool_name:
             self._append_capped(session, "tool_history", tool_name, self.HISTORY_SIZE)
@@ -90,12 +82,6 @@ class SessionTracker:
 
         sessions[session_id] = session
         self.state.update("sessions", sessions)
-
-    def get_last_context(self, session_id: str) -> float:
-        """Get last known context percent for session."""
-        sessions = self.state.get("sessions")
-        session = sessions.get(session_id, {})
-        return session.get("last_context", 0.0)
 
     def cleanup_stale(self) -> None:
         """Remove sessions inactive for > TIMEOUT."""
@@ -118,9 +104,7 @@ class SessionTracker:
                 "session_id": sid,
                 "is_displayed": sid == displayed,
                 "last_status": data.get("last_status", "unknown"),
-                "last_context": data.get("last_context", 0),
                 "status_history_length": len(data.get("status_history", [])),
-                "context_history_length": len(data.get("context_history", [])),
             }
             for sid, data in sessions.items()
         ]
@@ -139,7 +123,5 @@ class SessionTracker:
             "session_id": session_id,
             "is_displayed": session_id == displayed,
             "last_status": data.get("last_status", "unknown"),
-            "last_context": data.get("last_context", 0),
             "status_history": data.get("status_history", []),
-            "context_history": data.get("context_history", []),
         }

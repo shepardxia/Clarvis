@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Placement:
-    kind: str  # center, fullscreen, below, right, top, bottom, at
+    kind: str  # center, fullscreen, below, right, top, bottom, bottom_right, at
     ref: str | None = None
     gap: int = 0
     x: float | None = None

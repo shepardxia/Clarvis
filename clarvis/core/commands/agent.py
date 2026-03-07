@@ -75,9 +75,31 @@ def listen(self: CommandHandlers, **kw) -> dict:
     return {"status": "listening"}
 
 
+def nudge_agent(self: CommandHandlers, *, reason: str = "timer", **kw) -> dict:
+    """Send a context-rich nudge to the Clarvis agent."""
+    import asyncio
+
+    from ...services.wakeup import nudge
+
+    agents = self._get_service("agents") or {}
+    agent = agents.get("clarvis")
+    if not agent:
+        return {"error": "Clarvis agent not available"}
+
+    try:
+        response = asyncio.run_coroutine_threadsafe(
+            nudge(agent, reason, self.ctx.state, **kw),
+            self.ctx.loop,
+        ).result(timeout=120)
+        return {"status": "ok", "response": response}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 COMMANDS: dict[str, str] = {
     "reload_agents": "reload_agents",
     "reset_clarvis_session": "reset_clarvis_session",
     "reflect_complete": "reflect_complete",
     "listen": "listen",
+    "nudge": "nudge_agent",
 }

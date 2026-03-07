@@ -171,8 +171,8 @@ else:
         esac
         ;;
     reflect)
-        # Trigger memory reflection (consolidates memories)
-        result=$(echo '{"method":"memory_ingest","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null)
+        # Nudge Clarvis agent to run /reflect (consolidate memories)
+        result=$(echo '{"method":"nudge","params":{"reason":"reflect"}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null)
         if [ -z "$result" ]; then
             echo "Error: daemon not running (start with 'clarvis start')"
         else
@@ -183,8 +183,7 @@ try:
     if 'error' in r:
         print(f'Error: {r[\"error\"]}')
     else:
-        n = r.get('ingested', 0)
-        print(f'Ingested {n} session(s) into memory.')
+        print('Reflect nudge sent.')
 except Exception as e:
     print(f'Error: {e}')
 "

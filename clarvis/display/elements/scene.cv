@@ -6,7 +6,6 @@ scene default 43x17 {
     face center priority=50 width=11 height=5 {
         skin classic
     }
-    bar below(face, gap=1) width=0.65 priority=80
-    mic right(bar, gap=1) priority=92
+    mic bottom_right priority=92
     voice bottom width=1.0 priority=95
 }

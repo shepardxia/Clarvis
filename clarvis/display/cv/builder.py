@@ -228,6 +228,11 @@ def _resolve_placement(sspec, sprite, sprite_map, canvas_w, canvas_h):
         _set_pos(sprite, 0, canvas_h - bbox.h)
         return
 
+    if p.kind == "bottom_right":
+        bbox = sprite.bbox
+        _set_pos(sprite, canvas_w - bbox.w, canvas_h - bbox.h)
+        return
+
     if p.kind in ("below", "right", "above", "left"):
         ref = sprite_map.get(p.ref)
         if ref is None:

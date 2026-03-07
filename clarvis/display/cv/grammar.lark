@@ -64,6 +64,7 @@ placement: "fullscreen"                               -> place_fullscreen
           | "center"                                  -> place_center
           | "top"                                     -> place_top
           | "bottom"                                  -> place_bottom
+          | "bottom_right"                             -> place_bottom_right
           | NAME "(" NAME ("," kv_pair)* ")"          -> place_relative
 
 sprite_props: kv_pair
