@@ -678,13 +678,16 @@ class CentralHubDaemon:
                 logger.warning("Failed to reset agent %s", name, exc_info=True)
 
     async def complete_reflect(self) -> dict:
-        """Finalize reflect: advance watermarks, clear queue, reset agents."""
+        """Finalize reflect: advance watermarks, archive inbox, reset agents."""
         if self._session_reader:
             self._session_reader.advance_all()
-        remember_dir = self.staging_dir / "remember"
-        if remember_dir.is_dir():
-            for f in remember_dir.glob("*.md"):
-                f.unlink()
+        inbox = self.staging_dir / "inbox"
+        if inbox.is_dir():
+            read_dir = self.staging_dir / "digested"
+            read_dir.mkdir(exist_ok=True)
+            for f in inbox.glob("*"):
+                if f.is_file():
+                    f.rename(read_dir / f.name)
         await self.reset_all_agents()
         return {"status": "reflect complete"}
 

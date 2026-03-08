@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -99,8 +99,6 @@ def parse_time(s: str) -> float:
             hour = hour if hour == 12 else hour + 12
         target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if target <= now:
-            from datetime import timedelta
-
             target += timedelta(days=1)
         return (target - now).total_seconds()
 
@@ -113,8 +111,6 @@ def parse_time(s: str) -> float:
             raise ValueError(f"Invalid time: {s!r}")
         target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if target <= now:
-            from datetime import timedelta
-
             target += timedelta(days=1)
         return (target - now).total_seconds()
 

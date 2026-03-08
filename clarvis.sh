@@ -242,10 +242,50 @@ except Exception:
     print('claude-sonnet-4-5')
 " 2>/dev/null)" --prompt "Let's do a memory check-in. Start by reviewing any staged changes, then review active goals."
         ;;
+    stage)
+        shift
+        _stage_cognee=false
+        if [ "$1" = "--cognee" ]; then
+            _stage_cognee=true
+            shift
+        fi
+        if $_stage_cognee; then
+            dest="$HOME/.clarvis/documents"
+        else
+            dest="$HOME/.clarvis/staging/inbox"
+        fi
+        mkdir -p "$dest"
+        if [ -z "$1" ]; then
+            echo "Usage: clarvis stage [--cognee] <file> [file...]"
+            echo "       clarvis stage <text>"
+            echo ""
+            echo "Queue content for Clarvis's next reflect cycle."
+            echo "  --cognee  Route files to DocumentWatcher for knowledge graph ingestion"
+            inbox="$HOME/.clarvis/staging/inbox"
+            docs="$HOME/.clarvis/documents"
+            ic=$(find "$inbox" -type f 2>/dev/null | wc -l | tr -d ' ')
+            dc=$(find "$docs" -type f 2>/dev/null | wc -l | tr -d ' ')
+            echo ""
+            echo "Inbox: $ic item(s) pending | Documents: $dc file(s)"
+        elif [ -f "$1" ]; then
+            for f in "$@"; do
+                [ ! -f "$f" ] && echo "Not a file: $f" && continue
+                cp "$f" "$dest/$(date +%s)_$(basename "$f")"
+                echo "staged: $(basename "$f") -> $(basename "$dest")"
+            done
+        else
+            if $_stage_cognee; then
+                echo "Error: --cognee requires files, not text"
+                exit 1
+            fi
+            epoch=$(date +%s)
+            printf '%s\n' "$*" > "$dest/$epoch.md"
+            echo "staged ($epoch)"
+        fi
+        ;;
     new)
         rm -f "$HOME/.clarvis/clarvis/session_id"
-        rm -f "$HOME/.clarvis/clarvis/pi-session.jsonl"
-        # Tell daemon to disconnect Clarvis agent (best-effort)
+        # Tell daemon to reset Clarvis agent session (best-effort)
         echo '{"method":"reset_clarvis_session","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null || true
         echo "Session reset — next voice/chat starts fresh"
         ;;
@@ -286,6 +326,7 @@ except Exception as e:
         echo "  add org   Add an org (e.g. clarvis add org CS Lab)"
         echo "  remove org Remove an org"
         echo "  list org  List all orgs"
+        echo "  stage     Queue text or files for next reflect (--cognee for knowledge graph)"
         echo "  reflect   Consolidate memories (ingest active sessions into memory)"
         echo "  checkin   Interactive memory check-in (review staged changes + goals)"
         echo "  new       Reset session — next voice/chat starts a fresh conversation"

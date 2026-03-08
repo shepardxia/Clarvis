@@ -1,7 +1,4 @@
-"""Agent factory -- creates Clarvis and Factoria agents.
-
-Constructs PiBackend directly — no backend selection logic needed.
-"""
+"""Agent factory -- creates Clarvis and Factoria agents."""
 
 import logging
 import shutil
@@ -49,10 +46,9 @@ def _create_agent(
     max_thinking_tokens: int | None = None,
 ):
     """Shared agent construction: config -> Agent -> ensure_project_dir."""
-    from .agent import Agent
-    from .backends.pi import PiConfig
+    from .agent import Agent, AgentConfig
 
-    config = PiConfig(
+    config = AgentConfig(
         session_key=session_key,
         project_dir=project_dir,
         model=model,

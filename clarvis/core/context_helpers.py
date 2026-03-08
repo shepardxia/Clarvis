@@ -61,7 +61,7 @@ def _weather_summary(state: dict | None) -> str | None:
 def _location_summary(state: dict | None) -> str | None:
     if not state:
         return None
-    return state.get("city") or None
+    return state.get("city")
 
 
 def _now_playing(include_paused: bool = False) -> str | None:

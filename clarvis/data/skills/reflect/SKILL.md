@@ -5,17 +5,20 @@ description: Process conversation history and staged items — extract facts, co
 
 # Reflect
 
-Memory maintenance — extract facts from conversation history and /remember queue, then consolidate.
+Memory maintenance — extract facts from conversation history and staging inbox, then consolidate.
 
 ## Phase 1: Read pending material
 
-1. Use the session reader to get unprocessed conversation content from all agent sessions
-2. Check the /remember staging queue for user-submitted session summaries
-3. If nothing pending, report "nothing to reflect on" and stop
+Three sources to check:
+1. **Your current session** — already in your context. Extract facts from what you know.
+2. **Inbox** — check `~/.clarvis/staging/inbox/` for prior session transcripts (flushed automatically on session reset), user-submitted summaries, and staged files.
+3. **Factoria transcript** — read `~/.clarvis/factoria/pi-session.jsonl` for Factoria's conversations since last reflect.
+
+If nothing new across all three sources, report "nothing to reflect on" and stop.
 
 ## Phase 2: Extract facts
 
-For each piece of pending content:
+For each piece of pending content (including your current session):
 1. Scan for salient facts (people, projects, decisions, preferences, events)
 2. Use `recall` to check if each fact already exists
 3. Use `remember` to store genuinely new facts with appropriate type and entities

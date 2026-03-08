@@ -1,35 +1,56 @@
-"""Self-contained agent -- owns session, backend, lifecycle.
+"""Self-contained agent -- spawns ``pi --mode rpc`` as a subprocess.
 
 Each channel (voice, Discord, etc.) gets its own Agent instance with
-a fixed session key, its own PiBackend connection, and retry logic.
+a fixed session key, its own Pi RPC process, and retry logic.
 """
 
 import asyncio
+import itertools
+import json
 import logging
+import signal
 from collections.abc import AsyncGenerator
-
-from .backends.pi import PiBackend, PiConfig
+from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-class Agent:
-    """Self-contained agent with full lifecycle management.
+@dataclass
+class AgentConfig:
+    """Configuration for the Pi RPC agent."""
 
-    Each channel (voice, Discord, etc.) gets its own Agent with a fixed
-    session key.  Constructs and owns its PiBackend.
+    session_key: str
+    project_dir: Path
+    model: str | None = None
+    max_thinking_tokens: int | None = None
+
+
+class Agent:
+    """Self-contained agent that drives ``pi --mode rpc`` as a subprocess.
+
+    Spawns a Pi process with stdin/stdout JSON-lines RPC protocol.
+    Background reader task pushes events to an asyncio queue consumed
+    by ``send()``.
     """
 
-    def __init__(self, config: PiConfig):
+    def __init__(self, config: AgentConfig):
         self._config = config
         self._session_key = config.session_key
         self._project_dir = config.project_dir
+        self._model = config.model
+        self._session_file = config.project_dir / "pi-session.jsonl"
 
-        # Per-session state
         self._connected = False
         self._lock = asyncio.Lock()
         self._currently_sending: bool = False
-        self._backend = PiBackend(config)
+
+        # Subprocess state (initialized in connect)
+        self._process: asyncio.subprocess.Process | None = None
+        self._stderr_task: asyncio.Task | None = None
+        self._reader_task: asyncio.Task | None = None
+        self._events: asyncio.Queue = asyncio.Queue()
+        self._counter = itertools.count(1)
 
     @property
     def session_key(self) -> str:
@@ -40,22 +61,19 @@ class Agent:
         return self._connected
 
     # ------------------------------------------------------------------
-    # Project directory setup (forwarded to backend)
+    # Project directory setup
     # ------------------------------------------------------------------
 
     def ensure_project_dir(self) -> None:
-        """Scaffold project directory, MCP config, and Claude settings.
-
-        Delegates to the backend's ``setup()`` method.
-        """
-        self._backend.setup()
+        """Create project directory if needed."""
+        self._project_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def connect(self) -> None:
-        """Connect if not already connected. Safe to call concurrently."""
+        """Spawn Pi RPC subprocess if not already connected."""
         if self._connected:
             return
         async with self._lock:
@@ -67,17 +85,60 @@ class Agent:
                 self._session_key,
                 self._project_dir,
             )
-            await self._backend.connect()
+
+            self.ensure_project_dir()
+
+            cmd = ["pi", "--mode", "rpc", "--session", str(self._session_file)]
+            if self._model:
+                cmd.extend(["--model", self._model])
+
+            self._process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(self._project_dir),
+            )
+
+            self._events = asyncio.Queue()
+            self._counter = itertools.count(1)
+            self._reader_task = asyncio.create_task(self._reader_loop())
+            self._stderr_task = asyncio.create_task(self._forward_stderr())
+
             self._connected = True
-            logger.info("Agent connected (session=%s)", self._session_key)
+            logger.info(
+                "Agent connected (session=%s, pid=%s)",
+                self._session_key,
+                self._process.pid,
+            )
 
     async def disconnect(self) -> None:
-        """Disconnect and free resources. Safe to call concurrently."""
+        """Shut down Pi process gracefully, then force-kill if needed."""
         async with self._lock:
-            if self._connected:
-                self._connected = False
-                await self._backend.disconnect()
-                logger.info("Agent disconnected (session=%s)", self._session_key)
+            if not self._connected:
+                return
+            self._connected = False
+
+            for task in (self._reader_task, self._stderr_task):
+                if task and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+            self._reader_task = None
+            self._stderr_task = None
+
+            # Close stdin to signal graceful shutdown
+            if self._process and self._process.stdin:
+                try:
+                    self._process.stdin.close()
+                    await self._process.stdin.wait_closed()
+                except Exception:
+                    pass
+
+            await self._kill_process(timeout=5.0)
+            logger.info("Agent disconnected (session=%s)", self._session_key)
 
     async def connect_eager(self) -> None:
         """Connect at startup. Logs but doesn't raise on failure."""
@@ -85,7 +146,9 @@ class Agent:
             await self.connect()
         except Exception:
             logger.warning(
-                "Eager connect failed for %s -- will retry on first message", self._session_key, exc_info=True
+                "Eager connect failed for %s -- will retry on first message",
+                self._session_key,
+                exc_info=True,
             )
 
     async def shutdown(self) -> None:
@@ -93,9 +156,26 @@ class Agent:
         await self.disconnect()
 
     async def reset(self) -> None:
-        """Reset the agent session (new conversation, retains JSONL history)."""
-        if self._connected:
-            await self._backend.reset()
+        """Reset the Pi session (new conversation, retains JSONL history)."""
+        if not self._connected:
+            return
+        self._send_command({"type": "new_session"})
+
+    async def reload(self) -> None:
+        """Reload agent prompts, skills, and extensions.
+
+        Pi has no reload RPC command -- restart the process with the same
+        session file to pick up changes.
+        """
+        await self.disconnect()
+        await self.connect()
+        logger.info("Agent reloaded via restart (session=%s)", self._session_key)
+
+    async def interrupt(self) -> None:
+        """Interrupt the current query."""
+        if not self._connected:
+            return
+        self._send_command({"type": "abort"})
 
     # ------------------------------------------------------------------
     # Query
@@ -114,24 +194,137 @@ class Agent:
                 yield chunk
         except (RuntimeError, asyncio.TimeoutError, OSError) as exc:
             if yielded:
-                logger.warning("Agent send failed mid-stream for %s (%s), not retrying", self._session_key, exc)
+                logger.warning(
+                    "Agent send failed mid-stream for %s (%s), not retrying",
+                    self._session_key,
+                    exc,
+                )
                 return
-            logger.warning("Agent send failed for %s (%s), reconnecting for retry", self._session_key, exc)
+            logger.warning(
+                "Agent send failed for %s (%s), reconnecting for retry",
+                self._session_key,
+                exc,
+            )
             await self.disconnect()
             async for chunk in self._send_inner(text):
                 yield chunk
 
     async def _send_inner(self, text: str) -> AsyncGenerator[str | None]:
-        """Core send logic -- delegates to backend."""
+        """Core send logic -- write prompt to stdin, consume events."""
         self._currently_sending = True
         try:
             await self.connect()
-            async for chunk in self._backend.send(text):
-                yield chunk
+
+            if not self._process or not self._process.stdin:
+                raise RuntimeError("Agent not connected")
+
+            # Send prompt command
+            req_id = f"req_{next(self._counter)}"
+            cmd = {"type": "prompt", "message": text, "id": req_id}
+            self._send_command(cmd)
+
+            # Consume events until agent_end
+            while True:
+                event = await self._events.get()
+                etype = event.get("type")
+
+                if etype == "_process_error":
+                    raise RuntimeError(f"Process error: {event.get('error')}")
+                elif etype == "extension_ui_request":
+                    self._handle_extension_ui(event)
+                elif etype == "message_update":
+                    delta = event.get("assistantMessageEvent", {})
+                    if delta.get("type") == "text_delta":
+                        yield delta.get("delta", "")
+                elif etype == "tool_execution_end":
+                    yield None
+                elif etype == "agent_end":
+                    return
         finally:
             self._currently_sending = False
 
-    async def interrupt(self) -> None:
-        """Interrupt the current query."""
-        if self._connected:
-            await self._backend.interrupt()
+    # ------------------------------------------------------------------
+    # Background tasks
+    # ------------------------------------------------------------------
+
+    async def _reader_loop(self) -> None:
+        """Background task: reads stdout JSON lines, pushes to event queue."""
+        try:
+            while self._process and self._process.stdout:
+                line = await self._process.stdout.readline()
+                if not line:
+                    break
+
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                await self._events.put(data)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Reader loop error")
+        finally:
+            await self._events.put({"type": "_process_error", "error": "Process connection lost"})
+
+    async def _forward_stderr(self) -> None:
+        """Forward Pi subprocess stderr to Python logger."""
+        if not self._process or not self._process.stderr:
+            return
+        try:
+            while True:
+                line = await self._process.stderr.readline()
+                if not line:
+                    break
+                msg = line.decode().rstrip()
+                if msg:
+                    logger.debug("[pi] %s", msg)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _send_command(self, cmd: dict) -> None:
+        """Write a JSON-line command to Pi's stdin."""
+        if not self._process or not self._process.stdin:
+            raise RuntimeError("No process -- not connected")
+        data = json.dumps(cmd) + "\n"
+        self._process.stdin.write(data.encode())
+
+    def _handle_extension_ui(self, event: dict) -> None:
+        """Auto-respond to extension UI requests from Pi."""
+        ui_type = event.get("ui_type", "")
+        response: dict
+        if ui_type == "select":
+            options = event.get("options", [])
+            response = {"type": "extension_ui_response", "value": options[0] if options else ""}
+        elif ui_type == "input":
+            response = {"type": "extension_ui_response", "value": ""}
+        else:
+            # confirm / unknown — approve
+            response = {"type": "extension_ui_response", "value": True}
+
+        req_id = event.get("id")
+        if req_id:
+            response["id"] = req_id
+        self._send_command(response)
+
+    async def _kill_process(self, timeout: float = 5.0) -> None:
+        """Terminate Pi process, escalating to SIGKILL if needed."""
+        if not self._process:
+            return
+        try:
+            self._process.send_signal(signal.SIGTERM)
+            await asyncio.wait_for(self._process.wait(), timeout=timeout)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            try:
+                self._process.kill()
+                await self._process.wait()
+            except ProcessLookupError:
+                pass
+        self._process = None

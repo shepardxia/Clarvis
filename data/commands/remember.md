@@ -16,5 +16,5 @@ multiple atomic items — atomic splitting happens at check-in time."
 Include: insights, decisions, rationale, progress, connections, preferences.
 Exclude: code-level details, file paths, line numbers, verbose play-by-play.
 
-Write the summary to a new file at `~/.clarvis/staging/remember/<unix_epoch>.md`.
+Write the summary to a new file at `~/.clarvis/staging/inbox/<unix_epoch>.md`.
 Create the directory if needed. It will be processed during Clarvis's next reflect cycle.

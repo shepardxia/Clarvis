@@ -1,11 +1,14 @@
-"""Agent lifecycle command handlers — reload, reset, reflect, listen."""
+"""Agent lifecycle command handlers -- reload, reset, reflect, listen."""
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from . import CommandHandlers
+
+logger = logging.getLogger(__name__)
 
 
 def reload_agents(self: CommandHandlers, **kwargs) -> dict:
@@ -20,13 +23,8 @@ def reload_agents(self: CommandHandlers, **kwargs) -> dict:
     errors = []
 
     for name, agent in agents.items():
-        backend = getattr(agent, "_backend", None)
-        reload_fn = getattr(backend, "reload", None)
-        if reload_fn is None:
-            reloaded.append(f"{name}: skipped (no reload support)")
-            continue
         try:
-            asyncio.run_coroutine_threadsafe(reload_fn(), self.ctx.loop).result(timeout=15)
+            asyncio.run_coroutine_threadsafe(agent.reload(), self.ctx.loop).result(timeout=15)
             reloaded.append(f"{name}: ok")
         except Exception as exc:
             errors.append(f"{name}: {exc}")
@@ -35,10 +33,20 @@ def reload_agents(self: CommandHandlers, **kwargs) -> dict:
 
 
 def reset_clarvis_session(self: CommandHandlers, **kw) -> str:
-    """Disconnect Clarvis agent so next interaction starts a fresh session."""
+    """Reset Clarvis agent session (new_session RPC)."""
     import asyncio
 
-    from ..paths import agent_home
+    from ..paths import CLARVIS_HOME, agent_home
+
+    # Flush unreflected session content to inbox before resetting
+    session_reader = self._get_service("session_reader")
+    if session_reader:
+        inbox = CLARVIS_HOME / "staging" / "inbox"
+        for source in ("clarvis", "factoria"):
+            try:
+                session_reader.flush_to_inbox(source, inbox)
+            except Exception as exc:
+                logger.warning("Failed to flush %s session to inbox: %s", source, exc)
 
     for sid_file in [
         agent_home("clarvis") / "session_id",
@@ -46,6 +54,16 @@ def reset_clarvis_session(self: CommandHandlers, **kw) -> str:
     ]:
         sid_file.unlink(missing_ok=True)
 
+    # Reset the Clarvis agent session
+    agents = self._get_service("agents") or {}
+    clarvis_agent = agents.get("clarvis")
+    if clarvis_agent and clarvis_agent.connected:
+        try:
+            asyncio.run_coroutine_threadsafe(clarvis_agent.reset(), self.ctx.loop).result(timeout=30)
+        except Exception as exc:
+            logger.warning("Failed to reset Clarvis agent: %s", exc)
+
+    # Disconnect voice orchestrator's agent if active
     orchestrator = self._get_service("voice")
     if orchestrator and orchestrator.agent.connected:
         asyncio.run_coroutine_threadsafe(orchestrator.agent.disconnect(), orchestrator._loop)

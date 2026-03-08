@@ -1,3 +1,3 @@
-from .agent import Agent
+from .agent import Agent, AgentConfig
 
-__all__ = ["Agent"]
+__all__ = ["Agent", "AgentConfig"]

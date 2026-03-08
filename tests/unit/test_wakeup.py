@@ -81,26 +81,44 @@ class TestCurrentlySending:
     @pytest.mark.asyncio
     async def test_flag_set_during_send(self):
         """_currently_sending is True while send is in progress."""
+        import asyncio
+        import json
         from pathlib import Path
+        from unittest.mock import MagicMock
 
-        from clarvis.agent.agent import Agent
-        from clarvis.agent.backends.pi import PiConfig
+        from clarvis.agent.agent import Agent, AgentConfig
 
-        backend = AsyncMock()
-        seen_flag = []
+        agent = Agent(AgentConfig(session_key="test", project_dir=Path("/tmp/test-agent")))
 
-        async def fake_send(text):
-            seen_flag.append(agent._currently_sending)
-            yield "chunk"
+        # Set up mock process with events on stdout
+        stdout_reader = asyncio.StreamReader()
+        events = [
+            {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "chunk"}},
+            {"type": "agent_end"},
+        ]
+        for event in events:
+            stdout_reader.feed_data(json.dumps(event).encode() + b"\n")
 
-        backend.send = fake_send
+        process = MagicMock()
+        process.stdout = stdout_reader
+        process.stdin = MagicMock()
+        process.stdin.write = MagicMock()
+        process.stderr = None
 
-        agent = Agent(PiConfig(session_key="test", project_dir=Path("/tmp/test-agent")))
-        agent._backend = backend
         agent._connected = True
+        agent._process = process
+        agent._reader_task = asyncio.create_task(agent._reader_loop())
 
         assert agent._currently_sending is False
-        async for _ in agent.send("hello"):
-            pass
+        seen_flag = []
+        async for chunk in agent.send("hello"):
+            seen_flag.append(agent._currently_sending)
         assert agent._currently_sending is False
         assert seen_flag == [True]
+
+        if agent._reader_task and not agent._reader_task.done():
+            agent._reader_task.cancel()
+            try:
+                await agent._reader_task
+            except asyncio.CancelledError:
+                pass
