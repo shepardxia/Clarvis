@@ -22,6 +22,8 @@ def agent():
     a.context = None
     a.is_busy = False
     a._send_command = MagicMock()
+    # enrich() with no context just returns the turn_prefix or text
+    a.enrich = AsyncMock(side_effect=lambda text, **kw: kw.get("turn_prefix", text))
     return a
 
 
@@ -57,6 +59,8 @@ class TestNudgeDelivery:
         mock_agent.context = None
         mock_agent.is_busy = False
         mock_agent._send_command = MagicMock()
+        # enrich() with no context just returns the turn_prefix
+        mock_agent.enrich = AsyncMock(side_effect=lambda text, **kw: kw.get("turn_prefix", text))
 
         response = await nudge(mock_agent, reason="reflect")
 

@@ -79,6 +79,17 @@ class StateStore:
             # Return deep copy to prevent external mutation of nested dicts
             return copy.deepcopy(data)
 
+    def peek(self, section: str) -> dict:
+        """Get a read-only shallow copy of a state section.
+
+        Cheaper than ``get()`` — no deep copy.  Callers must NOT mutate
+        the returned dict or its nested values.  Use for read-only hot
+        paths like the display render loop.
+        """
+        with self._lock:
+            data = self._state.get(section, {})
+            return dict(data)
+
 
 # Global instance for singleton access
 _store_instance: StateStore | None = None

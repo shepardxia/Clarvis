@@ -72,6 +72,7 @@ export class ChatClient {
 			});
 
 			socket.on("close", () => {
+				this.rejectPending("Socket closed");
 				this.cleanup();
 				if (!this.reconnecting) {
 					this.onDisconnect();
@@ -115,6 +116,14 @@ export class ChatClient {
 
 	get connected(): boolean {
 		return this.socket !== null && !this.socket.destroyed;
+	}
+
+	private rejectPending(reason: string): void {
+		for (const [id, pending] of this.pendingRequests) {
+			clearTimeout(pending.timeout);
+			pending.resolve({ type: "error", message: reason, id });
+		}
+		this.pendingRequests.clear();
 	}
 
 	private cleanup(): void {

@@ -57,22 +57,26 @@ class DisplayManager:
             self._wake_event.set()
 
     def _build_tick_context(self) -> dict:
-        """Build tick context by reading directly from StateStore."""
+        """Build tick context by reading directly from StateStore.
+
+        Uses ``peek()`` (shallow copy, no deepcopy) since we only read
+        values here — never mutate the returned dicts.
+        """
         ctx: dict = {}
 
         if self._state_store:
             # Status -- read from StateStore
-            status_data = self._state_store.get("status")
+            status_data = self._state_store.peek("status")
             ctx["status"] = status_data.get("status", "idle") if status_data else "idle"
 
             # Weather -- read from StateStore
-            weather = self._state_store.get("weather")
+            weather = self._state_store.peek("weather")
             ctx["weather_type"] = weather.get("widget_type", "clear") if weather else "clear"
             ctx["weather_intensity"] = weather.get("widget_intensity", 0.0) if weather else 0.0
             ctx["wind_speed"] = weather.get("wind_speed", 0.0) if weather else 0.0
 
             # Voice text
-            voice_data = self._state_store.get("voice_text")
+            voice_data = self._state_store.peek("voice_text")
             if voice_data and voice_data.get("active"):
                 full_text = voice_data.get("full_text", "")
                 tts_started = voice_data.get("tts_started_at", 0)
@@ -96,7 +100,7 @@ class DisplayManager:
                 ctx["reveal_chars"] = reveal_chars
 
             # Mic state
-            mic = self._state_store.get("mic") or {}
+            mic = self._state_store.peek("mic") or {}
             ctx["mic_visible"] = mic.get("visible", False)
             ctx["mic_enabled"] = mic.get("enabled", False)
             ctx["mic_style"] = mic.get("style", "bracket")

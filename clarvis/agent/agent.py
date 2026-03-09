@@ -27,6 +27,7 @@ class AgentConfig:
     session_key: str
     project_dir: Path
     model: str | None = None
+    thinking: str | None = None
 
 
 def auto_approve_extension_ui(agent: "Agent", event: dict) -> None:
@@ -51,6 +52,30 @@ def auto_approve_extension_ui(agent: "Agent", event: dict) -> None:
     agent._send_command(response)
 
 
+async def collect_response(agent: "Agent", text: str, *, owner: str = "") -> str:
+    """Send a message and collect the full text response.
+
+    Auto-approves extension UI requests and returns the concatenated
+    text deltas.  Used by channels and nudge — voice has its own
+    streaming loop with interrupt/TTS handling.
+    """
+    from contextlib import aclosing
+
+    chunks: list[str] = []
+    async with aclosing(agent.send(text, owner=owner)) as stream:
+        async for event in stream:
+            etype = event.get("type")
+            if etype == "extension_ui_request":
+                auto_approve_extension_ui(agent, event)
+            elif etype == "message_update":
+                delta = event.get("assistantMessageEvent", {})
+                if delta.get("type") == "text_delta":
+                    chunks.append(delta.get("delta", ""))
+            elif etype == "agent_end":
+                break
+    return "".join(chunks).strip()
+
+
 class Agent:
     """Self-contained agent that drives ``pi --mode rpc`` as a subprocess.
 
@@ -64,6 +89,7 @@ class Agent:
         self._session_key = config.session_key
         self._project_dir = config.project_dir
         self._model = config.model
+        self._thinking = config.thinking
         self._session_file = config.project_dir / "pi-session.jsonl"
 
         self._connected = False
@@ -99,6 +125,12 @@ class Agent:
         """Identifier of the caller currently holding the send lock."""
         return self._send_owner
 
+    async def enrich(self, text: str, **kwargs) -> str:
+        """Enrich text via ContextInjector if available, otherwise pass through."""
+        if self.context:
+            return await self.context.enrich(text, **kwargs)
+        return text
+
     # ------------------------------------------------------------------
     # Project directory setup
     # ------------------------------------------------------------------
@@ -130,6 +162,8 @@ class Agent:
             cmd = ["pi", "--mode", "rpc", "--session", str(self._session_file)]
             if self._model:
                 cmd.extend(["--model", self._model])
+            if self._thinking:
+                cmd.extend(["--thinking", self._thinking])
 
             self._process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -137,6 +171,7 @@ class Agent:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(self._project_dir),
+                limit=1024 * 1024 * 1024,  # 1GB — Pi responses (get_messages) can be arbitrarily large
             )
 
             self._events = asyncio.Queue()

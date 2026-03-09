@@ -422,10 +422,7 @@ class VoiceCommandOrchestrator:
         self._transition(VoicePipelineState.THINKING)
 
         # Use ContextInjector for unified grounding + ambient context
-        if self.agent.context:
-            enriched = await self.agent.context.enrich(text)
-        else:
-            enriched = text
+        enriched = await self.agent.enrich(text, include_ambient=True)
 
         logger.info(
             "Voice enriched: %d chars (prep: %.2fs)",
@@ -474,10 +471,7 @@ class VoiceCommandOrchestrator:
             self._transition(VoicePipelineState.THINKING)
 
             # Enrich follow-ups with ambient context (no memory re-grounding)
-            if self.agent.context:
-                follow_up_enriched = await self.agent.context.enrich(follow_up_text)
-            else:
-                follow_up_enriched = follow_up_text
+            follow_up_enriched = await self.agent.enrich(follow_up_text, include_ambient=True)
 
             result = await self._stream_and_speak(follow_up_enriched)
             if result is None:
@@ -713,11 +707,7 @@ class VoiceCommandOrchestrator:
 
     async def _preempt_agent(self) -> None:
         """Interrupt the current agent operation so voice can take over."""
-        try:
-            await asyncio.wait_for(self.agent.interrupt(), timeout=5.0)
-        except asyncio.TimeoutError:
-            logger.error("Preempt interrupt timed out -- force-disconnecting")
-            await self.agent.disconnect()
+        await self._safe_interrupt()
 
     async def _bail(self, message: str) -> None:
         """Speak an error/abort message and transition to COOLDOWN."""

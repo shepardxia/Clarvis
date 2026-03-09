@@ -8,7 +8,6 @@ import asyncio
 import json
 import logging
 import os
-from contextlib import aclosing
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -92,21 +91,9 @@ class ChannelManager:
 
     async def send_to_agent(self, text: str) -> str:
         """Send to agent -- lock is internal to Agent._send_inner()."""
-        from ..agent.agent import auto_approve_extension_ui
+        from ..agent.agent import collect_response
 
-        chunks: list[str] = []
-        async with aclosing(self._agent.send(text)) as stream:
-            async for event in stream:
-                etype = event.get("type")
-                if etype == "extension_ui_request":
-                    auto_approve_extension_ui(self._agent, event)
-                elif etype == "message_update":
-                    delta = event.get("assistantMessageEvent", {})
-                    if delta.get("type") == "text_delta":
-                        chunks.append(delta.get("delta", ""))
-                elif etype == "agent_end":
-                    break
-        return "".join(chunks).strip()
+        return await collect_response(self._agent, text)
 
     def _init_channels(self) -> None:
         """Initialize channel instances from config."""
@@ -242,8 +229,7 @@ class ChannelManager:
         self._log_transcript(msg.channel, msg.chat_id, msg.sender_id, msg.content)
 
         # 4. Memory + ambient grounding via ContextInjector
-        if self._agent.context:
-            enriched = await self._agent.context.enrich(enriched)
+        enriched = await self._agent.enrich(enriched)
 
         # 5. Agent routing -- serialized via lock
         try:

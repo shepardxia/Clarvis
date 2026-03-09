@@ -17,7 +17,7 @@ async def nudge(
     **context,
 ) -> str | None:
     """Send a context-rich prompt to the agent. Returns response text or None."""
-    from ..agent.agent import auto_approve_extension_ui
+    from ..agent.agent import collect_response
 
     # Skip if agent is busy with voice (voice has priority)
     if agent.is_busy:
@@ -28,30 +28,16 @@ async def nudge(
     reason_prefix = _build_reason_prefix(reason, **context)
 
     # Use ContextInjector for unified grounding + ambient context
-    if agent.context:
-        prompt = await agent.context.enrich("", turn_prefix=reason_prefix)
-    else:
-        prompt = reason_prefix
+    prompt = await agent.enrich("", turn_prefix=reason_prefix, include_ambient=True)
 
     logger.info("Nudge (%s): sending prompt (%d chars)", reason, len(prompt))
 
-    chunks: list[str] = []
     try:
-        async for event in agent.send(prompt, owner="nudge"):
-            etype = event.get("type")
-            if etype == "extension_ui_request":
-                auto_approve_extension_ui(agent, event)
-            elif etype == "message_update":
-                delta = event.get("assistantMessageEvent", {})
-                if delta.get("type") == "text_delta":
-                    chunks.append(delta.get("delta", ""))
-            elif etype == "agent_end":
-                break
+        response = await collect_response(agent, prompt, owner="nudge") or None
     except Exception as e:
         logger.warning("Nudge (%s) failed: %s", reason, e)
         return None
 
-    response = "".join(chunks).strip() if chunks else None
     if response:
         logger.info("Nudge response (%s): %s", reason, response[:200])
     return response
