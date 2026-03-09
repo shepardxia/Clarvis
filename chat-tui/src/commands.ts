@@ -1,9 +1,8 @@
 /**
  * Slash command definitions and dispatch logic.
  *
- * Three categories:
- * - Pi RPC: /compact, /model, /thinking, /new, /stats -> forward via chat socket
- * - Daemon: /spotify, /timer, /reflect, /reload -> send via daemon socket (ctools)
+ * Two categories:
+ * - Session: /new -> forward via chat socket
  * - Local: /help, /clear, /quit, /rewind -> handle in TUI
  *
  * Unrecognized slash commands fall through as agent prompts.
@@ -18,32 +17,32 @@ export type CommandResult =
 	| { handled: true }
 	| { handled: false };
 
-interface CommandContext {
+export interface CommandContext {
 	chatClient: ChatClient;
 	outputLog: OutputLog;
 	onClear: () => void;
 	onQuit: () => void;
 	onRewind: () => void;
 	requestRender: () => void;
+	showSelect: (title: string, options: string[], onDone: (value: string | undefined) => void) => void;
+	showFilterSelect: (title: string, options: string[], onDone: (value: string | undefined) => void) => void;
 }
 
 // ============================================================================
 // Command definitions for autocomplete
 // ============================================================================
 
-export const slashCommands: SlashCommand[] = [
-	// Pi RPC commands
-	{ name: "compact", description: "Compact conversation context" },
-	{ name: "model", description: "Show or change the model" },
-	{ name: "thinking", description: "Toggle extended thinking" },
-	{ name: "new", description: "Start a new session" },
-	{ name: "stats", description: "Show session statistics" },
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
 
-	// Daemon commands
-	{ name: "spotify", description: "Control Spotify playback" },
-	{ name: "timer", description: "Manage timers" },
-	{ name: "reflect", description: "Trigger memory consolidation" },
+export const slashCommands: SlashCommand[] = [
+	// Session commands
+	{ name: "new", description: "Start a new session" },
+	{ name: "reflect", description: "Consolidate memories" },
 	{ name: "reload", description: "Reload agent prompts" },
+
+	// Agent settings (Pi RPC)
+	{ name: "thinking", description: "Set thinking level (off/minimal/low/medium/high)" },
+	{ name: "model", description: "Switch model (e.g. /model claude-sonnet-4-6)" },
 
 	// Local commands
 	{ name: "help", description: "Show available commands" },
@@ -51,40 +50,6 @@ export const slashCommands: SlashCommand[] = [
 	{ name: "rewind", description: "Fork conversation from a previous turn" },
 	{ name: "quit", description: "Exit the chat TUI" },
 ];
-
-// ============================================================================
-// Pi RPC commands — forwarded via chat socket
-// ============================================================================
-
-const PI_RPC_COMMANDS = new Set(["compact", "model", "thinking", "stats"]);
-
-// ============================================================================
-// Daemon commands — sent via daemon socket (ctools)
-// ============================================================================
-
-interface DaemonCommand {
-	method: string;
-	parseArgs?: (args: string) => Record<string, unknown>;
-}
-
-const DAEMON_COMMANDS: Record<string, DaemonCommand> = {
-	spotify: {
-		method: "spotify",
-		parseArgs: (args) => ({ command: args }),
-	},
-	timer: {
-		method: "timer",
-		parseArgs: (args) => {
-			try {
-				return JSON.parse(args);
-			} catch {
-				return { action: "list" };
-			}
-		},
-	},
-	reflect: { method: "nudge", parseArgs: () => ({ reason: "reflect" }) },
-	reload: { method: "reload_agents" },
-};
 
 // ============================================================================
 // Dispatch
@@ -115,7 +80,7 @@ export function dispatchCommand(input: string, ctx: CommandContext): CommandResu
 		return { handled: true };
 	}
 
-	// /new — special: sends new_session to chat socket
+	// /new — sends new_session to chat socket
 	if (cmd === "new") {
 		ctx.chatClient.send({ type: "new_session" });
 		ctx.outputLog.handleInfo("[session reset]");
@@ -123,17 +88,23 @@ export function dispatchCommand(input: string, ctx: CommandContext): CommandResu
 		return { handled: true };
 	}
 
-	// Pi RPC commands
-	if (PI_RPC_COMMANDS.has(cmd)) {
-		// Forward as a prompt starting with / so Pi interprets as command
-		ctx.chatClient.send({ type: "prompt", message: input });
+	// Daemon commands (same IPC as `clarvis` CLI)
+	if (cmd === "reflect") {
+		executeDaemonCommand("nudge", { reason: "reflect" }, ctx);
+		return { handled: true };
+	}
+	if (cmd === "reload") {
+		executeDaemonCommand("reload_agents", {}, ctx);
 		return { handled: true };
 	}
 
-	// Daemon commands
-	const daemonCmd = DAEMON_COMMANDS[cmd];
-	if (daemonCmd) {
-		executeDaemonCommand(daemonCmd, trimmedArgs, ctx);
+	// Pi RPC commands (forwarded to agent subprocess)
+	if (cmd === "thinking") {
+		executeThinkingCommand(ctx);
+		return { handled: true };
+	}
+	if (cmd === "model") {
+		executeModelCommand(ctx);
 		return { handled: true };
 	}
 
@@ -141,14 +112,83 @@ export function dispatchCommand(input: string, ctx: CommandContext): CommandResu
 	return { handled: false };
 }
 
+async function executeThinkingCommand(ctx: CommandContext): Promise<void> {
+	// Query current level first to show (current) marker
+	let currentLevel = "unknown";
+	try {
+		const state = await ctx.chatClient.request({ type: "command", command: "get_state", args: {} });
+		currentLevel = String((state.result as Record<string, unknown>)?.thinkingLevel ?? "unknown");
+	} catch { /* proceed without marker */ }
+
+	const options = THINKING_LEVELS.map((l) => l === currentLevel ? `${l} (current)` : l);
+	ctx.showSelect("Thinking level", options, async (value) => {
+		if (!value) return;
+		const level = value.replace(" (current)", "");
+		try {
+			await ctx.chatClient.request({
+				type: "command", command: "set_thinking_level", args: { level },
+			});
+			ctx.outputLog.handleInfo(`Thinking: ${level}`);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			ctx.outputLog.handleError(msg);
+		}
+		ctx.requestRender();
+	});
+}
+
+async function executeModelCommand(ctx: CommandContext): Promise<void> {
+	// Query available models from Pi
+	let models: Array<Record<string, unknown>> = [];
+	let currentModelId = "";
+	try {
+		const state = await ctx.chatClient.request({ type: "command", command: "get_state", args: {} });
+		const result = state.result as Record<string, unknown>;
+		currentModelId = String((result?.model as Record<string, unknown>)?.modelId ?? "");
+
+		const resp = await ctx.chatClient.request({ type: "command", command: "get_available_models", args: {} });
+		const data = resp.result as Record<string, unknown>;
+		if (Array.isArray(data)) {
+			models = data as Array<Record<string, unknown>>;
+		} else if (Array.isArray(data?.models)) {
+			models = data.models as Array<Record<string, unknown>>;
+		}
+	} catch { /* fall through with empty list */ }
+
+	if (models.length === 0) {
+		ctx.outputLog.handleError("Could not fetch available models");
+		ctx.requestRender();
+		return;
+	}
+
+	const options = models.map((m) => {
+		const id = String(m.modelId ?? m.name ?? "unknown");
+		return id === currentModelId ? `${id} (current)` : id;
+	});
+
+	ctx.showFilterSelect("Model", options, async (value) => {
+		if (!value) return;
+		const modelId = value.replace(" (current)", "");
+		try {
+			await ctx.chatClient.request({
+				type: "command", command: "set_model", args: { modelId },
+			});
+			ctx.outputLog.handleInfo(`Model: ${modelId}`);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			ctx.outputLog.handleError(msg);
+		}
+		ctx.requestRender();
+	});
+}
+
 async function executeDaemonCommand(
-	cmd: DaemonCommand,
-	args: string,
+	method: string,
+	params: Record<string, unknown>,
 	ctx: CommandContext,
 ): Promise<void> {
 	try {
-		const params = cmd.parseArgs ? cmd.parseArgs(args) : {};
-		const result = await DaemonClient.send(cmd.method, params);
+		const result = await DaemonClient.send(method, params);
 		const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
 		ctx.outputLog.handleInfo(text);
 	} catch (err) {
@@ -162,22 +202,19 @@ function showHelp(ctx: CommandContext): void {
 	const lines = [
 		"Commands:",
 		"  /new         Start a new session",
-		"  /compact     Compact conversation context",
-		"  /model       Show or change model",
-		"  /thinking    Toggle extended thinking",
-		"  /stats       Show session statistics",
-		"",
-		"  /spotify     Control Spotify playback",
-		"  /timer       Manage timers",
-		"  /reflect     Trigger memory consolidation",
+		"  /reflect     Consolidate memories",
 		"  /reload      Reload agent prompts",
+		"  /thinking    Set thinking (off/minimal/low/medium/high)",
+		"  /model       Switch model (e.g. /model claude-sonnet-4-6)",
 		"",
 		"  /rewind      Fork from a previous turn",
 		"  /clear       Clear output",
 		"  /help        Show this help",
 		"  /quit        Exit",
 		"",
-		"  Esc          Abort current response / exit",
+		"  Esc          Abort current response",
+		"  Esc×2        Rewind / fork",
+		"  Ctrl+L       Toggle expanded tool output",
 		"  Ctrl+D       Exit",
 	];
 	for (const line of lines) {

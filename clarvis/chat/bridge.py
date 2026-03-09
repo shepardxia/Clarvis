@@ -37,11 +37,13 @@ class ChatBridge:
         agents: dict[str, "Agent"],
         state: "StateStore",
         loop: asyncio.AbstractEventLoop,
+        user_name: str = "You",
     ):
         self._agents = agents
         self._active_agent: "Agent | None" = agents.get("clarvis")
         self._state = state
         self._loop = loop
+        self._user_name = user_name
         self._server: asyncio.AbstractServer | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._reader: asyncio.StreamReader | None = None
@@ -92,7 +94,10 @@ class ChatBridge:
         except Exception:
             logger.exception("Chat client error")
         finally:
-            self._writer = None
+            # Cancel any in-flight streaming and interrupt agent to release lock
+            await self._disconnect_client()
+            if self._active_agent and self._active_agent.is_busy:
+                await self._active_agent.interrupt()
             self._reader = None
             self._client_task = None
             logger.info("Chat TUI disconnected")
@@ -124,33 +129,42 @@ class ChatBridge:
             if self._active_agent:
                 self._active_agent.forward_ui_response(msg)
 
+        elif mtype == "command":
+            cmd_name = msg.get("command", "")
+            cmd_args = msg.get("args", {})
+            if cmd_name:
+                await self._handle_command(cmd_name, cmd_args, msg.get("id"))
+
         elif mtype == "get_state":
             self._handle_get_state()
 
         elif mtype == "get_messages":
-            await self._handle_get_messages()
+            await self._handle_get_messages(msg.get("id"))
 
         elif mtype == "get_fork_messages":
-            await self._handle_get_fork_messages()
+            await self._handle_get_fork_messages(msg.get("id"))
 
         elif mtype == "fork":
             entry_id = msg.get("entryId", "")
             if entry_id:
-                await self._handle_fork(entry_id)
+                await self._handle_fork(entry_id, msg.get("id"))
 
     def _handle_init(self, msg: dict) -> None:
         """Handle init handshake -- select agent for this session."""
         name = msg.get("agent", "clarvis")
+        req_id = msg.get("id")
         agent = self._agents.get(name)
         if agent:
             self._active_agent = agent
-            self._send_to_client(
-                {
-                    "type": "init_ack",
-                    "agent": name,
-                    "session_key": agent.session_key,
-                }
-            )
+            resp: dict = {
+                "type": "init_ack",
+                "agent": name,
+                "user_name": self._user_name,
+                "session_key": agent.session_key,
+            }
+            if req_id:
+                resp["id"] = req_id
+            self._send_to_client(resp)
             logger.info("Chat TUI selected agent: %s", name)
         else:
             self._send_to_client(
@@ -159,6 +173,46 @@ class ChatBridge:
                     "message": f"Unknown agent: {name}",
                 }
             )
+
+    async def _handle_command(self, command: str, args: dict, req_id: str | None = None) -> None:
+        """Forward a Pi RPC command (e.g. /thinking, /model) to the agent."""
+        agent = self._require_idle_agent()
+        if not agent:
+            return
+        try:
+            data = await agent.command(command, **args)
+            # Persist settings changes to config.json
+            self._persist_setting(command, args, data)
+            resp: dict = {"type": "command_result", "command": command, "result": data}
+            if req_id:
+                resp["id"] = req_id
+            self._send_to_client(resp)
+        except Exception as exc:
+            logger.warning("command %s failed: %s", command, exc)
+            resp = {"type": "error", "message": f"{command}: {exc}"}
+            if req_id:
+                resp["id"] = req_id
+            self._send_to_client(resp)
+
+    def _persist_setting(self, command: str, args: dict, data: dict) -> None:
+        """Save thinking/model changes to config.json for persistence."""
+        from clarvis.core.persistence import json_load_safe, json_save_atomic
+        from clarvis.display.config import CONFIG_PATH
+
+        if command == "set_thinking_level":
+            level = args.get("level")
+            if level:
+                raw = json_load_safe(CONFIG_PATH) or {}
+                raw.setdefault("clarvis", {})["thinking"] = level
+                json_save_atomic(CONFIG_PATH, raw)
+                logger.info("Persisted thinking level: %s", level)
+        elif command == "set_model":
+            model_id = data.get("model", {}).get("modelId") if isinstance(data, dict) else None
+            if model_id:
+                raw = json_load_safe(CONFIG_PATH) or {}
+                raw.setdefault("clarvis", {})["model"] = model_id
+                json_save_atomic(CONFIG_PATH, raw)
+                logger.info("Persisted model: %s", model_id)
 
     def _handle_get_state(self) -> None:
         """Send current state to client."""
@@ -182,54 +236,57 @@ class ChatBridge:
             return None
         return self._active_agent
 
-    async def _handle_get_messages(self) -> None:
+    async def _handle_get_messages(self, req_id: str | None = None) -> None:
         """Fetch conversation history from the active agent."""
         agent = self._require_idle_agent()
         if not agent:
             return
         try:
             data = await agent.command("get_messages")
-            self._send_to_client(
-                {
-                    "type": "history",
-                    "messages": data.get("messages", []),
-                }
-            )
+            resp: dict = {
+                "type": "history",
+                "messages": data.get("messages", []),
+            }
+            if req_id:
+                resp["id"] = req_id
+            self._send_to_client(resp)
         except Exception as exc:
             logger.warning("get_messages failed: %s", exc)
             self._send_to_client({"type": "error", "message": str(exc)})
 
-    async def _handle_get_fork_messages(self) -> None:
+    async def _handle_get_fork_messages(self, req_id: str | None = None) -> None:
         """Fetch fork-eligible messages from the active agent."""
         agent = self._require_idle_agent()
         if not agent:
             return
         try:
             data = await agent.command("get_fork_messages")
-            self._send_to_client(
-                {
-                    "type": "fork_messages",
-                    "messages": data.get("messages", []),
-                }
-            )
+            resp: dict = {
+                "type": "fork_messages",
+                "messages": data.get("messages", []),
+            }
+            if req_id:
+                resp["id"] = req_id
+            self._send_to_client(resp)
         except Exception as exc:
             logger.warning("get_fork_messages failed: %s", exc)
             self._send_to_client({"type": "error", "message": str(exc)})
 
-    async def _handle_fork(self, entry_id: str) -> None:
+    async def _handle_fork(self, entry_id: str, req_id: str | None = None) -> None:
         """Fork the conversation at the given entry."""
         agent = self._require_idle_agent()
         if not agent:
             return
         try:
             data = await agent.command("fork", entryId=entry_id)
-            self._send_to_client(
-                {
-                    "type": "fork_complete",
-                    "text": data.get("text", ""),
-                    "cancelled": data.get("cancelled", False),
-                }
-            )
+            resp: dict = {
+                "type": "fork_complete",
+                "text": data.get("text", ""),
+                "cancelled": data.get("cancelled", False),
+            }
+            if req_id:
+                resp["id"] = req_id
+            self._send_to_client(resp)
             # If fork succeeded (not cancelled), send updated history
             if not data.get("cancelled", False):
                 history = await agent.command("get_messages")
@@ -272,11 +329,8 @@ class ChatBridge:
         if not agent:
             return
 
-        # Enrich with context
-        if agent.context:
-            enriched = await agent.context.enrich(text)
-        else:
-            enriched = text
+        # No context injection for chat — user sees exactly what's sent
+        enriched = text
 
         # Push thinking status
         self._save_and_push_status("thinking")

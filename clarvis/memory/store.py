@@ -134,6 +134,9 @@ class MemoryStore:
         # Hindsight config
         db_url: str = "pg0",
         banks: dict[str, dict] | None = None,
+        llm_provider: str = "anthropic",
+        llm_model: str = "claude-sonnet-4-6",
+        llm_api_key: str | None = None,
         # Cognee config
         kg_db_host: str = "localhost",
         kg_db_port: int = 5432,
@@ -151,6 +154,9 @@ class MemoryStore:
             "parletre": {"visibility": "master"},
             "agora": {"visibility": "all"},
         }
+        self._llm_provider = llm_provider
+        self._llm_model = llm_model
+        self._llm_api_key = llm_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self._engine: Any = None
         self._facts_ready = False
 
@@ -178,7 +184,12 @@ class MemoryStore:
         try:
             from hindsight_api.engine.memory_engine import MemoryEngine
 
-            self._engine = MemoryEngine(db_url=self._db_url)
+            self._engine = MemoryEngine(
+                db_url=self._db_url,
+                memory_llm_provider=self._llm_provider,
+                memory_llm_model=self._llm_model,
+                memory_llm_api_key=self._llm_api_key,
+            )
             await self._engine.initialize()
             self._facts_ready = True
             logger.info("Hindsight started (banks: %s)", ", ".join(self._banks))

@@ -20,12 +20,11 @@ logger = logging.getLogger(__name__)
 _SKIP_PATTERNS = {".*", "__pycache__", "*.pyc", ".DS_Store"}
 
 
-def _should_skip(path: Path) -> bool:
-    """Return True if *path* should be skipped (hidden files, caches, etc.)."""
-    # Skip files inside hidden directories (e.g. .git/config)
-    if any(part.startswith(".") for part in path.parts):
+def _should_skip(rel: Path) -> bool:
+    """Return True if *rel* (relative to watch root) should be skipped."""
+    if any(part.startswith(".") for part in rel.parts):
         return True
-    return any(fnmatch.fnmatch(path.name, pat) for pat in _SKIP_PATTERNS)
+    return any(fnmatch.fnmatch(rel.name, pat) for pat in _SKIP_PATTERNS)
 
 
 class DocumentWatcher:
@@ -113,10 +112,13 @@ class DocumentWatcher:
         results: list[dict[str, Any]] = []
 
         for path in sorted(self._watch_dir.rglob("*")):
-            if not path.is_file() or _should_skip(path):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(self._watch_dir)
+            if _should_skip(rel):
                 continue
 
-            rel = str(path.relative_to(self._watch_dir))
+            rel = str(rel)
             try:
                 current_hash = await loop.run_in_executor(None, self._hash_file, path)
             except OSError:

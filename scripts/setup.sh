@@ -2,7 +2,7 @@
 set -e
 
 # Clarvis Setup Script
-# Installs dependencies, configures MCP server, and sets up CLI.
+# Installs dependencies and sets up CLI.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
@@ -75,32 +75,6 @@ setup_venv() {
     print_success "All dependencies installed"
 }
 
-configure_mcp() {
-    print_header "Configuring MCP server..."
-
-    if command -v cmcp &> /dev/null; then
-        # cmcp writes correct HTTP .mcp.json
-        cd "$MONOREPO_DIR" && cmcp add clarvis
-        print_success "MCP server configured via cmcp"
-    elif command -v claude &> /dev/null; then
-        # Fallback: write .mcp.json directly
-        cat > "$MONOREPO_DIR/.mcp.json" << MCPEOF
-{
-  "mcpServers": {
-    "clarvis": {
-      "type": "http",
-      "url": "http://127.0.0.1:7777/mcp"
-    }
-  }
-}
-MCPEOF
-        print_success "MCP server configured (.mcp.json)"
-    else
-        print_warning "Neither cmcp nor claude CLI found — skipping MCP config"
-        echo "  Install Claude Code: npm install -g @anthropic-ai/claude-code"
-    fi
-}
-
 install_cli() {
     print_header "Installing CLI..."
 
@@ -132,19 +106,7 @@ setup_clarvis_dir() {
 
     local home_dir="$HOME/.clarvis/clarvis"
     mkdir -p "$home_dir"
-    if [ ! -f "$home_dir/.mcp.json" ]; then
-        cat > "$home_dir/.mcp.json" << MCPEOF
-{
-  "mcpServers": {
-    "clarvis": {
-      "type": "http",
-      "url": "http://127.0.0.1:7778/mcp"
-    }
-  }
-}
-MCPEOF
-    fi
-    print_success "Clarvis directory ready at $home_dir (memory tools on port 7778)"
+    print_success "Clarvis directory ready at $home_dir"
 }
 
 check_env() {
@@ -201,8 +163,6 @@ Usage:
   clarvis status    Show running processes
   clarvis logs      Tail daemon logs
 
-Restart Claude Code to load the MCP server.
-
 OPTIONAL: Enable GPS Location
   brew install corelocationcli
   CoreLocationCLI -j  # approve the popup once
@@ -224,7 +184,6 @@ main() {
     setup_venv
     check_env
     setup_spotify
-    configure_mcp
     install_cli
     setup_clarvis_dir
 

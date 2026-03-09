@@ -43,6 +43,7 @@ def _create_agent(
     session_key: str,
     project_dir: Path,
     model: str | None = None,
+    thinking: str | None = None,
 ):
     """Shared agent construction: config -> Agent -> ensure_project_dir."""
     from .agent import Agent, AgentConfig
@@ -51,16 +52,17 @@ def _create_agent(
         session_key=session_key,
         project_dir=project_dir,
         model=model,
+        thinking=thinking,
     )
     agent = Agent(config)
     agent.ensure_project_dir()
     return agent
 
 
-def create_clarvis_agent(model: str | None = None):
+def create_clarvis_agent(model: str | None = None, thinking: str | None = None):
     """Create the Clarvis agent (voice + terminal) at ~/.clarvis/clarvis/."""
     clarvis_home = agent_home("clarvis")
-    agent = _create_agent("clarvis", clarvis_home, model)
+    agent = _create_agent("clarvis", clarvis_home, model, thinking)
     _scaffold_claude_md(clarvis_home, "clarvis")
     return agent
 

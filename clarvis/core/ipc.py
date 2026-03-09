@@ -19,7 +19,7 @@ COMMAND_SOCKET_PATH = "/tmp/clarvis-daemon.sock"
 class DaemonServer(UnixSocketServer):
     """
     Command server that runs inside the daemon.
-    Handles requests from MCP and other clients.
+    Handles requests from ctools and other clients.
     """
 
     def __init__(self, socket_path: str = COMMAND_SOCKET_PATH):
@@ -82,7 +82,7 @@ class DaemonServer(UnixSocketServer):
 class DaemonClient:
     """
     Client for communicating with the daemon.
-    Used by MCP server and other external processes.
+    Used by ctools, chat TUI, and other external processes.
     """
 
     def __init__(self, socket_path: str = COMMAND_SOCKET_PATH, timeout: float = 30.0):

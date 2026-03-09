@@ -89,7 +89,7 @@ class DatasetConfig(BaseModel):
     )
     description: str = Field(
         default="",
-        description="Human-readable description of the dataset's purpose. Shown to agents in MCP tool schemas.",
+        description="Human-readable description of the dataset's purpose.",
     )
 
 
@@ -116,6 +116,9 @@ class HindsightConfig(BaseModel):
         },
         description="Bank definitions with visibility scoping.",
     )
+    llm_provider: str = Field(default="anthropic", description="LLM provider for memory operations.")
+    llm_model: str = Field(default="claude-sonnet-4-6", description="LLM model for memory operations.")
+    llm_api_key: str | None = Field(default=None, description="LLM API key (None = from env).")
 
 
 class CogneeConfig(BaseModel):
@@ -236,6 +239,7 @@ class ClarvisAgentConfig(BaseModel):
     model: str | None = Field(
         default=None, description="Claude model ID (e.g. 'claude-sonnet-4-6', 'claude-haiku-4-5')"
     )
+    thinking: str | None = Field(default=None, description="Thinking level (off/minimal/low/medium/high)")
     idle_timeout: float = Field(default=3600.0, description="Seconds before Clarvis agent disconnects")
     tools: dict[str, Any] = Field(
         default_factory=dict,
@@ -271,6 +275,7 @@ class ChannelsConfig(BaseModel):
 class ClarvisConfig(BaseModel):
     """Main configuration combining all sections."""
 
+    user_name: str = Field(default="You", description="Display name for the user in chat TUI")
     theme: ThemeConfig = Field(default_factory=ThemeConfig, description="Theme and color settings")
     display: DisplayConfig = Field(default_factory=DisplayConfig, description="Widget window display settings")
     testing: TestingConfig = Field(default_factory=TestingConfig, description="Development testing overrides")

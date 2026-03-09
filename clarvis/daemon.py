@@ -166,6 +166,9 @@ class CentralHubDaemon:
             self.memory = MemoryStore(
                 db_url=h_cfg.db_url,
                 banks={name: {"visibility": dc.visibility} for name, dc in h_cfg.banks.items()},
+                llm_provider=h_cfg.llm_provider,
+                llm_model=h_cfg.llm_model,
+                llm_api_key=h_cfg.llm_api_key,
                 kg_db_host=c_cfg.db_host,
                 kg_db_port=c_cfg.db_port,
                 kg_db_name=c_cfg.db_name,
@@ -355,7 +358,7 @@ class CentralHubDaemon:
         from .agent.context import ContextInjector
         from .agent.factory import create_clarvis_agent
 
-        agent = create_clarvis_agent(model=config.clarvis.model)
+        agent = create_clarvis_agent(model=config.clarvis.model, thinking=config.clarvis.thinking)
         agent.context = ContextInjector(
             state=self.state,
             memory=self.memory,
@@ -783,6 +786,7 @@ class CentralHubDaemon:
                 agents=self._agents,
                 state=self.state,
                 loop=self.ctx.loop,
+                user_name=self.ctx.config.user_name,
             )
             self._chat_bridge.start()
 

@@ -20,9 +20,10 @@ const editorTheme: EditorTheme = {
 export class PromptInput implements Component {
 	readonly editor: Editor;
 	onCtrlD?: () => void;
+	userLabel = "You";
 
 	constructor(tui: TUI, autocompleteProvider?: AutocompleteProvider) {
-		this.editor = new Editor(tui, editorTheme, { paddingX: 0 });
+		this.editor = new Editor(tui, editorTheme, { paddingX: 0, autocompleteMaxVisible: 15 });
 		if (autocompleteProvider) {
 			this.editor.setAutocompleteProvider(autocompleteProvider);
 		}
@@ -45,6 +46,6 @@ export class PromptInput implements Component {
 	}
 
 	render(width: number): string[] {
-		return [`${GREEN}${BOLD}You:${RESET}`, ...this.editor.render(width)];
+		return [`${GREEN}${BOLD}${this.userLabel}:${RESET}`, ...this.editor.render(width)];
 	}
 }

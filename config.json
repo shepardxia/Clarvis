@@ -1,4 +1,5 @@
 {
+  "user_name": "Shep",
   "theme": {
     "base": "c64"
   },
@@ -82,7 +83,7 @@
   },
   "channels": {
     "agent_backend": "pi",
-    "model": "claude-haiku-4-5",
+    "model": "claude-sonnet-4-6",
     "max_thinking_tokens": null,
     "idle_timeout": null,
     "tools": {

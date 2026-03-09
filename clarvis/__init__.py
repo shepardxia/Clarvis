@@ -1,3 +1,3 @@
-"""Clarvis MCP Server - weather, time, and status tools for Claude Code."""
+"""Clarvis — macOS desktop companion that visualizes Claude Code's activity."""
 
 __version__ = "0.1.0"

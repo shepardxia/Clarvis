@@ -9,13 +9,14 @@ import {
 	type CancellableLoader,
 	CombinedAutocompleteProvider,
 	Container,
+	isKeyRelease,
 	matchesKey,
 	type OverlayOptions,
 	ProcessTerminal,
-	type SelectItem,
 	TUI,
 } from "@mariozechner/pi-tui";
 
+import { spawnSync } from "node:child_process";
 import { ChatClient, type ChatEvent } from "./daemon-client.js";
 import { dispatchCommand, slashCommands } from "./commands.js";
 import { OutputLog } from "./components/output-log.js";
@@ -24,8 +25,10 @@ import { createLoader } from "./components/loading.js";
 import {
 	type ExtensionUIRequest,
 	InputDialog,
+	type RewindEntry,
 	RewindDialog,
 	SelectDialog,
+	FilterSelectDialog,
 } from "./components/dialogs.js";
 import { BOLD, DIM, MAGENTA, RED, RESET, YELLOW } from "./theme.js";
 
@@ -122,6 +125,11 @@ async function main() {
 		process.exit(0);
 	}
 
+	function toggleDetail(): void {
+		outputLog.toggleDetail();
+		tui.requestRender(true);
+	}
+
 	// -- Extension UI dialog handling --
 
 	function showSelectDialog(
@@ -130,6 +138,23 @@ async function main() {
 		onDone: (value: string | undefined) => void,
 	): void {
 		const dialog = new SelectDialog(title, options);
+		dialog.onSelect = (value) => {
+			tui.hideOverlay();
+			onDone(value);
+		};
+		dialog.onCancel = () => {
+			tui.hideOverlay();
+			onDone(undefined);
+		};
+		tui.showOverlay(dialog, dialogOverlayOptions);
+	}
+
+	function showFilterSelectDialog(
+		title: string,
+		options: string[],
+		onDone: (value: string | undefined) => void,
+	): void {
+		const dialog = new FilterSelectDialog(title, options);
 		dialog.onSelect = (value) => {
 			tui.hideOverlay();
 			onDone(value);
@@ -253,15 +278,46 @@ async function main() {
 
 	// -- History rendering --
 
+	function extractText(msg: Record<string, unknown>): string {
+		// Pi messages use content: [{type: "text", text: "..."}] (API format)
+		const content = msg.content;
+		let text: string;
+		if (typeof content === "string") {
+			text = content;
+		} else if (Array.isArray(content)) {
+			text = content
+				.filter((c: Record<string, unknown>) => c.type === "text")
+				.map((c: Record<string, unknown>) => c.text as string)
+				.join("");
+		} else {
+			text = (msg.text as string) ?? "";
+		}
+		return text;
+	}
+
+	/** Strip injected context (memory grounding, ambient) from user messages */
+	function stripContext(text: string): string {
+		let stripped = text;
+		// Remove <memory_context>...</memory_context> blocks
+		stripped = stripped.replace(/<memory_context>[\s\S]*?<\/memory_context>/g, "");
+		// Remove ambient context lines (date/time, weather/location)
+		stripped = stripped.replace(/^\s*\w+day,\s+\w+\s+\d+,\s+\d+:\d+[ap]m\s*/im, "");
+		stripped = stripped.replace(/^\s*[\d.]+°?F\s+.*?\(.*?\)\s*/im, "");
+		return stripped.trim();
+	}
+
 	function renderHistory(messages: unknown[]): void {
 		outputLog.clear();
 		for (const msg of messages) {
 			const m = msg as Record<string, unknown>;
 			const role = m.role as string;
-			const text = m.text as string | undefined;
-			if (role === "user" && text) {
+			const raw = extractText(m);
+			if (!raw) continue;
+			const text = role === "user" ? stripContext(raw) : raw;
+			if (!text) continue;
+			if (role === "user") {
 				outputLog.appendUserMessage(text);
-			} else if (role === "assistant" && text) {
+			} else if (role === "assistant") {
 				outputLog.appendMarkdown(text);
 			}
 		}
@@ -281,24 +337,26 @@ async function main() {
 				return;
 			}
 
-			const items: SelectItem[] = messages.map((m, i) => {
-				const text = (m.text as string ?? "").replace(/\n/g, " ");
-				const truncated = text.length > 60 ? text.slice(0, 60) + "..." : text;
-				const role = m.role as string;
-				const label = `#${i + 1}  [${role}] ${truncated}`;
-				return { value: m.entryId as string, label };
+			const entries: RewindEntry[] = messages.map((m) => {
+				const raw = extractText(m);
+				const text = (m.role === "user" ? stripContext(raw) : raw).trim();
+				return {
+					entryId: m.entryId as string,
+					role: m.role as string,
+					text,
+				};
 			});
 
-			const dialog = new RewindDialog(items);
+			const dialog = new RewindDialog(entries);
 
-			dialog.onSelect = async (item) => {
+			dialog.onSelect = async (entry) => {
 				tui.hideOverlay();
-				outputLog.handleInfo(`[rewinding to #${items.findIndex((i) => i.value === item.value) + 1}]`);
+				outputLog.handleInfo("[rewinding...]");
 				tui.requestRender();
 
 				try {
 					const forkResp = await chatClient.request(
-						{ type: "fork", entryId: item.value },
+						{ type: "fork", entryId: entry.entryId },
 					);
 					const text = forkResp.text as string | undefined;
 					if (text) {
@@ -348,6 +406,12 @@ async function main() {
 				}
 				outputLog.handleTextDelta(evt.delta as string);
 				tui.requestRender();
+			} else if (evt?.type === "thinking" || evt?.type === "thinking_delta") {
+				const delta = (evt.thinking ?? evt.delta ?? "") as string;
+				if (delta) {
+					outputLog.handleThinkingDelta(delta);
+					tui.requestRender();
+				}
 			}
 			return;
 		}
@@ -401,10 +465,15 @@ async function main() {
 
 		if (type === "init_ack") {
 			const agent = event.agent as string | undefined;
+			const userName = event.user_name as string | undefined;
 			if (agent) {
-				outputLog.append(`${DIM}Connected as ${agent}.${RESET}`);
-				tui.requestRender();
+				outputLog.agentLabel = agent.charAt(0).toUpperCase() + agent.slice(1);
 			}
+			if (userName) {
+				outputLog.userLabel = userName;
+			}
+			outputLog.append(`${DIM}Connected as ${agent ?? "clarvis"}.${RESET}`);
+			tui.requestRender();
 			return;
 		}
 
@@ -442,6 +511,8 @@ async function main() {
 			onQuit: exit,
 			onRewind: () => { handleRewind(); },
 			requestRender: () => tui.requestRender(),
+			showSelect: showSelectDialog,
+			showFilterSelect: showFilterSelectDialog,
 		});
 
 		// Only show user input for unhandled commands (agent prompts)
@@ -454,17 +525,34 @@ async function main() {
 
 	promptInput.onCtrlD = exit;
 
-	// Escape: abort if streaming, otherwise exit
+	// Escape: abort if streaming, double-tap to rewind. Ctrl+D to quit.
+	let escPressCount = 0;
+	let escResetTimer: ReturnType<typeof setTimeout> | null = null;
 	tui.addInputListener((data: string) => {
-		// Only handle escape when no overlay is active and not in autocomplete
+		if (isKeyRelease(data)) return undefined;
 		if (matchesKey(data, "escape") && !tui.hasOverlay() && !promptInput.editor.isShowingAutocomplete()) {
 			if (isStreaming) {
 				chatClient.send({ type: "abort" });
 				outputLog.handleInfo("[aborted]");
 				tui.requestRender();
 			} else {
-				exit();
+				escPressCount++;
+				if (escResetTimer) clearTimeout(escResetTimer);
+				if (escPressCount >= 2) {
+					escPressCount = 0;
+					handleRewind();
+				} else {
+					escResetTimer = setTimeout(() => { escPressCount = 0; }, 600);
+				}
 			}
+			return { consume: true };
+		}
+		if (matchesKey(data, "ctrl+l")) {
+			toggleDetail();
+			return { consume: true };
+		}
+		if (matchesKey(data, "ctrl+d")) {
+			exit();
 			return { consume: true };
 		}
 		return undefined;
@@ -475,7 +563,7 @@ async function main() {
 	const agentLabel = cliArgs.agent ? ` (${cliArgs.agent})` : "";
 	outputLog.append(`${BOLD}Clarvis Chat${agentLabel}${RESET}`);
 	outputLog.append(
-		`${DIM}Type a message and press Enter. Esc to abort/exit. Ctrl+D to quit. /help for commands.${RESET}`,
+		`${DIM}Type a message and press Enter. Esc to abort, Esc×2 to rewind, Ctrl+L to expand tool output, Ctrl+D to quit.${RESET}`,
 	);
 	outputLog.append("");
 
@@ -486,10 +574,18 @@ async function main() {
 		outputLog.append(`${DIM}Connected to daemon.${RESET}`);
 		chatClient.send({ type: "get_state" });
 
-		// Initialize agent if specified, wait for ack before requesting history
-		if (cliArgs.agent) {
-			await chatClient.request({ type: "init", agent: cliArgs.agent });
+		// Always send init to get agent + user names from daemon config
+		const initResp = await chatClient.request({ type: "init", agent: cliArgs.agent ?? "clarvis" });
+		const initAgent = initResp.agent as string | undefined;
+		const initUserName = initResp.user_name as string | undefined;
+		if (initAgent) {
+			outputLog.agentLabel = initAgent.charAt(0).toUpperCase() + initAgent.slice(1);
 		}
+		if (initUserName) {
+			outputLog.userLabel = initUserName;
+			promptInput.userLabel = initUserName;
+		}
+		outputLog.append(`${DIM}Connected as ${initAgent ?? "clarvis"}.${RESET}`);
 
 		chatClient.send({ type: "get_messages" });
 		tui.requestRender();
