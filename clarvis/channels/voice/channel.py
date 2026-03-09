@@ -1,12 +1,12 @@
 """Voice channel — wraps existing voice orchestrator as a BaseChannel.
 
 The voice pipeline (wake word → ASR → Claude → TTS) is managed by the
-daemon and voice_orchestrator. This channel adapter bridges it into the
-MessageBus so voice messages flow through the same handler as
-Discord, voice, etc.
+daemon and voice_orchestrator. This channel adapter exists for outbound
+TTS routing: agent-initiated messages (timer notifications, etc.) are
+spoken aloud via the orchestrator.
 
-Inbound: VoiceCommandOrchestrator calls publish_voice_input() after ASR.
-Outbound: send() speaks the response via TTS through the orchestrator.
+Inbound voice goes directly through the orchestrator → Clarvis agent,
+bypassing the MessageBus entirely.
 """
 
 import logging
@@ -20,10 +20,6 @@ if TYPE_CHECKING:
     from .orchestrator import VoiceCommandOrchestrator
 
 logger = logging.getLogger(__name__)
-
-# Sender / chat ID for voice — single user, single conversation.
-VOICE_SENDER = "local"
-VOICE_CHAT = "voice"
 
 
 class VoiceChannel(BaseChannel):
@@ -71,23 +67,6 @@ class VoiceChannel(BaseChannel):
             logger.warning("Voice channel: no orchestrator, dropping message")
             return
         await self._orchestrator.notify(msg.content)
-
-    async def publish_voice_input(self, text: str) -> None:
-        """Publish transcribed speech to the MessageBus.
-
-        Called by the voice orchestrator after ASR completes, to route
-        the voice command through the same ChannelManager handler as chat channels.
-        """
-        from ..events import InboundMessage
-
-        await self.bus.publish_inbound(
-            InboundMessage(
-                channel=self.name,
-                sender_id=VOICE_SENDER,
-                chat_id=VOICE_CHAT,
-                content=text,
-            )
-        )
 
     def is_allowed(self, sender_id: str) -> bool:
         """Voice is always local — always allowed."""
