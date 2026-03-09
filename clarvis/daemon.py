@@ -22,7 +22,7 @@ from filelock import FileLock, Timeout
 from .core.commands import CommandHandlers
 from .core.context import AppContext
 from .core.ipc import DaemonServer
-from .core.paths import CLARVIS_HOME
+from .core.paths import STAGING_DIGESTED, STAGING_INBOX
 from .core.persistence import json_load_safe
 from .core.scheduler import Scheduler
 from .core.signals import SignalBus
@@ -128,8 +128,6 @@ class CentralHubDaemon:
         self.voice_orchestrator = None
         self.channel_manager = None
         self._chat_bridge = None
-        self.staging_dir = CLARVIS_HOME / "staging"
-        self._session_reader = None
         self._owned_services: list = []  # services with no other refs (prevent GC)
 
         # Deferred — initialized in run()
@@ -700,25 +698,24 @@ class CentralHubDaemon:
                 pass
 
     async def reset_all_agents(self) -> None:
-        """Reset all agent sessions (called after reflect)."""
-        for name, agent in self._agents.items():
-            try:
-                await agent.reset()
+        """Reset all agent sessions in parallel."""
+        results = await asyncio.gather(
+            *(agent.reset() for agent in self._agents.values()),
+            return_exceptions=True,
+        )
+        for name, result in zip(self._agents, results):
+            if isinstance(result, Exception):
+                logger.warning("Failed to reset agent %s: %s", name, result, exc_info=True)
+            else:
                 logger.info("Reset agent session: %s", name)
-            except Exception:
-                logger.warning("Failed to reset agent %s", name, exc_info=True)
 
     async def complete_reflect(self) -> dict:
-        """Finalize reflect: advance watermarks, archive inbox, reset agents."""
-        if self._session_reader:
-            self._session_reader.advance_all()
-        inbox = self.staging_dir / "inbox"
-        if inbox.is_dir():
-            read_dir = self.staging_dir / "digested"
-            read_dir.mkdir(exist_ok=True)
-            for f in inbox.glob("*"):
+        """Finalize reflect: move inbox → digested, then reset agents."""
+        if STAGING_INBOX.is_dir():
+            STAGING_DIGESTED.mkdir(parents=True, exist_ok=True)
+            for f in STAGING_INBOX.glob("*"):
                 if f.is_file():
-                    f.rename(read_dir / f.name)
+                    f.rename(STAGING_DIGESTED / f.name)
         await self.reset_all_agents()
         return {"status": "reflect complete"}
 
@@ -741,18 +738,6 @@ class CentralHubDaemon:
         # Initialize display pipeline (scene, socket, rendering)
         self._init_display()
 
-        # Create SessionReader for Pi session files
-        from .core.paths import agent_home
-        from .memory.session_reader import SessionReader
-
-        self._session_reader = SessionReader(
-            sources={
-                "clarvis": agent_home("clarvis") / "pi-session.jsonl",
-                "factoria": agent_home("factoria") / "pi-session.jsonl",
-            },
-            watermark_file=self.staging_dir / "session_watermarks.json",
-        )
-
         self.commands = CommandHandlers(
             ctx=self.ctx,
             session_tracker=self.session_tracker,
@@ -766,7 +751,6 @@ class CentralHubDaemon:
                 "timer_service": lambda: self.timer_service,
                 "channel_manager": lambda: self.channel_manager,
                 "daemon": lambda: self,
-                "session_reader": lambda: self._session_reader,
             },
         )
 

@@ -9,10 +9,13 @@ import itertools
 import json
 import logging
 import signal
+import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from ..core.paths import STAGING_INBOX
 
 if TYPE_CHECKING:
     from .context import ContextInjector
@@ -230,10 +233,18 @@ class Agent:
         await self.disconnect()
 
     async def reset(self) -> None:
-        """Reset the Pi session (new conversation, retains JSONL history)."""
-        if not self._connected:
-            return
-        self._send_command({"type": "new_session"})
+        """Reset by moving session file to inbox and restarting Pi fresh."""
+        was_connected = self._connected
+        await self.disconnect()
+
+        if self._session_file.exists():
+            STAGING_INBOX.mkdir(parents=True, exist_ok=True)
+            dest = STAGING_INBOX / f"session_{self._session_key}_{int(time.time())}.jsonl"
+            self._session_file.rename(dest)
+            logger.info("Moved session to %s", dest.name)
+
+        if was_connected:
+            await self.connect()
         if self.context:
             self.context.reset()
 

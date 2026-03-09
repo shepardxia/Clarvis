@@ -3,7 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -86,43 +86,73 @@ async def test_send_yields_event_dicts():
     await _cancel_reader(agent)
 
 
-@pytest.mark.asyncio
-async def test_reset_sends_command():
-    """Agent.reset() sends new_session command to stdin."""
-    agent = Agent(_make_config())
+def _make_reset_agent(tmp_path, *, connected=True, context=None):
+    """Create an agent with mocked disconnect/connect for reset tests."""
+    agent = Agent(_make_config(project_dir=tmp_path))
+    agent.disconnect = AsyncMock()
+    agent.connect = AsyncMock()
+    agent._connected = connected
+    if context is not None:
+        agent.context = context
+    return agent
 
-    process = _setup_agent_with_reader(agent, [])
+
+@pytest.mark.asyncio
+async def test_reset_moves_session_to_inbox(tmp_path):
+    """Agent.reset() moves the session file to staging/inbox/ with a timestamped name."""
+    agent = _make_reset_agent(tmp_path)
+
+    # Create a session file
+    session_file = tmp_path / "pi-session.jsonl"
+    session_file.write_text('{"type":"session"}\n')
 
     await agent.reset()
 
-    written = process.stdin.write.call_args[0][0].decode()
-    cmd = json.loads(written)
-    assert cmd["type"] == "new_session"
+    # Session file should be gone from project dir
+    assert not session_file.exists()
 
-    await _cancel_reader(agent)
+    # Should be in staging/inbox/ with session_ prefix
+    from clarvis.core.paths import STAGING_INBOX
+
+    inbox_files = list(STAGING_INBOX.glob("session_test-voice_*.jsonl"))
+    assert len(inbox_files) == 1
+
+    # Cleanup
+    inbox_files[0].unlink()
 
 
 @pytest.mark.asyncio
-async def test_reset_resets_context_injector():
+async def test_reset_reconnects_when_was_connected(tmp_path):
+    """Agent.reset() reconnects if the agent was previously connected."""
+    agent = _make_reset_agent(tmp_path, connected=True)
+    await agent.reset()
+    agent.disconnect.assert_awaited_once()
+    agent.connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reset_no_reconnect_when_not_connected(tmp_path):
+    """Agent.reset() does not connect if the agent was not previously connected."""
+    agent = _make_reset_agent(tmp_path, connected=False)
+    await agent.reset()
+    agent.disconnect.assert_awaited_once()
+    agent.connect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reset_resets_context_injector(tmp_path):
     """Agent.reset() calls context.reset() if context is set."""
-    agent = Agent(_make_config())
-    _setup_agent_with_reader(agent, [])
-
     mock_context = MagicMock()
-    agent.context = mock_context
-
+    agent = _make_reset_agent(tmp_path, context=mock_context)
     await agent.reset()
-
     mock_context.reset.assert_called_once()
 
-    await _cancel_reader(agent)
-
 
 @pytest.mark.asyncio
-async def test_reset_noop_when_not_connected():
-    """Agent.reset() is a no-op if not connected."""
-    agent = Agent(_make_config())
-    # Should not raise
+async def test_reset_noop_no_file(tmp_path):
+    """Agent.reset() works fine when no session file exists."""
+    agent = _make_reset_agent(tmp_path)
+    # No session file — should not raise
     await agent.reset()
 
 

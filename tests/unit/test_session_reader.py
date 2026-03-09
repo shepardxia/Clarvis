@@ -1,4 +1,4 @@
-"""Tests for SessionReader — multi-source watermark JSONL reader."""
+"""Tests for parse_session — Pi JSONL parsing."""
 
 import json
 from pathlib import Path
@@ -21,147 +21,104 @@ def _write_pi_messages(path: Path, messages: list[dict]) -> None:
             f.write(json.dumps(entry) + "\n")
 
 
-class TestSessionReader:
-    def test_reads_new_messages(self, tmp_path):
-        from clarvis.memory.session_reader import SessionReader
+def test_parses_user_and_assistant_messages(tmp_path):
+    from clarvis.memory.session_reader import parse_session
 
-        session_file = tmp_path / "session.jsonl"
-        _write_pi_messages(
-            session_file,
-            [
-                {"role": "user", "text": "hello", "id": "1"},
-                {"role": "assistant", "text": "hi there", "id": "2"},
-            ],
-        )
+    session_file = tmp_path / "session.jsonl"
+    _write_pi_messages(
+        session_file,
+        [
+            {"role": "user", "text": "hello", "id": "1"},
+            {"role": "assistant", "text": "hi there", "id": "2"},
+        ],
+    )
 
-        reader = SessionReader(
-            sources={"clarvis": session_file},
-            watermark_file=tmp_path / "watermarks.json",
-        )
-        pending = reader.read_pending()
+    messages = parse_session(session_file)
 
-        assert "clarvis" in pending
-        assert len(pending["clarvis"]) == 2
-        assert pending["clarvis"][0]["role"] == "user"
-        assert pending["clarvis"][0]["text"] == "hello"
+    assert len(messages) == 2
+    assert messages[0] == {"role": "user", "text": "hello"}
+    assert messages[1] == {"role": "assistant", "text": "hi there"}
 
-    def test_watermark_skips_already_read(self, tmp_path):
-        from clarvis.memory.session_reader import SessionReader
 
-        session_file = tmp_path / "session.jsonl"
-        _write_pi_messages(
-            session_file,
-            [
-                {"role": "user", "text": "first", "id": "1"},
-            ],
-        )
+def test_skips_non_message_entries(tmp_path):
+    from clarvis.memory.session_reader import parse_session
 
-        reader = SessionReader(
-            sources={"clarvis": session_file},
-            watermark_file=tmp_path / "watermarks.json",
-        )
-        reader.read_pending()
-        reader.advance("clarvis")
-
-        # Add more messages
-        _write_pi_messages(
-            session_file,
-            [
-                {"role": "user", "text": "second", "id": "2"},
-            ],
-        )
-
-        pending = reader.read_pending()
-        assert len(pending["clarvis"]) == 1
-        assert pending["clarvis"][0]["text"] == "second"
-
-    def test_multiple_sources(self, tmp_path):
-        from clarvis.memory.session_reader import SessionReader
-
-        clarvis_file = tmp_path / "clarvis.jsonl"
-        factoria_file = tmp_path / "factoria.jsonl"
-
-        _write_pi_messages(
-            clarvis_file,
-            [
-                {"role": "user", "text": "voice msg", "id": "1"},
-            ],
-        )
-        _write_pi_messages(
-            factoria_file,
-            [
-                {"role": "user", "text": "discord msg", "id": "2"},
-            ],
-        )
-
-        reader = SessionReader(
-            sources={"clarvis": clarvis_file, "factoria": factoria_file},
-            watermark_file=tmp_path / "watermarks.json",
-        )
-        pending = reader.read_pending()
-
-        assert len(pending["clarvis"]) == 1
-        assert len(pending["factoria"]) == 1
-
-    def test_skips_non_message_entries(self, tmp_path):
-        from clarvis.memory.session_reader import SessionReader
-
-        session_file = tmp_path / "session.jsonl"
-        with open(session_file, "w") as f:
-            f.write(json.dumps({"type": "session", "id": "abc"}) + "\n")
-            f.write(json.dumps({"type": "model_change", "id": "def"}) + "\n")
-            f.write(
-                json.dumps(
-                    {
-                        "type": "message",
-                        "id": "1",
-                        "parentId": None,
-                        "timestamp": "2026-03-06T00:00:00Z",
-                        "message": {"role": "user", "content": [{"type": "text", "text": "real msg"}]},
-                    }
-                )
-                + "\n"
+    session_file = tmp_path / "session.jsonl"
+    with open(session_file, "w") as f:
+        f.write(json.dumps({"type": "session", "id": "abc"}) + "\n")
+        f.write(json.dumps({"type": "model_change", "id": "def"}) + "\n")
+        f.write(
+            json.dumps(
+                {
+                    "type": "message",
+                    "id": "1",
+                    "parentId": None,
+                    "timestamp": "2026-03-06T00:00:00Z",
+                    "message": {"role": "user", "content": [{"type": "text", "text": "real msg"}]},
+                }
             )
-
-        reader = SessionReader(
-            sources={"test": session_file},
-            watermark_file=tmp_path / "watermarks.json",
-        )
-        pending = reader.read_pending()
-        assert len(pending["test"]) == 1
-
-    def test_missing_source_file(self, tmp_path):
-        from clarvis.memory.session_reader import SessionReader
-
-        reader = SessionReader(
-            sources={"missing": tmp_path / "nope.jsonl"},
-            watermark_file=tmp_path / "watermarks.json",
-        )
-        pending = reader.read_pending()
-        assert pending["missing"] == []
-
-    def test_advance_persists(self, tmp_path):
-        from clarvis.memory.session_reader import SessionReader
-
-        session_file = tmp_path / "session.jsonl"
-        _write_pi_messages(
-            session_file,
-            [
-                {"role": "user", "text": "msg", "id": "1"},
-            ],
+            + "\n"
         )
 
-        reader1 = SessionReader(
-            sources={"s": session_file},
-            watermark_file=tmp_path / "watermarks.json",
-        )
-        reader1.read_pending()
-        reader1.advance("s")
+    messages = parse_session(session_file)
+    assert len(messages) == 1
+    assert messages[0]["text"] == "real msg"
 
-        # New reader instance loads persisted watermarks
-        reader2 = SessionReader(
-            sources={"s": session_file},
-            watermark_file=tmp_path / "watermarks.json",
+
+def test_skips_system_messages(tmp_path):
+    from clarvis.memory.session_reader import parse_session
+
+    session_file = tmp_path / "session.jsonl"
+    with open(session_file, "w") as f:
+        f.write(
+            json.dumps(
+                {
+                    "type": "message",
+                    "id": "1",
+                    "message": {"role": "system", "content": [{"type": "text", "text": "system prompt"}]},
+                }
+            )
+            + "\n"
         )
-        pending = reader2.read_pending()
-        assert pending["s"] == []
+        f.write(
+            json.dumps(
+                {
+                    "type": "message",
+                    "id": "2",
+                    "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                }
+            )
+            + "\n"
+        )
+
+    messages = parse_session(session_file)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+
+
+def test_missing_file_returns_empty(tmp_path):
+    from clarvis.memory.session_reader import parse_session
+
+    messages = parse_session(tmp_path / "nope.jsonl")
+    assert messages == []
+
+
+def test_handles_string_content_blocks(tmp_path):
+    from clarvis.memory.session_reader import parse_session
+
+    session_file = tmp_path / "session.jsonl"
+    with open(session_file, "w") as f:
+        f.write(
+            json.dumps(
+                {
+                    "type": "message",
+                    "id": "1",
+                    "message": {"role": "user", "content": ["plain string content"]},
+                }
+            )
+            + "\n"
+        )
+
+    messages = parse_session(session_file)
+    assert len(messages) == 1
+    assert messages[0]["text"] == "plain string content"

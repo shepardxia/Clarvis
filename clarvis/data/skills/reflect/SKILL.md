@@ -11,10 +11,11 @@ Memory maintenance — extract facts from conversation history and staging inbox
 
 Three sources to check:
 1. **Your current session** — already in your context. Extract facts from what you know.
-2. **Inbox** — check `~/.clarvis/staging/inbox/` for prior session transcripts (flushed automatically on session reset), user-submitted summaries, and staged files.
-3. **Factoria transcript** — read `~/.clarvis/factoria/pi-session.jsonl` for Factoria's conversations since last reflect.
+2. **Inbox sessions** — list `~/.clarvis/staging/inbox/` for `session_*.jsonl` files. Parse each with `ctools read_sessions '{"path": "<file>"}'`.
+3. **Factoria's live session** — parse `~/.clarvis/factoria/pi-session.jsonl` with `read_sessions` (still active, not in inbox).
+4. **Other inbox items** — check for non-session files in inbox (user-submitted summaries from `/remember`, staged markdown files).
 
-If nothing new across all three sources, report "nothing to reflect on" and stop.
+If nothing new across all sources, report "nothing to reflect on" and stop.
 
 ## Phase 2: Extract facts
 
@@ -58,5 +59,5 @@ Guidelines:
 
 ## Phase 5: Complete
 
-1. Call `reflect_complete` to reset all agent sessions
+1. Call `reflect_complete` — moves inbox to `staging/digested/`, resets all agent sessions (current sessions move to inbox and restart fresh)
 2. Report what was processed

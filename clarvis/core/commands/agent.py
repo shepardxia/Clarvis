@@ -33,20 +33,10 @@ def reload_agents(self: CommandHandlers, **kwargs) -> dict:
 
 
 def reset_clarvis_session(self: CommandHandlers, **kw) -> str:
-    """Reset Clarvis agent session (new_session RPC)."""
+    """Reset all agent sessions — moves session files to inbox and restarts."""
     import asyncio
 
-    from ..paths import CLARVIS_HOME, agent_home
-
-    # Flush unreflected session content to inbox before resetting
-    session_reader = self._get_service("session_reader")
-    if session_reader:
-        inbox = CLARVIS_HOME / "staging" / "inbox"
-        for source in ("clarvis", "factoria"):
-            try:
-                session_reader.flush_to_inbox(source, inbox)
-            except Exception as exc:
-                logger.warning("Failed to flush %s session to inbox: %s", source, exc)
+    from ..paths import agent_home
 
     for sid_file in [
         agent_home("clarvis") / "session_id",
@@ -54,25 +44,26 @@ def reset_clarvis_session(self: CommandHandlers, **kw) -> str:
     ]:
         sid_file.unlink(missing_ok=True)
 
-    # Reset the Clarvis agent session
+    # Reset both agents in parallel (each handles its own file move + restart)
     agents = self._get_service("agents") or {}
-    clarvis_agent = agents.get("clarvis")
-    if clarvis_agent and clarvis_agent.connected:
-        try:
-            asyncio.run_coroutine_threadsafe(clarvis_agent.reset(), self.ctx.loop).result(timeout=30)
-        except Exception as exc:
-            logger.warning("Failed to reset Clarvis agent: %s", exc)
+    if agents:
 
-    # Disconnect voice orchestrator's agent if active
-    orchestrator = self._get_service("voice")
-    if orchestrator and orchestrator.agent.connected:
-        asyncio.run_coroutine_threadsafe(orchestrator.agent.disconnect(), orchestrator._loop)
+        async def _reset_all():
+            results = await asyncio.gather(
+                *(a.reset() for a in agents.values()),
+                return_exceptions=True,
+            )
+            for name, result in zip(agents, results):
+                if isinstance(result, Exception):
+                    logger.warning("Failed to reset %s agent: %s", name, result)
+
+        asyncio.run_coroutine_threadsafe(_reset_all(), self.ctx.loop).result(timeout=30)
 
     return "ok"
 
 
 def reflect_complete(self: CommandHandlers, **kw) -> dict:
-    """Signal that reflect is done — advance watermarks and reset agents."""
+    """Signal that reflect is done — archive inbox and reset agents."""
     import asyncio
 
     daemon = self._get_service("daemon")
@@ -114,10 +105,21 @@ def nudge_agent(self: CommandHandlers, *, reason: str = "timer", **kw) -> dict:
         return {"error": str(exc)}
 
 
+def read_sessions(self: CommandHandlers, *, path: str, **kw) -> dict:
+    """Parse a Pi session JSONL file and return structured messages."""
+    from pathlib import Path
+
+    from ...memory.session_reader import parse_session
+
+    messages = parse_session(Path(path))
+    return {"messages": messages, "count": len(messages)}
+
+
 COMMANDS: dict[str, str] = {
     "reload_agents": "reload_agents",
     "reset_clarvis_session": "reset_clarvis_session",
     "reflect_complete": "reflect_complete",
     "listen": "listen",
     "nudge": "nudge_agent",
+    "read_sessions": "read_sessions",
 }
