@@ -127,48 +127,21 @@ class CentralHubDaemon:
         self._agents = {}  # str -> Agent, populated by _init_agents / _init_channel_manager
         self.voice_orchestrator = None
         self.channel_manager = None
+        self._chat_bridge = None
         self.staging_dir = CLARVIS_HOME / "staging"
         self._session_reader = None
         self._owned_services: list = []  # services with no other refs (prevent GC)
 
-        # Memory backend (optional — unified MemoryStore)
+        # Deferred — initialized in run()
         self.memory = None
         self.document_watcher = None
-        if config.memory.enabled:
-            try:
-                from .memory.store import MemoryStore
+        self.display: DisplayManager | None = None
+        self.socket_server: WidgetSocketServer | None = socket_server
+        self.click_manager = None
+        self.refresh: RefreshManager | None = None
+        self.hook_processor: HookProcessor | None = None
+        self.commands = None
 
-                h_cfg = config.memory.hindsight
-                c_cfg = config.memory.cognee
-                self.memory = MemoryStore(
-                    db_url=h_cfg.db_url,
-                    banks={name: {"visibility": dc.visibility} for name, dc in h_cfg.banks.items()},
-                    kg_db_host=c_cfg.db_host,
-                    kg_db_port=c_cfg.db_port,
-                    kg_db_name=c_cfg.db_name,
-                    kg_db_username=c_cfg.db_username,
-                    kg_db_password=c_cfg.db_password,
-                    kg_graph_path=c_cfg.graph_path,
-                    kg_llm_provider=c_cfg.llm_provider,
-                    kg_llm_model=c_cfg.llm_model,
-                    kg_llm_api_key=c_cfg.llm_api_key,
-                )
-            except ImportError:
-                logger.info("memory deps not installed — memory disabled")
-
-            if self.memory is not None:
-                try:
-                    from .memory.document_watcher import DocumentWatcher
-
-                    d_cfg = config.memory.documents
-                    self.document_watcher = DocumentWatcher(
-                        watch_dir=Path(d_cfg.watch_dir),
-                        memory=self.memory,
-                        hash_store_path=Path(d_cfg.hash_store_path),
-                        poll_interval=d_cfg.poll_interval,
-                    )
-                except ImportError:
-                    logger.info("document watcher deps not installed")
         self.ctx: AppContext | None = None
         self._staleness_handle: asyncio.TimerHandle | None = None
         self.scheduler: Scheduler | None = None
@@ -179,20 +152,63 @@ class CentralHubDaemon:
         self._stopped = False
         self._shutdown_event: asyncio.Event | None = None
 
-        # Display manager with sprite scene (DSL-driven)
+    def _init_memory(self) -> None:
+        """Initialize memory backend (MemoryStore + DocumentWatcher)."""
+        config = get_config()
+        if not config.memory.enabled:
+            return
+
+        try:
+            from .memory.store import MemoryStore
+
+            h_cfg = config.memory.hindsight
+            c_cfg = config.memory.cognee
+            self.memory = MemoryStore(
+                db_url=h_cfg.db_url,
+                banks={name: {"visibility": dc.visibility} for name, dc in h_cfg.banks.items()},
+                kg_db_host=c_cfg.db_host,
+                kg_db_port=c_cfg.db_port,
+                kg_db_name=c_cfg.db_name,
+                kg_db_username=c_cfg.db_username,
+                kg_db_password=c_cfg.db_password,
+                kg_graph_path=c_cfg.graph_path,
+                kg_llm_provider=c_cfg.llm_provider,
+                kg_llm_model=c_cfg.llm_model,
+                kg_llm_api_key=c_cfg.llm_api_key,
+            )
+        except ImportError:
+            logger.info("memory deps not installed — memory disabled")
+
+        if self.memory is not None:
+            try:
+                from .memory.document_watcher import DocumentWatcher
+
+                d_cfg = config.memory.documents
+                self.document_watcher = DocumentWatcher(
+                    watch_dir=Path(d_cfg.watch_dir),
+                    memory=self.memory,
+                    hash_store_path=Path(d_cfg.hash_store_path),
+                    poll_interval=d_cfg.poll_interval,
+                )
+            except ImportError:
+                logger.info("document watcher deps not installed")
+
+    def _init_display(self) -> None:
+        """Initialize display pipeline (scene, socket server, display manager)."""
         from .display.cv.builder import SceneBuilder
         from .display.cv.registry import CvRegistry
 
+        config = get_config()
         elements_dir = Path(__file__).parent / "display" / "elements"
-        self._cv_registry = CvRegistry(elements_dir)
-        self._cv_registry.load()
+        cv_registry = CvRegistry(elements_dir)
+        cv_registry.load()
         scene = SceneBuilder.build(
-            self._cv_registry,
+            cv_registry,
             scene_name="default",
             width=config.display.grid_width,
             height=config.display.grid_height,
         )
-        self.socket_server = socket_server or get_socket_server()
+        self.socket_server = self.socket_server or get_socket_server()
         self.click_manager = ClickRegionManager(self.socket_server)
         self.display = DisplayManager(
             scene=scene,
@@ -201,20 +217,13 @@ class CentralHubDaemon:
         )
 
         # Refresh manager (passive — Scheduler drives it)
-        self.refresh = RefreshManager(
-            state=self.state,
-            display_manager=self.display,
-        )
+        self.refresh = RefreshManager(state=self.state)
 
         # Hook processor (event classification, staleness, context)
         self.hook_processor = HookProcessor(
             state=self.state,
             session_tracker=self.session_tracker,
         )
-
-        # Command handlers (daemon IPC commands)
-        # CommandHandlers created in run() after AppContext is available
-        self.commands = None
 
     # --- Hook event processing (delegated to HookProcessor) ---
 
@@ -226,10 +235,10 @@ class CentralHubDaemon:
         """Process a hook event received via IPC (replaces file-based watcher)."""
         tp = raw_data.get("transcript_path")
         processed = self.process_hook_event(raw_data)
-        self.state.update("status", processed)
 
-        if processed.get("session_id") == self.session_tracker.displayed_id and not self.state.status_locked:
-            self.display.set_status(processed.get("status", "idle"))
+        # Only update StateStore status for the displayed session (DisplayManager reads from it)
+        if processed.get("session_id") == self.session_tracker.displayed_id:
+            self.state.update("status", processed)
 
         event = raw_data.get("hook_event_name")
         self.session_tracker.cleanup_stale()
@@ -265,7 +274,7 @@ class CentralHubDaemon:
         """Fire once after 30s of silence — reset status to idle."""
         stale_reset = self.hook_processor.check_status_staleness(STALENESS_TIMEOUT_SECONDS)
         if stale_reset and not self.state.status_locked:
-            self.display.set_status("idle")
+            self.state.update("status", {"status": "idle"})
             if self.scheduler:
                 self.scheduler.set_mode("idle")
 
@@ -292,13 +301,22 @@ class CentralHubDaemon:
     # --- Display state ---
 
     def _get_display_state(self) -> str:
-        """Get current display status for rendering."""
+        """Get current display status for rendering.
+
+        In testing mode, writes fixed values to StateStore so DisplayManager
+        picks them up via _build_tick_context().
+        """
         config = self.ctx.config
 
         if config.testing.enabled:
-            self.display.set_status(config.testing.status)
-            self.display.set_weather(
-                config.testing.weather, config.testing.weather_intensity, config.testing.wind_speed
+            self.state.update("status", {"status": config.testing.status})
+            self.state.update(
+                "weather",
+                {
+                    "widget_type": config.testing.weather,
+                    "widget_intensity": config.testing.weather_intensity,
+                    "wind_speed": config.testing.wind_speed,
+                },
             )
             return config.testing.status
 
@@ -319,11 +337,11 @@ class CentralHubDaemon:
     # --- Voice pipeline ---
 
     def _init_agents(self) -> None:
-        """Create the Clarvis agent.
+        """Create the Clarvis agent with ContextInjector.
 
         Called from run() after AppContext is set.  The Clarvis agent
-        serves voice and ``clarvis chat``.  Factoria gets a shared
-        agent in ``_init_channel_manager()``.
+        serves voice, ``clarvis chat``, and nudge.  Factoria gets a
+        shared agent in ``_init_channel_manager()``.
         """
         if self.ctx is None:
             return
@@ -334,11 +352,15 @@ class CentralHubDaemon:
         self._channels_config = raw_config.get("channels") or {}
 
         # Clarvis agent — always created (serves voice, terminal chat, wakeup)
+        from .agent.context import ContextInjector
         from .agent.factory import create_clarvis_agent
 
-        agent = create_clarvis_agent(
-            model=config.clarvis.model,
-            max_thinking_tokens=config.clarvis.max_thinking_tokens,
+        agent = create_clarvis_agent(model=config.clarvis.model)
+        agent.context = ContextInjector(
+            state=self.state,
+            memory=self.memory,
+            visibility="master",
+            include_ambient=True,
         )
         self._agents["clarvis"] = agent
 
@@ -383,7 +405,6 @@ class CentralHubDaemon:
             silence_timeout=config.voice.silence_timeout,
             text_linger=config.voice.text_linger,
         )
-        self.voice_orchestrator.memory_service = self.memory
         # Orchestrator now self-subscribes to wake_word signals via bus;
         # remove the daemon fallback so both don't fire.
         if self.bus:
@@ -407,6 +428,7 @@ class CentralHubDaemon:
         config = self.ctx.config
 
         try:
+            from .agent.context import ContextInjector
             from .agent.factory import create_factoria_agent
             from .channels.manager import ChannelManager
             from .channels.registry import UserRegistry
@@ -415,7 +437,12 @@ class CentralHubDaemon:
             # Factoria agent for all online channels
             factoria_agent = create_factoria_agent(
                 model=config.channels.model or config.clarvis.model,
-                max_thinking_tokens=config.channels.max_thinking_tokens or config.clarvis.max_thinking_tokens,
+            )
+            factoria_agent.context = ContextInjector(
+                state=self.state,
+                memory=self.memory,
+                visibility="all",
+                include_ambient=False,
             )
             self._agents["factoria"] = factoria_agent
 
@@ -427,7 +454,6 @@ class CentralHubDaemon:
                 channels_config=channels_config,
                 registry=registry,
                 state=state,
-                memory_service=self.memory,
             )
             await self.channel_manager.start()
 
@@ -498,13 +524,13 @@ class CentralHubDaemon:
 
     def _fallback_wake_word(self, signal: str, **kw) -> None:
         """Brief activation flash when voice pipeline is not active."""
-        self.display.set_status("activated")
+        self.state.update("status", {"status": "activated"}, force=True)
 
         def _revert() -> None:
             current = self.state.get("status")
             current_status = current.get("status", "idle") if current else "idle"
             if current_status == "activated":
-                self.display.set_status("awaiting")
+                self.state.update("status", {"status": "awaiting"}, force=True)
 
         if self.ctx:
             self.ctx.loop.call_later(2.0, _revert)
@@ -608,7 +634,6 @@ class CentralHubDaemon:
         self._owned_services.append(
             TimerNotifier(
                 ctx=self.ctx,
-                display=self.display,
                 voice_orchestrator_provider=lambda: self.voice_orchestrator,
             )
         )
@@ -622,6 +647,9 @@ class CentralHubDaemon:
 
         self._stopped = True
         self.running = False
+        # Stop ChatBridge
+        if self._chat_bridge:
+            self._chat_bridge.stop()
         # Kill any in-flight TTS immediately
         if self.voice_orchestrator:
             self.voice_orchestrator._kill_tts()
@@ -693,6 +721,9 @@ class CentralHubDaemon:
 
     async def run(self) -> None:
         """Run the daemon until interrupted."""
+        # Initialize memory before AppContext (frozen dataclass)
+        self._init_memory()
+
         loop = asyncio.get_running_loop()
         self.bus = SignalBus(loop)
         self.ctx = AppContext(
@@ -700,8 +731,12 @@ class CentralHubDaemon:
             bus=self.bus,
             state=self.state,
             config=get_config(),
+            memory=self.memory,
         )
         self._shutdown_event = asyncio.Event()
+
+        # Initialize display pipeline (scene, socket, rendering)
+        self._init_display()
 
         # Create SessionReader for Pi session files
         from .core.paths import agent_home
@@ -740,6 +775,17 @@ class CentralHubDaemon:
         self._init_agents()
         self._init_voice_pipeline()
 
+        # ChatBridge — streaming socket for `clarvis chat` TUI
+        if self._agents:
+            from .chat.bridge import ChatBridge
+
+            self._chat_bridge = ChatBridge(
+                agents=self._agents,
+                state=self.state,
+                loop=self.ctx.loop,
+            )
+            self._chat_bridge.start()
+
         # Wire timer:fired → nudge for wake_clarvis timers
         clarvis_agent = self._agents.get("clarvis")
         if clarvis_agent:
@@ -748,7 +794,7 @@ class CentralHubDaemon:
             self.bus.on(
                 "timer:fired",
                 lambda sig, *, wake_clarvis=False, name="", label="", **kw: (
-                    asyncio.create_task(nudge(clarvis_agent, "timer", self.state, timer_name=name, timer_label=label))
+                    asyncio.create_task(nudge(clarvis_agent, "timer", timer_name=name, timer_label=label))
                     if wake_clarvis
                     else None
                 ),
@@ -803,8 +849,8 @@ def main():
     global _daemon_lock
 
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
-        daemon = CentralHubDaemon()
-        daemon.refresh.refresh_all()
+        refresh = RefreshManager(state=get_state_store())
+        refresh.refresh_all()
     else:
         _daemon_lock = PidLock()
         if not _daemon_lock.acquire():

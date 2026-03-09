@@ -33,3 +33,17 @@ def get_spotify_session():
             # Don't cache — next call will retry
             return session
     return _session_cache["instance"]
+
+
+def get_playback_state():
+    """Get current Spotify playback state without reaching into clautify internals.
+
+    Returns the player state object, or None if unavailable.
+    """
+    session = get_spotify_session()
+    if session is None:
+        return None
+    try:
+        return session._executor.player.state
+    except (AttributeError, Exception):
+        return None

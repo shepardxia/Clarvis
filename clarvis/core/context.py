@@ -1,10 +1,11 @@
 """Shared application context — passed to services for dependency discovery."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ..display.config import ClarvisConfig
     from .signals import SignalBus
     from .state import StateStore
 
@@ -21,4 +22,5 @@ class AppContext:
     loop: asyncio.AbstractEventLoop
     bus: "SignalBus"
     state: "StateStore"
-    config: Any  # ClarvisConfig from widget/config.py
+    config: "ClarvisConfig"
+    memory: Any = field(default=None)

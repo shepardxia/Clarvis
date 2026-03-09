@@ -1,4 +1,4 @@
-"""Agent -- RPC protocol event translation and error propagation."""
+"""Agent -- RPC protocol event forwarding and error propagation."""
 
 import asyncio
 import json
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from clarvis.agent.agent import Agent, AgentConfig
+from clarvis.agent.agent import Agent, AgentConfig, auto_approve_extension_ui
 
 
 def _make_config(**overrides) -> AgentConfig:
@@ -49,8 +49,8 @@ async def _cancel_reader(agent):
 
 
 @pytest.mark.asyncio
-async def test_send_translates_events():
-    """send() yields text for text_delta, None for tool_execution_end, returns on agent_end."""
+async def test_send_yields_event_dicts():
+    """send() yields raw event dicts including text_delta, tool boundaries, and agent_end."""
     agent = Agent(_make_config())
 
     events = [
@@ -64,11 +64,17 @@ async def test_send_translates_events():
 
     process = _setup_agent_with_reader(agent, events)
 
-    chunks = []
-    async for chunk in agent.send("test prompt"):
-        chunks.append(chunk)
+    received = []
+    async for event in agent.send("test prompt"):
+        received.append(event)
 
-    assert chunks == ["Hello", " world", None, "!"]
+    # All events yielded verbatim (including agent_end)
+    assert len(received) == 6
+    assert received[0]["type"] == "message_update"
+    assert received[0]["assistantMessageEvent"]["delta"] == "Hello"
+    assert received[2]["type"] == "tool_execution_start"
+    assert received[3]["type"] == "tool_execution_end"
+    assert received[5]["type"] == "agent_end"
 
     # Verify the command was sent as RPC format
     written = process.stdin.write.call_args[0][0].decode()
@@ -92,6 +98,22 @@ async def test_reset_sends_command():
     written = process.stdin.write.call_args[0][0].decode()
     cmd = json.loads(written)
     assert cmd["type"] == "new_session"
+
+    await _cancel_reader(agent)
+
+
+@pytest.mark.asyncio
+async def test_reset_resets_context_injector():
+    """Agent.reset() calls context.reset() if context is set."""
+    agent = Agent(_make_config())
+    _setup_agent_with_reader(agent, [])
+
+    mock_context = MagicMock()
+    agent.context = mock_context
+
+    await agent.reset()
+
+    mock_context.reset.assert_called_once()
 
     await _cancel_reader(agent)
 
@@ -128,12 +150,13 @@ async def test_send_stops_on_process_disconnect():
     agent._process = process
     agent._reader_task = asyncio.create_task(agent._reader_loop())
 
-    chunks = []
-    async for chunk in agent.send("test"):
-        chunks.append(chunk)
+    received = []
+    async for event in agent.send("test"):
+        received.append(event)
 
     # Should have received the one text_delta before the process died
-    assert chunks == ["Hi"]
+    assert len(received) == 1
+    assert received[0]["assistantMessageEvent"]["delta"] == "Hi"
 
     await _cancel_reader(agent)
 
@@ -155,8 +178,8 @@ async def test_interrupt_sends_abort():
 
 
 @pytest.mark.asyncio
-async def test_extension_ui_auto_confirm():
-    """Extension UI confirm requests are auto-approved."""
+async def test_extension_ui_yielded_not_consumed():
+    """Extension UI requests are yielded as events, not auto-consumed."""
     agent = Agent(_make_config())
 
     events = [
@@ -164,18 +187,50 @@ async def test_extension_ui_auto_confirm():
         {"type": "agent_end"},
     ]
 
-    process = _setup_agent_with_reader(agent, events)
+    _setup_agent_with_reader(agent, events)
 
-    chunks = []
-    async for chunk in agent.send("test"):
-        chunks.append(chunk)
+    received = []
+    async for event in agent.send("test"):
+        received.append(event)
 
-    # Find the extension_ui_response write
+    # Extension UI request should be yielded to the caller
+    assert any(e.get("type") == "extension_ui_request" for e in received)
+    assert any(e.get("type") == "agent_end" for e in received)
+
+    await _cancel_reader(agent)
+
+
+@pytest.mark.asyncio
+async def test_auto_approve_extension_ui_confirm():
+    """auto_approve_extension_ui sends confirm response."""
+    agent = Agent(_make_config())
+    process = _setup_agent_with_reader(agent, [])
+
+    event = {"type": "extension_ui_request", "ui_type": "confirm", "id": "ext_1"}
+    auto_approve_extension_ui(agent, event)
+
     writes = [call[0][0].decode() for call in process.stdin.write.call_args_list]
     responses = [json.loads(w) for w in writes if "extension_ui_response" in w]
     assert len(responses) == 1
     assert responses[0]["type"] == "extension_ui_response"
     assert responses[0]["value"] is True
     assert responses[0]["id"] == "ext_1"
+
+    await _cancel_reader(agent)
+
+
+@pytest.mark.asyncio
+async def test_auto_approve_extension_ui_select():
+    """auto_approve_extension_ui picks first option for select."""
+    agent = Agent(_make_config())
+    process = _setup_agent_with_reader(agent, [])
+
+    event = {"type": "extension_ui_request", "ui_type": "select", "id": "ext_2", "options": ["a", "b"]}
+    auto_approve_extension_ui(agent, event)
+
+    writes = [call[0][0].decode() for call in process.stdin.write.call_args_list]
+    responses = [json.loads(w) for w in writes if "extension_ui_response" in w]
+    assert len(responses) == 1
+    assert responses[0]["value"] == "a"
 
     await _cancel_reader(agent)

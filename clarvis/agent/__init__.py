@@ -1,3 +1,3 @@
-from .agent import Agent, AgentConfig
+from .agent import Agent, AgentConfig, auto_approve_extension_ui
 
-__all__ = ["Agent", "AgentConfig"]
+__all__ = ["Agent", "AgentConfig", "auto_approve_extension_ui"]

@@ -236,40 +236,10 @@ class ClarvisAgentConfig(BaseModel):
     model: str | None = Field(
         default=None, description="Claude model ID (e.g. 'claude-sonnet-4-6', 'claude-haiku-4-5')"
     )
-    max_thinking_tokens: int | None = Field(default=None, description="Max thinking tokens (None = SDK default)")
     idle_timeout: float = Field(default=3600.0, description="Seconds before Clarvis agent disconnects")
     tools: dict[str, Any] = Field(
         default_factory=dict,
         description="Tool overrides for Clarvis agent",
-    )
-
-
-# ── Pi agent extra ─────────────────────────────────────────────────
-
-
-class PiConfig(BaseModel):
-    """Pi agent core bridge settings."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    bridge_socket: str = Field(
-        default="/tmp/clarvis-pi-agent.sock", description="Unix socket path for pi-bridge communication"
-    )
-    thinking_level: str = Field(
-        default="off", description="Extended thinking level for Pi agent ('off', 'low', 'medium', 'high')"
-    )
-
-
-class WakeupConfig(BaseModel):
-    """Autonomous wakeup prompt settings."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    enabled: bool = Field(default=True, description="Enable autonomous wakeup prompts")
-    pulse_interval_minutes: int = Field(default=45, description="Minutes between regular pulse wakeups")
-    context_sources: list[str] = Field(
-        default_factory=lambda: ["time", "weather", "activity", "memory", "music"],
-        description="Context sources to include in wakeup prompts",
     )
 
 
@@ -282,9 +252,6 @@ class ChannelsConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")  # per-channel dicts pass through
 
     model: str | None = Field(default=None, description="Claude model for Factoria (falls back to clarvis.model)")
-    max_thinking_tokens: int | None = Field(
-        default=None, description="Max thinking tokens (falls back to clarvis.max_thinking_tokens)"
-    )
     idle_timeout: float | None = Field(
         default=None, description="Idle timeout in seconds (falls back to clarvis.idle_timeout)"
     )
@@ -292,8 +259,6 @@ class ChannelsConfig(BaseModel):
         default_factory=dict,
         description="Tool overrides for Factoria agent",
     )
-    pi: PiConfig = Field(default_factory=PiConfig, description="Pi agent core bridge settings")
-    wakeup: WakeupConfig = Field(default_factory=WakeupConfig, description="Autonomous wakeup prompt settings")
     admin_user_ids: list[str] = Field(
         default_factory=list,
         description="Channel user IDs that always receive admin role",
@@ -303,7 +268,7 @@ class ChannelsConfig(BaseModel):
 # ── Root config ────────────────────────────────────────────────────
 
 
-class WidgetConfig(BaseModel):
+class ClarvisConfig(BaseModel):
     """Main configuration combining all sections."""
 
     theme: ThemeConfig = Field(default_factory=ThemeConfig, description="Theme and color settings")
@@ -318,7 +283,7 @@ class WidgetConfig(BaseModel):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig, description="Factoria channel agent settings")
 
     @model_validator(mode="after")
-    def _load_theme(self) -> "WidgetConfig":
+    def _load_theme(self) -> "ClarvisConfig":
         """Validate theme name and load color definitions."""
         if self.theme.base not in get_available_themes():
             self.theme.base = DEFAULT_THEME
@@ -326,7 +291,7 @@ class WidgetConfig(BaseModel):
         return self
 
     @classmethod
-    def load(cls, path: Path = CONFIG_PATH) -> "WidgetConfig":
+    def load(cls, path: Path = CONFIG_PATH) -> "ClarvisConfig":
         data = json_load_safe(path)
         if data is not None:
             return cls.model_validate(data)
@@ -334,12 +299,12 @@ class WidgetConfig(BaseModel):
 
 
 # Global instance
-_config: WidgetConfig | None = None
+_config: ClarvisConfig | None = None
 
 
-def get_config() -> WidgetConfig:
+def get_config() -> ClarvisConfig:
     """Get current config."""
     global _config
     if _config is None:
-        _config = WidgetConfig.load()
+        _config = ClarvisConfig.load()
     return _config

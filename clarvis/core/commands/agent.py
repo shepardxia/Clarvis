@@ -106,7 +106,7 @@ def nudge_agent(self: CommandHandlers, *, reason: str = "timer", **kw) -> dict:
 
     try:
         response = asyncio.run_coroutine_threadsafe(
-            nudge(agent, reason, self.ctx.state, **kw),
+            nudge(agent, reason, **kw),
             self.ctx.loop,
         ).result(timeout=120)
         return {"status": "ok", "response": response}

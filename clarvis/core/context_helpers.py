@@ -66,12 +66,9 @@ def _location_summary(state: dict | None) -> str | None:
 
 def _now_playing(include_paused: bool = False) -> str | None:
     try:
-        from ..services.spotify_session import get_spotify_session
+        from ..services.spotify_session import get_playback_state
 
-        session = get_spotify_session()
-        if session is None:
-            return None
-        state = session._executor.player.state
+        state = get_playback_state()
         if not state:
             return None
         if state.is_paused:

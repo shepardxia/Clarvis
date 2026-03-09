@@ -32,12 +32,6 @@ class DisplayManager:
         self._thread: threading.Thread | None = None
         self._state_store: "StateStore | None" = None
 
-        # Cached state for tick context
-        self._status = "idle"
-        self._weather_type = "clear"
-        self._weather_intensity = 0.0
-        self._wind_speed = 0.0
-
     def push_frame(self, output: dict) -> None:
         """Push frame to socket."""
         self.socket_server.push_frame(output)
@@ -48,24 +42,12 @@ class DisplayManager:
             ctx = self._build_tick_context()
             self.scene.tick(**ctx)
 
-    def set_status(self, status: str) -> None:
-        """Update status for next tick context."""
-        with self._lock:
-            self._status = status
-
-    def set_weather(self, weather_type: str, intensity: float, wind_speed: float) -> None:
-        """Update weather for next tick context."""
-        with self._lock:
-            self._weather_type = weather_type
-            self._weather_intensity = intensity
-            self._wind_speed = wind_speed
-
     def set_fps(self, fps: int) -> None:
         """Update render FPS. Takes effect on the next loop iteration."""
         self.fps = max(1, fps)
 
     def freeze(self) -> None:
-        """Freeze rendering — zero CPU until wake() is called."""
+        """Freeze rendering -- zero CPU until wake() is called."""
         self._frozen = True
 
     def wake(self) -> None:
@@ -75,15 +57,20 @@ class DisplayManager:
             self._wake_event.set()
 
     def _build_tick_context(self) -> dict:
-        """Build tick context from state store and cached values."""
-        ctx = {
-            "status": self._status,
-            "weather_type": self._weather_type,
-            "weather_intensity": self._weather_intensity,
-            "wind_speed": self._wind_speed,
-        }
+        """Build tick context by reading directly from StateStore."""
+        ctx: dict = {}
 
         if self._state_store:
+            # Status -- read from StateStore
+            status_data = self._state_store.get("status")
+            ctx["status"] = status_data.get("status", "idle") if status_data else "idle"
+
+            # Weather -- read from StateStore
+            weather = self._state_store.get("weather")
+            ctx["weather_type"] = weather.get("widget_type", "clear") if weather else "clear"
+            ctx["weather_intensity"] = weather.get("widget_intensity", 0.0) if weather else 0.0
+            ctx["wind_speed"] = weather.get("wind_speed", 0.0) if weather else 0.0
+
             # Voice text
             voice_data = self._state_store.get("voice_text")
             if voice_data and voice_data.get("active"):
@@ -113,6 +100,11 @@ class DisplayManager:
             ctx["mic_visible"] = mic.get("visible", False)
             ctx["mic_enabled"] = mic.get("enabled", False)
             ctx["mic_style"] = mic.get("style", "bracket")
+        else:
+            ctx["status"] = "idle"
+            ctx["weather_type"] = "clear"
+            ctx["weather_intensity"] = 0.0
+            ctx["wind_speed"] = 0.0
 
         return ctx
 
@@ -121,7 +113,7 @@ class DisplayManager:
 
         tick() acquires the lock separately, then state reads and rendering
         happen under a second lock acquisition. Uses RLock so callbacks
-        (e.g., testing-mode set_status/set_weather) can re-enter safely.
+        can re-enter safely.
 
         When frozen, the thread sleeps on an Event with zero CPU cost.
         wake() resumes rendering instantly.
@@ -137,9 +129,10 @@ class DisplayManager:
             start = time.time()
 
             with self._lock:
-                status = get_state()
-                self._status = status
+                # Call get_state for side effects (e.g. testing mode writes to StateStore)
+                get_state()
                 ctx = self._build_tick_context()
+                status = ctx["status"]
                 self.scene.tick(**ctx)
                 color_def = StatusColors.get(status)
                 rows, cell_colors = self.scene.to_grid()
@@ -158,8 +151,8 @@ class DisplayManager:
         """Start the display loop.
 
         Args:
-            get_state: Callable returning status string
-            state_store: Optional StateStore for voice text reveal calculation
+            get_state: Callable returning status string (for side effects)
+            state_store: StateStore for reading display state
         """
         if self._thread is not None and self._thread.is_alive():
             return

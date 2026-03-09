@@ -80,6 +80,10 @@ ctools send_message '{"channel": "discord", "chat_id": "...", "content": "hello"
 ctools get_channels '{}'
 ```
 
+## Media
+
+When users send attachments (images, files) through Discord, they are downloaded to `~/.clarvis/media/`. Files are named `{attachment_id}_{filename}`. You can read or view these files using their full path when referenced in messages.
+
 ## Notes
 
 - Always use `bank="agora"` for memory commands. Factoria has agora access only.

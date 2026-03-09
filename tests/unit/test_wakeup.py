@@ -1,60 +1,45 @@
-"""Nudge — prompt building and agent delivery."""
+"""Nudge -- prompt building and agent delivery."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from clarvis.services.wakeup import _build_prompt, nudge
+from clarvis.services.wakeup import _build_reason_prefix, nudge
 
 
 @pytest.fixture
 def agent():
     a = AsyncMock()
 
-    async def fake_send(text):
-        yield "I'll check on things."
+    async def fake_send(text, *, owner=""):
+        yield {
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "text_delta", "delta": "I'll check on things."},
+        }
+        yield {"type": "agent_end"}
 
     a.send = fake_send
-    a._currently_sending = False
+    a.context = None
+    a.is_busy = False
+    a._send_command = MagicMock()
     return a
 
 
-@pytest.fixture
-def state():
-    s = MagicMock()
-
-    def get_state(key):
-        data = {
-            "status": "idle",
-            "weather": {"description": "clear sky", "temperature": 68},
-            "location": {"city": "Austin"},
-        }
-        return data.get(key)
-
-    s.get = get_state
-    return s
-
-
 class TestNudgePrompts:
-    def test_pulse_prompt_has_context(self, state):
-        prompt = _build_prompt(reason="pulse", state_store=state)
-        assert "clear sky" in prompt
-        assert "Austin" in prompt
+    def test_timer_prompt_includes_timer_info(self):
+        prefix = _build_reason_prefix(reason="timer", timer_name="laundry", timer_label="Check laundry")
+        assert "laundry" in prefix
+        assert "Check laundry" in prefix
 
-    def test_timer_prompt_includes_timer_info(self, state):
-        prompt = _build_prompt(reason="timer", state_store=state, timer_name="laundry", timer_label="Check laundry")
-        assert "laundry" in prompt
-        assert "Check laundry" in prompt
-
-    def test_reflect_prompt_includes_instruction(self, state):
-        prompt = _build_prompt(reason="reflect", state_store=state)
-        assert "/reflect" in prompt
+    def test_reflect_prompt_includes_instruction(self):
+        prefix = _build_reason_prefix(reason="reflect")
+        assert "/reflect" in prefix
 
 
 class TestNudgeDelivery:
     @pytest.mark.asyncio
-    async def test_nudge_sends_to_agent(self, agent, state):
-        response = await nudge(agent, reason="pulse", state_store=state)
+    async def test_nudge_sends_to_agent(self, agent):
+        response = await nudge(agent, reason="pulse")
         assert response == "I'll check on things."
 
     @pytest.mark.asyncio
@@ -62,13 +47,16 @@ class TestNudgeDelivery:
         """Reflect nudge sends prompt with /reflect instruction."""
         agent_received = []
 
-        async def capture_send(text):
+        async def capture_send(text, *, owner=""):
             agent_received.append(text)
-            yield "Reflected."
+            yield {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "Reflected."}}
+            yield {"type": "agent_end"}
 
         mock_agent = MagicMock()
         mock_agent.send = capture_send
-        mock_agent._currently_sending = False
+        mock_agent.context = None
+        mock_agent.is_busy = False
+        mock_agent._send_command = MagicMock()
 
         response = await nudge(mock_agent, reason="reflect")
 
@@ -77,10 +65,10 @@ class TestNudgeDelivery:
         assert "/reflect" in agent_received[0]
 
 
-class TestCurrentlySending:
+class TestSendOwner:
     @pytest.mark.asyncio
-    async def test_flag_set_during_send(self):
-        """_currently_sending is True while send is in progress."""
+    async def test_owner_set_during_send(self):
+        """_send_owner is set while send is in progress."""
         import asyncio
         import json
         from pathlib import Path
@@ -109,12 +97,12 @@ class TestCurrentlySending:
         agent._process = process
         agent._reader_task = asyncio.create_task(agent._reader_loop())
 
-        assert agent._currently_sending is False
-        seen_flag = []
-        async for chunk in agent.send("hello"):
-            seen_flag.append(agent._currently_sending)
-        assert agent._currently_sending is False
-        assert seen_flag == [True]
+        assert agent._send_owner is None
+        seen_owner = []
+        async for event in agent.send("hello", owner="test"):
+            seen_owner.append(agent._send_owner)
+        assert agent._send_owner is None
+        assert seen_owner == ["test", "test"]
 
         if agent._reader_task and not agent._reader_task.done():
             agent._reader_task.cancel()

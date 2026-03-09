@@ -12,6 +12,10 @@ import signal
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .context import ContextInjector
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,28 @@ class AgentConfig:
     session_key: str
     project_dir: Path
     model: str | None = None
-    max_thinking_tokens: int | None = None
+
+
+def auto_approve_extension_ui(agent: "Agent", event: dict) -> None:
+    """Auto-respond to extension UI requests from Pi.
+
+    Used by voice, channels, and nudge callers that run headless.
+    Chat forwards these to the TUI instead.
+    """
+    ui_type = event.get("ui_type", "")
+    if ui_type == "select":
+        options = event.get("options", [])
+        response = {"type": "extension_ui_response", "value": options[0] if options else ""}
+    elif ui_type == "input":
+        response = {"type": "extension_ui_response", "value": ""}
+    else:
+        # confirm / unknown -- approve
+        response = {"type": "extension_ui_response", "value": True}
+
+    req_id = event.get("id")
+    if req_id:
+        response["id"] = req_id
+    agent._send_command(response)
 
 
 class Agent:
@@ -43,7 +68,11 @@ class Agent:
 
         self._connected = False
         self._lock = asyncio.Lock()
-        self._currently_sending: bool = False
+        self._send_lock = asyncio.Lock()
+        self._send_owner: str | None = None
+
+        # ContextInjector -- set by daemon after construction
+        self.context: "ContextInjector | None" = None
 
         # Subprocess state (initialized in connect)
         self._process: asyncio.subprocess.Process | None = None
@@ -59,6 +88,16 @@ class Agent:
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def is_busy(self) -> bool:
+        """True if the agent is currently processing a send."""
+        return self._send_lock.locked()
+
+    @property
+    def send_owner(self) -> str | None:
+        """Identifier of the caller currently holding the send lock."""
+        return self._send_owner
 
     # ------------------------------------------------------------------
     # Project directory setup
@@ -160,6 +199,8 @@ class Agent:
         if not self._connected:
             return
         self._send_command({"type": "new_session"})
+        if self.context:
+            self.context.reset()
 
     async def reload(self) -> None:
         """Reload agent prompts, skills, and extensions.
@@ -177,21 +218,27 @@ class Agent:
             return
         self._send_command({"type": "abort"})
 
+    def forward_ui_response(self, response: dict) -> None:
+        """Forward an extension UI response to Pi."""
+        self._send_command(response)
+
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
 
-    async def send(self, text: str) -> AsyncGenerator[str | None]:
-        """Send a message and yield response chunks.
+    async def send(self, text: str, *, owner: str = "") -> AsyncGenerator[dict]:
+        """Send a message and yield raw Pi RPC event dicts.
 
-        Retries once on connection error if no chunks yielded yet.
-        Yields None at tool-call boundaries.
+        Callers filter events for what they need (text deltas, tool
+        boundaries, extension UI, agent_end).
+
+        Retries once on connection error if no events yielded yet.
         """
         yielded = False
         try:
-            async for chunk in self._send_inner(text):
+            async for event in self._send_inner(text, owner=owner):
                 yielded = True
-                yield chunk
+                yield event
         except (RuntimeError, asyncio.TimeoutError, OSError) as exc:
             if yielded:
                 logger.warning(
@@ -206,42 +253,85 @@ class Agent:
                 exc,
             )
             await self.disconnect()
-            async for chunk in self._send_inner(text):
-                yield chunk
+            async for event in self._send_inner(text, owner=owner):
+                yield event
 
-    async def _send_inner(self, text: str) -> AsyncGenerator[str | None]:
-        """Core send logic -- write prompt to stdin, consume events."""
-        self._currently_sending = True
-        try:
-            await self.connect()
+    async def _send_inner(self, text: str, *, owner: str = "") -> AsyncGenerator[dict]:
+        """Core send logic -- write prompt to stdin, yield raw events.
 
-            if not self._process or not self._process.stdin:
-                raise RuntimeError("Agent not connected")
+        Acquires the send lock internally so callers don't need to.
+        """
+        async with self._send_lock:
+            self._send_owner = owner or None
+            try:
+                await self.connect()
 
-            # Send prompt command
-            req_id = f"req_{next(self._counter)}"
-            cmd = {"type": "prompt", "message": text, "id": req_id}
-            self._send_command(cmd)
+                if not self._process or not self._process.stdin:
+                    raise RuntimeError("Agent not connected")
 
-            # Consume events until agent_end
-            while True:
-                event = await self._events.get()
-                etype = event.get("type")
+                # Send prompt command
+                req_id = f"req_{next(self._counter)}"
+                cmd = {"type": "prompt", "message": text, "id": req_id}
+                self._send_command(cmd)
 
-                if etype == "_process_error":
-                    raise RuntimeError(f"Process error: {event.get('error')}")
-                elif etype == "extension_ui_request":
-                    self._handle_extension_ui(event)
-                elif etype == "message_update":
-                    delta = event.get("assistantMessageEvent", {})
-                    if delta.get("type") == "text_delta":
-                        yield delta.get("delta", "")
-                elif etype == "tool_execution_end":
-                    yield None
-                elif etype == "agent_end":
-                    return
-        finally:
-            self._currently_sending = False
+                # Consume events until agent_end
+                while True:
+                    event = await self._events.get()
+                    etype = event.get("type")
+
+                    if etype == "_process_error":
+                        raise RuntimeError(f"Process error: {event.get('error')}")
+
+                    yield event
+
+                    if etype == "agent_end":
+                        return
+            finally:
+                self._send_owner = None
+
+    async def command(self, cmd_type: str, **params) -> dict:
+        """Send a non-prompt RPC command and wait for its response.
+
+        Acquires the send lock, sends a command with a ``cmd_`` prefixed ID,
+        and drains events until the matching ``{"type": "response"}`` arrives.
+        Non-matching events are stashed and re-queued so ``send()`` can
+        consume them later.
+
+        Returns the ``data`` dict from the response.
+        Raises RuntimeError on failure or timeout.
+        """
+        async with self._send_lock:
+            self._send_owner = "command"
+            try:
+                await self.connect()
+
+                if not self._process or not self._process.stdin:
+                    raise RuntimeError("Agent not connected")
+
+                req_id = f"cmd_{next(self._counter)}"
+                cmd = {"type": cmd_type, "id": req_id, **params}
+                self._send_command(cmd)
+
+                stashed: list[dict] = []
+                try:
+                    while True:
+                        event = await asyncio.wait_for(self._events.get(), timeout=10.0)
+                        etype = event.get("type")
+
+                        if etype == "_process_error":
+                            raise RuntimeError(f"Process error: {event.get('error')}")
+
+                        if etype == "response" and event.get("id") == req_id:
+                            if not event.get("success", True):
+                                raise RuntimeError(event.get("error", "Command failed"))
+                            return event.get("data", {})
+
+                        stashed.append(event)
+                finally:
+                    for ev in stashed:
+                        await self._events.put(ev)
+            finally:
+                self._send_owner = None
 
     # ------------------------------------------------------------------
     # Background tasks
@@ -295,24 +385,6 @@ class Agent:
             raise RuntimeError("No process -- not connected")
         data = json.dumps(cmd) + "\n"
         self._process.stdin.write(data.encode())
-
-    def _handle_extension_ui(self, event: dict) -> None:
-        """Auto-respond to extension UI requests from Pi."""
-        ui_type = event.get("ui_type", "")
-        response: dict
-        if ui_type == "select":
-            options = event.get("options", [])
-            response = {"type": "extension_ui_response", "value": options[0] if options else ""}
-        elif ui_type == "input":
-            response = {"type": "extension_ui_response", "value": ""}
-        else:
-            # confirm / unknown — approve
-            response = {"type": "extension_ui_response", "value": True}
-
-        req_id = event.get("id")
-        if req_id:
-            response["id"] = req_id
-        self._send_command(response)
 
     async def _kill_process(self, timeout: float = 5.0) -> None:
         """Terminate Pi process, escalating to SIGKILL if needed."""

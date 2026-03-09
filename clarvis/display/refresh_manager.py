@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     from ..core.state import StateStore
-    from .display_manager import DisplayManager
 
 DEFAULT_TIMEZONE = "America/Los_Angeles"
 
@@ -59,10 +58,8 @@ class RefreshManager:
     def __init__(
         self,
         state: "StateStore",
-        display_manager: "DisplayManager",
     ):
         self.state = state
-        self.display = display_manager
 
     def refresh_location(self) -> tuple[float, float, str]:
         """Refresh location data."""
@@ -117,9 +114,8 @@ class RefreshManager:
         weather_dict["widget_type"] = widget_type
         weather_dict["widget_intensity"] = widget_intensity
 
-        # Update state and display
+        # Update state — DisplayManager reads from StateStore each frame
         self.state.update("weather", weather_dict)
-        self.display.set_weather(widget_type, widget_intensity, weather.wind_speed)
 
         return weather_dict
 

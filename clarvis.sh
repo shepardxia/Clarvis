@@ -1,6 +1,6 @@
 #!/bin/bash
 # Clarvis process manager.
-# Usage: ./clarvis.sh [start|stop|restart|status|logs]
+# Usage: ./clarvis.sh [start|stop|restart|logs|chat|help]
 
 cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")"
 
@@ -58,17 +58,11 @@ do_start() {
     fi
 }
 
-do_status() {
-    local d=$(pid_daemon) w=$(pid_widget)
-    echo "daemon: ${d:-not running}"
-    echo "widget: ${w:-not running}"
-}
-
 do_logs() {
     tail -f logs/daemon.log
 }
 
-case "${1:-status}" in
+case "${1:-help}" in
     start)
         [ "$2" = "--new" ] && export CLARVIS_NEW_CONVERSATION=1
         do_start
@@ -79,58 +73,47 @@ case "${1:-status}" in
         [ "$2" = "--new" ] && export CLARVIS_NEW_CONVERSATION=1
         do_start
         ;;
-    status)  do_status ;;
     logs)    do_logs ;;
     chat)
         shift
-        _chat_channel=""
         _chat_new=false
+        _chat_agent=""
         while [ $# -gt 0 ]; do
             case "$1" in
-                -c|--channel) _chat_channel="$2"; shift 2 ;;
+                -c|--channel)
+                    case "$2" in
+                        discord|factoria) _chat_agent="factoria" ;;
+                        *) _chat_agent="$2" ;;
+                    esac
+                    shift 2 ;;
                 --new) _chat_new=true; shift ;;
                 *) echo "Unknown chat option: $1"; exit 1 ;;
             esac
         done
-        if [ -n "$_chat_channel" ]; then
-            _chat_dir="$HOME/.clarvis/factoria/$_chat_channel"
-        else
-            _chat_dir="$HOME/.clarvis/clarvis"
-        fi
-        if [ ! -d "$_chat_dir" ]; then
-            echo "Channel directory not found: $_chat_dir"
-            echo "Is the '$_chat_channel' channel configured and has the daemon started?"
-            exit 1
-        fi
-        _session_file="$_chat_dir/pi-session.jsonl"
-        _model=$(python3 -c "
-import json
-try:
-    c = json.load(open('config.json'))
-    print(c.get('channels', {}).get('model', '') or 'claude-sonnet-4-5')
-except Exception:
-    print('claude-sonnet-4-5')
-" 2>/dev/null)
         if $_chat_new; then
-            rm -f "$_session_file"
+            echo '{"method":"reset_clarvis_session","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null || true
         fi
-        cd "$_chat_dir" || exit 1
-        exec pi --model "$_model" --session "$_session_file"
+        if [ -n "$_chat_agent" ]; then
+            exec node chat-tui/dist/main.js --agent "$_chat_agent"
+        else
+            exec node chat-tui/dist/main.js
+        fi
         ;;
     add)
         case "$2" in
             org)
                 shift 2
                 [ -z "$1" ] && echo "Usage: clarvis add org <name>" && exit 1
-                name="$*"
                 .venv/bin/python -c "
+import sys
 from clarvis.channels.registry import UserRegistry
+name = ' '.join(sys.argv[1:])
 r = UserRegistry()
-if r.add_org('$name'):
-    print(f'Added org: $name')
+if r.add_org(name):
+    print(f'Added org: {name}')
 else:
-    print(f'Org already exists: $name')
-"
+    print(f'Org already exists: {name}')
+" "$@"
                 ;;
             *)  echo "Unknown add target: $2 (try: org)" ;;
         esac
@@ -140,15 +123,16 @@ else:
             org)
                 shift 2
                 [ -z "$1" ] && echo "Usage: clarvis remove org <name>" && exit 1
-                name="$*"
                 .venv/bin/python -c "
+import sys
 from clarvis.channels.registry import UserRegistry
+name = ' '.join(sys.argv[1:])
 r = UserRegistry()
-if r.remove_org('$name'):
-    print(f'Removed org: $name')
+if r.remove_org(name):
+    print(f'Removed org: {name}')
 else:
-    print(f'Org not found: $name')
-"
+    print(f'Org not found: {name}')
+" "$@"
                 ;;
             *)  echo "Unknown remove target: $2 (try: org)" ;;
         esac
@@ -237,9 +221,9 @@ except Exception as e:
 import json
 try:
     c = json.load(open('$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")/config.json'))
-    print(c.get('channels', {}).get('model', '') or 'claude-sonnet-4-5')
+    print(c.get('clarvis', {}).get('model', '') or 'claude-sonnet-4-6')
 except Exception:
-    print('claude-sonnet-4-5')
+    print('claude-sonnet-4-6')
 " 2>/dev/null)" --prompt "Let's do a memory check-in. Start by reviewing any staged changes, then review active goals."
         ;;
     stage)
@@ -319,7 +303,6 @@ except Exception as e:
         echo "  start     Start daemon and widget (--new for fresh session)"
         echo "  stop      Stop all processes"
         echo "  restart   Stop then start (--new for fresh session)"
-        echo "  status    Show running processes (default)"
         echo "  logs      Tail daemon logs"
         echo "  chat      Chat with Clarvis in terminal (--new for fresh session)"
         echo "            -c, --channel <name>  Use a channel (e.g. discord) instead of home"

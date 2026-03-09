@@ -1,4 +1,4 @@
-"""Channel manager — owns shared agent, starts/stops channels, outbound routing.
+"""Channel manager -- owns shared agent, starts/stops channels, outbound routing.
 
 Replaces ChannelService + nanobot ChannelManager with a unified manager
 that uses a single shared agent for all online channels.
@@ -44,10 +44,8 @@ class ChannelManager:
         registry: "UserRegistry",
         state: ChannelState,
         bus: MessageBus | None = None,
-        memory_service: Any | None = None,
     ):
         self._agent = agent
-        self._agent_lock = asyncio.Lock()
         self._channels_config = channels_config
         self._registry = registry
         self._state = state
@@ -60,8 +58,6 @@ class ChannelManager:
         self._outbound_hooks: dict[str, OutboundHook] = {}
         self._voice_channel = None
         self._transcript_path = agent_home("factoria") / "transcript.jsonl"
-        self._memory_service = memory_service  # MemoryStore instance
-        self._session_grounded = False
 
     @property
     def bus(self) -> MessageBus:
@@ -95,14 +91,22 @@ class ChannelManager:
             logger.debug("Failed to write transcript entry")
 
     async def send_to_agent(self, text: str) -> str:
-        """Serialized agent access — one query at a time."""
-        async with self._agent_lock:
-            chunks: list[str] = []
-            async with aclosing(self._agent.send(text)) as stream:
-                async for chunk in stream:
-                    if chunk is not None:
-                        chunks.append(chunk)
-            return "".join(chunks).strip()
+        """Send to agent -- lock is internal to Agent._send_inner()."""
+        from ..agent.agent import auto_approve_extension_ui
+
+        chunks: list[str] = []
+        async with aclosing(self._agent.send(text)) as stream:
+            async for event in stream:
+                etype = event.get("type")
+                if etype == "extension_ui_request":
+                    auto_approve_extension_ui(self._agent, event)
+                elif etype == "message_update":
+                    delta = event.get("assistantMessageEvent", {})
+                    if delta.get("type") == "text_delta":
+                        chunks.append(delta.get("delta", ""))
+                elif etype == "agent_end":
+                    break
+        return "".join(chunks).strip()
 
     def _init_channels(self) -> None:
         """Initialize channel instances from config."""
@@ -176,7 +180,7 @@ class ChannelManager:
             logger.exception("Failed to start channel %s", name)
 
     async def _handler_loop(self) -> None:
-        """Main loop — consume inbound messages and process them."""
+        """Main loop -- consume inbound messages and process them."""
         logger.info("ChannelManager handler started")
         while True:
             try:
@@ -193,7 +197,7 @@ class ChannelManager:
 
     async def _handle(self, msg: InboundMessage) -> None:
         """Process a single inbound message."""
-        # 1. Commands — ! prefix, any channel, before access control
+        # 1. Commands -- ! prefix, any channel, before access control
         if msg.content.lstrip().startswith("!"):
             from .commands import run as run_command
 
@@ -216,7 +220,7 @@ class ChannelManager:
                 )
                 return
 
-        # 2. Access control — generic
+        # 2. Access control -- generic
         if msg.channel != "voice":
             if not self._state.is_chat_enabled(msg.channel, msg.chat_id):
                 logger.debug("Ignoring message in disabled chat %s/%s", msg.channel, msg.chat_id)
@@ -225,7 +229,7 @@ class ChannelManager:
                 logger.debug("Ignoring unregistered user %s", msg.sender_id)
                 return
 
-        # 3. Context enrichment
+        # 3. Context enrichment (channel prefix)
         prefix = build_context_prefix(msg, self._registry)
         enriched = f"{prefix}{msg.content}" if prefix else msg.content
 
@@ -237,23 +241,11 @@ class ChannelManager:
         )
         self._log_transcript(msg.channel, msg.chat_id, msg.sender_id, msg.content)
 
-        # 4. Memory grounding — synthetic first turn on session start
-        if not self._session_grounded and self._memory_service:
-            try:
-                from clarvis.memory.ground import build_memory_context
+        # 4. Memory + ambient grounding via ContextInjector
+        if self._agent.context:
+            enriched = await self._agent.context.enrich(enriched)
 
-                grounding = await build_memory_context(
-                    self._memory_service,
-                    "all",
-                )
-                if grounding:
-                    logger.info("[dialogue] Injecting memory grounding (%d chars)", len(grounding))
-                    await self.send_to_agent(grounding)
-                    self._session_grounded = True
-            except Exception:
-                logger.debug("Memory grounding failed", exc_info=True)
-
-        # 5. Agent routing — serialized via lock
+        # 5. Agent routing -- serialized via lock
         try:
             response = await self.send_to_agent(enriched)
             if not response:
@@ -267,7 +259,7 @@ class ChannelManager:
             )
             self._log_transcript(msg.channel, msg.chat_id, "clarvis", response)
 
-            # 6. Outbound hook — per-channel transform
+            # 6. Outbound hook -- per-channel transform
             hook = self._outbound_hooks.get(msg.channel)
             if hook:
                 response = hook(response, msg)

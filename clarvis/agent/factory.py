@@ -43,7 +43,6 @@ def _create_agent(
     session_key: str,
     project_dir: Path,
     model: str | None = None,
-    max_thinking_tokens: int | None = None,
 ):
     """Shared agent construction: config -> Agent -> ensure_project_dir."""
     from .agent import Agent, AgentConfig
@@ -52,31 +51,24 @@ def _create_agent(
         session_key=session_key,
         project_dir=project_dir,
         model=model,
-        max_thinking_tokens=max_thinking_tokens,
     )
     agent = Agent(config)
     agent.ensure_project_dir()
     return agent
 
 
-def create_clarvis_agent(
-    model: str | None = None,
-    max_thinking_tokens: int | None = None,
-):
+def create_clarvis_agent(model: str | None = None):
     """Create the Clarvis agent (voice + terminal) at ~/.clarvis/clarvis/."""
     clarvis_home = agent_home("clarvis")
-    agent = _create_agent("clarvis", clarvis_home, model, max_thinking_tokens)
+    agent = _create_agent("clarvis", clarvis_home, model)
     _scaffold_claude_md(clarvis_home, "clarvis")
     return agent
 
 
-def create_factoria_agent(
-    model: str | None = None,
-    max_thinking_tokens: int | None = None,
-):
+def create_factoria_agent(model: str | None = None):
     """Create the Factoria agent (online channels) at ~/.clarvis/factoria/."""
     channels_dir = agent_home("factoria")
-    agent = _create_agent("factoria", channels_dir, model, max_thinking_tokens)
+    agent = _create_agent("factoria", channels_dir, model)
     _scaffold_claude_md(channels_dir, "factoria")
     _scaffold_grounding(channels_dir, "factoria")
     return agent

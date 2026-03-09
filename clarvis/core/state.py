@@ -1,5 +1,6 @@
 """Single source of truth for all Clarvis state."""
 
+import copy
 import logging
 import threading
 
@@ -75,8 +76,8 @@ class StateStore:
         """
         with self._lock:
             data = self._state.get(section, {})
-            # Return copy to prevent external mutation
-            return data.copy() if isinstance(data, dict) else data
+            # Return deep copy to prevent external mutation of nested dicts
+            return copy.deepcopy(data)
 
 
 # Global instance for singleton access
