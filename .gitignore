@@ -38,6 +38,10 @@ models/*.onnx
 !models/clarvis_ebf.onnx
 !models/silero-vad.onnx
 
+# Chat TUI (Node.js)
+chat-tui/dist/
+chat-tui/node_modules/
+
 # Generated docs
 docs/
 
