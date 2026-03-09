@@ -1,12 +1,9 @@
 /**
  * Scrolling output log for agent responses, tool executions, and system messages.
  *
- * Agent text responses are rendered via pi-tui's Markdown component for styled
- * output (code blocks, headings, lists, etc.). Other lines (tool output, errors,
- * info messages) are rendered as raw ANSI-styled text.
- *
- * Tool executions are stored as collapsible segments. Toggle detail mode with
- * /detail to expand tool output (compact: 5 lines, detail: up to 200 lines).
+ * All output is composed of Block elements — a single configurable type that
+ * handles rich/raw rendering, collapsibility, streaming deltas, and per-line
+ * styling through properties rather than subclasses.
  */
 
 import { type Component, Markdown, type MarkdownTheme, truncateToWidth } from "@mariozechner/pi-tui";
@@ -32,186 +29,267 @@ const markdownTheme: MarkdownTheme = {
 	underline: (t) => `${UNDERLINE}${t}${RESET}`,
 };
 
-/** Compact mode: max lines of tool output body to show */
+const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+
+/** Compact mode: max lines of collapsible body to show */
 const COMPACT_LINES = 5;
-/** Detail mode: max lines of tool output body to show */
+/** Detail mode: max lines of collapsible body to show */
 const DETAIL_LINES = 200;
 
+// ============================================================================
+// Block — unified output element
+// ============================================================================
+
+interface BlockOptions {
+	header?: string;
+	collapsible?: boolean;
+	rich?: boolean;
+	style?: (line: string) => string;
+}
+
 /**
- * A segment in the output log — raw line, Markdown block, or collapsible tool output.
+ * A single output element. Configuration determines behavior:
+ *
+ * - `rich`: render body via Markdown component (for agent responses)
+ * - `collapsible`: truncate body in compact mode with expand hint
+ * - `style`: per-line styling function for raw body lines
+ * - `header`: optional header line rendered above the body
+ *
+ * Content is either streamed via `write()` into a buffer, or set
+ * as pre-formatted lines via `setLines()` (for tool results).
  */
-type Segment =
-	| { kind: "line"; text: string }
-	| { kind: "markdown"; component: Markdown; buffer: string }
-	| { kind: "tool"; header: string; lines: string[] }
-	| { kind: "thinking"; buffer: string };
+class Block {
+	readonly header: string | null;
+	readonly collapsible: boolean;
+	readonly rich: boolean;
+	readonly style: ((line: string) => string) | null;
+
+	private md: Markdown | null = null;
+	private buffer = "";
+	private lines: string[] | null = null;
+
+	constructor(opts: BlockOptions = {}) {
+		this.header = opts.header ?? null;
+		this.collapsible = opts.collapsible ?? false;
+		this.rich = opts.rich ?? false;
+		this.style = opts.style ?? null;
+		if (this.rich) {
+			this.md = new Markdown("", 0, 0, markdownTheme);
+		}
+	}
+
+	/** Append streaming text to the buffer */
+	write(text: string): void {
+		this.buffer += text;
+		this.md?.setText(this.buffer);
+	}
+
+	/** Set pre-formatted body lines (for tool results filled after creation) */
+	setLines(value: string[]): void {
+		this.lines = value;
+	}
+
+	get linesEmpty(): boolean {
+		return this.lines === null || this.lines.length === 0;
+	}
+
+	invalidate(): void {
+		this.md?.invalidate();
+	}
+
+	private get bodyLines(): string[] {
+		return this.lines ?? (this.buffer ? this.buffer.split("\n") : []);
+	}
+
+	render(width: number, detailMode: boolean): string[] {
+		const result: string[] = [];
+
+		if (this.header !== null) {
+			result.push(truncateToWidth(this.header, width));
+		}
+
+		if (this.md) {
+			result.push(...this.md.render(width));
+		} else {
+			const body = this.bodyLines;
+			if (body.length > 0) {
+				const cap = this.collapsible
+					? (detailMode ? DETAIL_LINES : COMPACT_LINES)
+					: body.length;
+				const max = Math.min(body.length, cap);
+				for (let i = 0; i < max; i++) {
+					const styled = this.style ? this.style(body[i]) : body[i];
+					result.push(truncateToWidth(styled, width));
+				}
+				const remaining = body.length - max;
+				if (remaining > 0) {
+					result.push(`${DIM}  [+${remaining} lines — Ctrl+L to expand]${RESET}`);
+				}
+			}
+		}
+
+		return result;
+	}
+
+	renderPlain(width: number): string[] {
+		const result: string[] = [];
+
+		if (this.header !== null) {
+			result.push(stripAnsi(this.header));
+		}
+
+		if (this.md) {
+			result.push(...this.md.render(width).map(stripAnsi));
+		} else {
+			for (const line of this.bodyLines) {
+				result.push(stripAnsi(line));
+			}
+		}
+
+		return result;
+	}
+}
+
+// ============================================================================
+// OutputLog
+// ============================================================================
 
 export class OutputLog implements Component {
-	private segments: Segment[] = [];
-	private maxSegments = 2000;
+	private blocks: Block[] = [];
+	private streaming: Block | null = null;
+	private pendingTools: Block[] = [];
+	private maxBlocks = 2000;
+
 	agentLabel = "Clarvis";
 	userLabel = "You";
 	detailMode = false;
 
 	/** Append a raw styled line */
 	append(line: string): void {
-		this.segments.push({ kind: "line", text: line });
-		this.trimSegments();
+		this.streaming = null;
+		const block = new Block();
+		block.setLines([line]);
+		this.push(block);
 	}
 
 	/** Append a user message with styled prefix */
 	appendUserMessage(text: string): void {
 		this.append("");
 		this.append(`${GREEN}${BOLD}${this.userLabel}:${RESET}`);
-		this.addMarkdownSegment(text);
+		this.pushRich(text);
 	}
 
 	/** Append a complete Markdown block (for history replay) */
 	appendMarkdown(text: string): void {
 		this.append("");
 		this.append(`${BLUE}${BOLD}${this.agentLabel}:${RESET}`);
-		this.addMarkdownSegment(text);
+		this.pushRich(text);
 	}
 
 	/** Clear all output */
 	clear(): void {
-		this.segments = [];
+		this.blocks = [];
+		this.streaming = null;
+		this.pendingTools = [];
 	}
 
-	/** Toggle between compact and detail mode for tool output */
+	/** Toggle between compact and detail mode for collapsible output */
 	toggleDetail(): boolean {
 		this.detailMode = !this.detailMode;
 		return this.detailMode;
 	}
 
 	invalidate(): void {
-		for (const seg of this.segments) {
-			if (seg.kind === "markdown") seg.component.invalidate();
-		}
+		for (const block of this.blocks) block.invalidate();
 	}
 
 	render(width: number): string[] {
 		const result: string[] = [];
-		for (const seg of this.segments) {
-			if (seg.kind === "line") {
-				result.push(truncateToWidth(seg.text, width));
-			} else if (seg.kind === "markdown") {
-				result.push(...seg.component.render(width));
-			} else if (seg.kind === "tool") {
-				// Tool segment — render header + body based on detail mode
-				result.push(truncateToWidth(seg.header, width));
-				if (seg.lines.length > 0) {
-					const cap = this.detailMode ? DETAIL_LINES : COMPACT_LINES;
-					const max = Math.min(seg.lines.length, cap);
-					for (let i = 0; i < max; i++) {
-						result.push(truncateToWidth(seg.lines[i], width));
-					}
-					const remaining = seg.lines.length - max;
-					if (remaining > 0) {
-						result.push(`${DIM}  [+${remaining} lines — Ctrl+L to expand]${RESET}`);
-					}
-				}
-			} else if (seg.kind === "thinking") {
-				const lines = seg.buffer.split("\n");
-				result.push(`${DIM}${ITALIC}[thinking]${RESET}`);
-				const cap = this.detailMode ? DETAIL_LINES : COMPACT_LINES;
-				const max = Math.min(lines.length, cap);
-				for (let i = 0; i < max; i++) {
-					result.push(truncateToWidth(`${DIM}${ITALIC}${lines[i]}${RESET}`, width));
-				}
-				if (lines.length > max) {
-					result.push(`${DIM}  [+${lines.length - max} lines — Ctrl+L to expand]${RESET}`);
-				}
-			}
+		for (const block of this.blocks) {
+			result.push(...block.render(width, this.detailMode));
 		}
-		if (result.length === 0) return [""];
-		return result;
+		return result.length === 0 ? [""] : result;
 	}
 
-	/** Render all output with tool bodies fully expanded, ANSI stripped. For pager. */
+	/** Render all output fully expanded, ANSI stripped. For pager. */
 	getAllText(width: number): string {
-		const strip = (s: string) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 		const lines: string[] = [];
-		for (const seg of this.segments) {
-			if (seg.kind === "line") {
-				lines.push(strip(seg.text));
-			} else if (seg.kind === "markdown") {
-				for (const ml of seg.component.render(width)) {
-					lines.push(strip(ml));
-				}
-			} else if (seg.kind === "tool") {
-				lines.push(strip(seg.header));
-				for (const tl of seg.lines) {
-					lines.push(strip(tl));
-				}
-			} else if (seg.kind === "thinking") {
-				lines.push("[thinking]");
-				for (const tl of seg.buffer.split("\n")) {
-					lines.push(tl);
-				}
-			}
+		for (const block of this.blocks) {
+			lines.push(...block.renderPlain(width));
 		}
 		return lines.join("\n");
 	}
 
 	// -- Event handlers for Pi RPC events --
 
-	handleAgentStart(): void {
-		// Prepare for new response
+	/** Whether a streaming response block is active (for first-delta detection) */
+	get hasActiveResponse(): boolean {
+		return this.streaming?.rich === true;
 	}
 
-	/** Start a new agent response block — creates a Markdown segment */
+	/** Start a new agent response block — creates a streaming Markdown block */
 	startResponseBlock(): void {
 		this.append("");
 		this.append(`${BLUE}${BOLD}${this.agentLabel}:${RESET}`);
-		this.addMarkdownSegment("");
+		this.streaming = new Block({ rich: true });
+		this.push(this.streaming);
 	}
 
 	/** Append streaming text delta to the current Markdown block */
 	handleTextDelta(delta: string): void {
-		const last = this.segments[this.segments.length - 1];
-		if (last?.kind === "markdown") {
-			last.buffer += delta;
-			last.component.setText(last.buffer);
+		if (this.streaming?.rich) {
+			this.streaming.write(delta);
 		} else {
-			// After tool output, last segment is a "line" or "tool" — start a new
-			// markdown block to continue accumulating text (no header, continuation)
-			this.addMarkdownSegment(delta);
+			// After tool output — start a new markdown block (continuation, no header)
+			this.streaming = new Block({ rich: true });
+			this.streaming.write(delta);
+			this.push(this.streaming);
 		}
 	}
 
 	/** Append streaming thinking delta */
 	handleThinkingDelta(delta: string): void {
-		const last = this.segments[this.segments.length - 1];
-		if (last?.kind === "thinking") {
-			last.buffer += delta;
+		if (this.streaming?.collapsible) {
+			this.streaming.write(delta);
 		} else {
-			this.segments.push({ kind: "thinking", buffer: delta });
-			this.trimSegments();
+			this.streaming = new Block({
+				header: `${DIM}${ITALIC}[thinking]${RESET}`,
+				collapsible: true,
+				style: (l) => `${DIM}${ITALIC}${l}${RESET}`,
+			});
+			this.streaming.write(delta);
+			this.push(this.streaming);
 		}
 	}
 
 	handleToolStart(toolName: string, toolInput?: Record<string, unknown>): void {
-		const header = this.buildToolHeader(toolName, toolInput);
-		this.segments.push({ kind: "tool", header, lines: [] });
-		this.trimSegments();
+		this.streaming = null;
+		const block = new Block({
+			header: buildToolHeader(toolName, toolInput),
+			collapsible: true,
+		});
+		this.pendingTools.push(block);
+		this.push(block);
 	}
 
 	handleToolEnd(toolName: string, result: unknown): void {
-		const lines = this.extractResultLines(toolName, result);
-		// Fill the last empty tool segment (matches the corresponding start)
-		for (let i = this.segments.length - 1; i >= 0; i--) {
-			const seg = this.segments[i];
-			if (seg.kind === "tool" && seg.lines.length === 0) {
-				seg.lines = lines;
-				return;
-			}
+		const lines = extractResultLines(toolName, result);
+		const pending = this.pendingTools.pop();
+		if (pending) {
+			pending.setLines(lines);
+		} else {
+			// Fallback: no matching start, create standalone
+			const block = new Block({
+				header: `${DIM}[${toolName}]${RESET}`,
+				collapsible: true,
+			});
+			block.setLines(lines);
+			this.push(block);
 		}
-		// Fallback: no matching start, create standalone
-		this.segments.push({ kind: "tool", header: `${DIM}[${toolName}]${RESET}`, lines });
 	}
 
 	handleAgentEnd(): void {
+		this.streaming = null;
 		this.append("");
 	}
 
@@ -225,111 +303,113 @@ export class OutputLog implements Component {
 
 	// -- Private helpers --
 
-	private buildToolHeader(toolName: string, toolInput?: Record<string, unknown>): string {
-		switch (toolName) {
-			case "bash":
-			case "Bash": {
-				const cmd = toolInput?.command as string | undefined;
-				if (!cmd) return `${DIM}[bash]${RESET}`;
+	private pushRich(text: string): void {
+		const block = new Block({ rich: true });
+		block.write(text);
+		this.push(block);
+	}
 
-				// Parse ctools commands for cleaner display
-				const ctoolsMatch = cmd.match(/^ctools\s+(\S+)(?:\s+(.*))?/);
-				if (ctoolsMatch) {
-					const [, method, rawArgs] = ctoolsMatch;
-					if (rawArgs) {
-						// Try to extract meaningful params from JSON args
-						try {
-							const parsed = JSON.parse(rawArgs.replace(/^'|'$/g, ""));
-							const brief = Object.entries(parsed)
-								.slice(0, 3)
-								.map(([k, v]) => {
-									const vs = typeof v === "string" ? v : JSON.stringify(v);
-									return `${k}=${vs.length > 40 ? vs.slice(0, 40) + "…" : vs}`;
-								})
-								.join(" ");
-							return `${DIM}[ctools ${method}] ${brief}${RESET}`;
-						} catch {
-							// Not JSON, show raw
-							const brief = rawArgs.length > 60 ? rawArgs.slice(0, 60) + "…" : rawArgs;
-							return `${DIM}[ctools ${method}] ${brief}${RESET}`;
-						}
+	private push(block: Block): void {
+		this.blocks.push(block);
+		if (this.blocks.length > this.maxBlocks) {
+			this.blocks = this.blocks.slice(-this.maxBlocks);
+		}
+	}
+}
+
+// ============================================================================
+// Tool formatting (pure functions)
+// ============================================================================
+
+function buildToolHeader(toolName: string, toolInput?: Record<string, unknown>): string {
+	switch (toolName) {
+		case "bash":
+		case "Bash": {
+			const cmd = toolInput?.command as string | undefined;
+			if (!cmd) return `${DIM}[bash]${RESET}`;
+
+			// Parse ctools commands for cleaner display
+			const ctoolsMatch = cmd.match(/^ctools\s+(\S+)(?:\s+(.*))?/);
+			if (ctoolsMatch) {
+				const [, method, rawArgs] = ctoolsMatch;
+				if (rawArgs) {
+					try {
+						const parsed = JSON.parse(rawArgs.replace(/^'|'$/g, ""));
+						const brief = Object.entries(parsed)
+							.slice(0, 3)
+							.map(([k, v]) => {
+								const vs = typeof v === "string" ? v : JSON.stringify(v);
+								return `${k}=${vs.length > 40 ? vs.slice(0, 40) + "…" : vs}`;
+							})
+							.join(" ");
+						return `${DIM}[ctools ${method}] ${brief}${RESET}`;
+					} catch {
+						const brief = rawArgs.length > 60 ? rawArgs.slice(0, 60) + "…" : rawArgs;
+						return `${DIM}[ctools ${method}] ${brief}${RESET}`;
 					}
-					return `${DIM}[ctools ${method}]${RESET}`;
 				}
+				return `${DIM}[ctools ${method}]${RESET}`;
+			}
 
-				// Regular bash command
-				const brief = cmd.length > 80 ? cmd.slice(0, 80) + "…" : cmd;
-				return `${DIM}$ ${brief}${RESET}`;
+			const brief = cmd.length > 80 ? cmd.slice(0, 80) + "…" : cmd;
+			return `${DIM}$ ${brief}${RESET}`;
+		}
+		case "Read":
+		case "read": {
+			const path = toolInput?.file_path as string | undefined;
+			return `${DIM}[reading ${path ?? "file"}]${RESET}`;
+		}
+		case "Edit":
+		case "edit": {
+			const path = toolInput?.file_path as string | undefined;
+			return `${DIM}[editing ${path ?? "file"}]${RESET}`;
+		}
+		case "Write":
+		case "write": {
+			const path = toolInput?.file_path as string | undefined;
+			return `${DIM}[writing ${path ?? "file"}]${RESET}`;
+		}
+		default:
+			return `${DIM}[${toolName}]${RESET}`;
+	}
+}
+
+function extractResultLines(toolName: string, result: unknown): string[] {
+	// Bash: extract output string
+	if (toolName === "bash" || toolName === "Bash") {
+		const output = typeof result === "string"
+			? result
+			: (result as Record<string, unknown>)?.output as string | undefined;
+		if (!output) return [];
+		return output.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
+	}
+
+	// Pi tool result: try content[].text extraction
+	if (result && typeof result === "object" && !Array.isArray(result)) {
+		const r = result as Record<string, unknown>;
+		if (Array.isArray(r.content)) {
+			const texts = (r.content as Array<Record<string, unknown>>)
+				.filter((c) => c.type === "text")
+				.map((c) => c.text as string);
+			if (texts.length > 0) {
+				return texts
+					.join("\n")
+					.split("\n")
+					.map((l) => `${DIM}  ${l}${RESET}`);
 			}
-			case "Read":
-			case "read": {
-				const path = toolInput?.file_path as string | undefined;
-				return `${DIM}[reading ${path ?? "file"}]${RESET}`;
-			}
-			case "Edit":
-			case "edit": {
-				const path = toolInput?.file_path as string | undefined;
-				return `${DIM}[editing ${path ?? "file"}]${RESET}`;
-			}
-			case "Write":
-			case "write": {
-				const path = toolInput?.file_path as string | undefined;
-				return `${DIM}[writing ${path ?? "file"}]${RESET}`;
-			}
-			default:
-				return `${DIM}[${toolName}]${RESET}`;
 		}
 	}
 
-	private extractResultLines(toolName: string, result: unknown): string[] {
-		// Bash: extract output string
-		if (toolName === "bash" || toolName === "Bash") {
-			const output = typeof result === "string"
-				? result
-				: (result as Record<string, unknown>)?.output as string | undefined;
-			if (!output) return [];
-			return output.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
-		}
-
-		// Pi tool result: try content[].text extraction
-		if (result && typeof result === "object" && !Array.isArray(result)) {
-			const r = result as Record<string, unknown>;
-			if (Array.isArray(r.content)) {
-				const texts = (r.content as Array<Record<string, unknown>>)
-					.filter((c) => c.type === "text")
-					.map((c) => c.text as string);
-				if (texts.length > 0) {
-					return texts
-						.join("\n")
-						.split("\n")
-						.map((l) => `${DIM}  ${l}${RESET}`);
-				}
-			}
-		}
-
-		// String result
-		if (typeof result === "string") {
-			return result.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
-		}
-
-		// Fallback: JSON pretty-print
-		try {
-			const json = JSON.stringify(result, null, 2);
-			return json.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
-		} catch {
-			return [`${DIM}  [result]${RESET}`];
-		}
+	// String result
+	if (typeof result === "string") {
+		return result.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
 	}
 
-	private addMarkdownSegment(text: string): void {
-		const md = new Markdown(text, 0, 0, markdownTheme);
-		this.segments.push({ kind: "markdown", component: md, buffer: text });
-		this.trimSegments();
-	}
-
-	private trimSegments(): void {
-		if (this.segments.length > this.maxSegments) {
-			this.segments = this.segments.slice(-this.maxSegments);
-		}
+	// Fallback: JSON pretty-print
+	try {
+		const json = JSON.stringify(result, null, 2);
+		return json.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
+	} catch {
+		return [`${DIM}  [result]${RESET}`];
 	}
 }

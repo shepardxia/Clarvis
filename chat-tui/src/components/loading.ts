@@ -4,7 +4,7 @@
  */
 
 import { CancellableLoader, type TUI } from "@mariozechner/pi-tui";
-import { BLUE, CYAN, DIM } from "../theme.js";
+import { CYAN, DIM } from "../theme.js";
 
 const spinnerColor = (s: string) => `${CYAN}${s}`;
 const messageColor = (s: string) => `${DIM}${s}`;

@@ -1,31 +1,27 @@
 /**
  * Slash command definitions and dispatch logic.
  *
- * Two categories:
- * - Session: /new -> forward via chat socket
- * - Local: /help, /clear, /quit, /rewind -> handle in TUI
+ * Categories:
+ * - Local: /help, /clear, /quit, /rewind — handled in TUI
+ * - Session: /new — forwarded via chat socket
+ * - Daemon: /reflect, /reload — JSON-RPC to daemon socket
+ * - Pi RPC: /thinking, /model — forwarded to agent subprocess
  *
  * Unrecognized slash commands fall through as agent prompts.
  */
 
 import type { SlashCommand } from "@mariozechner/pi-tui";
-import type { ChatClient } from "./daemon-client.js";
 import { DaemonClient } from "./daemon-client.js";
-import type { OutputLog } from "./components/output-log.js";
+import type { App } from "./app.js";
+import { type RewindEntry, RewindDialog } from "./components/dialogs.js";
+import { extractText, stripContext } from "./context.js";
 
 export type CommandResult =
 	| { handled: true }
 	| { handled: false };
 
-export interface CommandContext {
-	chatClient: ChatClient;
-	outputLog: OutputLog;
-	onClear: () => void;
-	onQuit: () => void;
-	onRewind: () => void;
-	requestRender: () => void;
-	showSelect: (title: string, options: string[], onDone: (value: string | undefined) => void) => void;
-	showFilterSelect: (title: string, options: string[], onDone: (value: string | undefined) => void) => void;
+function errorMsg(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
 }
 
 // ============================================================================
@@ -55,56 +51,56 @@ export const slashCommands: SlashCommand[] = [
 // Dispatch
 // ============================================================================
 
-export function dispatchCommand(input: string, ctx: CommandContext): CommandResult {
+export function dispatchCommand(input: string, app: App): CommandResult {
 	const match = input.match(/^\/(\S+)\s*(.*)/);
 	if (!match) return { handled: false };
 
-	const [, cmd, args] = match;
-	const trimmedArgs = args.trim();
+	const [, cmd] = match;
 
 	// Local commands
 	if (cmd === "help") {
-		showHelp(ctx);
+		showHelp(app);
 		return { handled: true };
 	}
 	if (cmd === "clear") {
-		ctx.onClear();
+		app.output.clear();
+		app.requestRender();
 		return { handled: true };
 	}
 	if (cmd === "quit" || cmd === "exit") {
-		ctx.onQuit();
+		app.exit();
 		return { handled: true };
 	}
 	if (cmd === "rewind") {
-		ctx.onRewind();
+		handleRewind(app);
 		return { handled: true };
 	}
 
 	// /new — sends new_session to chat socket
 	if (cmd === "new") {
-		ctx.chatClient.send({ type: "new_session" });
-		ctx.outputLog.handleInfo("[session reset]");
-		ctx.requestRender();
+		app.chatClient.send({ type: "new_session" });
+		app.output.handleInfo("[session reset]");
+		app.requestRender();
 		return { handled: true };
 	}
 
 	// Daemon commands (same IPC as `clarvis` CLI)
 	if (cmd === "reflect") {
-		executeDaemonCommand("nudge", { reason: "reflect" }, ctx);
+		executeDaemonCommand("nudge", { reason: "reflect" }, app);
 		return { handled: true };
 	}
 	if (cmd === "reload") {
-		executeDaemonCommand("reload_agents", {}, ctx);
+		executeDaemonCommand("reload_agents", {}, app);
 		return { handled: true };
 	}
 
 	// Pi RPC commands (forwarded to agent subprocess)
 	if (cmd === "thinking") {
-		executeThinkingCommand(ctx);
+		executeThinkingCommand(app);
 		return { handled: true };
 	}
 	if (cmd === "model") {
-		executeModelCommand(ctx);
+		executeModelCommand(app);
 		return { handled: true };
 	}
 
@@ -112,41 +108,106 @@ export function dispatchCommand(input: string, ctx: CommandContext): CommandResu
 	return { handled: false };
 }
 
-async function executeThinkingCommand(ctx: CommandContext): Promise<void> {
+// ============================================================================
+// Rewind / fork
+// ============================================================================
+
+export async function handleRewind(app: App): Promise<void> {
+	try {
+		const resp = await app.chatClient.request({ type: "get_fork_messages" });
+		const messages = resp.messages as Array<Record<string, unknown>> | undefined;
+		if (!messages || messages.length === 0) {
+			app.output.handleInfo("No messages to rewind to.");
+			app.requestRender();
+			return;
+		}
+
+		const entries: RewindEntry[] = messages.map((m) => {
+			const raw = extractText(m);
+			const text = (m.role === "user" ? stripContext(raw) : raw).trim();
+			return {
+				entryId: m.entryId as string,
+				role: m.role as string,
+				text,
+			};
+		});
+
+		const dialog = new RewindDialog(entries);
+
+		dialog.onSelect = async (entry) => {
+			app.hideOverlay();
+			app.output.handleInfo("[rewinding...]");
+			app.requestRender();
+
+			try {
+				const forkResp = await app.chatClient.request(
+					{ type: "fork", entryId: entry.entryId },
+				);
+				const text = forkResp.text as string | undefined;
+				if (text) {
+					app.prompt.editor.setText(text);
+				}
+				app.requestRender();
+			} catch (err) {
+				const msg = errorMsg(err);
+				app.output.handleError(`Fork failed: ${msg}`);
+				app.requestRender();
+			}
+		};
+
+		dialog.onCancel = () => {
+			app.hideOverlay();
+		};
+
+		app.showOverlay(dialog);
+	} catch (err) {
+		const msg = errorMsg(err);
+		app.output.handleError(`Rewind failed: ${msg}`);
+		app.requestRender();
+	}
+}
+
+// ============================================================================
+// Pi RPC commands
+// ============================================================================
+
+async function executeThinkingCommand(app: App): Promise<void> {
 	// Query current level first to show (current) marker
 	let currentLevel = "unknown";
 	try {
-		const state = await ctx.chatClient.request({ type: "command", command: "get_state", args: {} });
+		const state = await app.chatClient.request({ type: "command", command: "get_state", args: {} });
 		currentLevel = String((state.result as Record<string, unknown>)?.thinkingLevel ?? "unknown");
 	} catch { /* proceed without marker */ }
 
 	const options = THINKING_LEVELS.map((l) => l === currentLevel ? `${l} (current)` : l);
-	ctx.showSelect("Thinking level", options, async (value) => {
+	app.showSelect("Thinking level", options, async (value) => {
 		if (!value) return;
 		const level = value.replace(" (current)", "");
 		try {
-			await ctx.chatClient.request({
+			await app.chatClient.request({
 				type: "command", command: "set_thinking_level", args: { level },
 			});
-			ctx.outputLog.handleInfo(`Thinking: ${level}`);
+			app.output.handleInfo(`Thinking: ${level}`);
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			ctx.outputLog.handleError(msg);
+			const msg = errorMsg(err);
+			app.output.handleError(msg);
 		}
-		ctx.requestRender();
+		app.requestRender();
 	});
 }
 
-async function executeModelCommand(ctx: CommandContext): Promise<void> {
+async function executeModelCommand(app: App): Promise<void> {
 	// Query available models from Pi
 	let models: Array<Record<string, unknown>> = [];
 	let currentModelId = "";
 	try {
-		const state = await ctx.chatClient.request({ type: "command", command: "get_state", args: {} });
+		const [state, resp] = await Promise.all([
+			app.chatClient.request({ type: "command", command: "get_state", args: {} }),
+			app.chatClient.request({ type: "command", command: "get_available_models", args: {} }),
+		]);
 		const result = state.result as Record<string, unknown>;
 		currentModelId = String((result?.model as Record<string, unknown>)?.modelId ?? "");
 
-		const resp = await ctx.chatClient.request({ type: "command", command: "get_available_models", args: {} });
 		const data = resp.result as Record<string, unknown>;
 		if (Array.isArray(data)) {
 			models = data as Array<Record<string, unknown>>;
@@ -156,8 +217,8 @@ async function executeModelCommand(ctx: CommandContext): Promise<void> {
 	} catch { /* fall through with empty list */ }
 
 	if (models.length === 0) {
-		ctx.outputLog.handleError("Could not fetch available models");
-		ctx.requestRender();
+		app.output.handleError("Could not fetch available models");
+		app.requestRender();
 		return;
 	}
 
@@ -166,39 +227,47 @@ async function executeModelCommand(ctx: CommandContext): Promise<void> {
 		return id === currentModelId ? `${id} (current)` : id;
 	});
 
-	ctx.showFilterSelect("Model", options, async (value) => {
+	app.showFilterSelect("Model", options, async (value) => {
 		if (!value) return;
 		const modelId = value.replace(" (current)", "");
 		try {
-			await ctx.chatClient.request({
+			await app.chatClient.request({
 				type: "command", command: "set_model", args: { modelId },
 			});
-			ctx.outputLog.handleInfo(`Model: ${modelId}`);
+			app.output.handleInfo(`Model: ${modelId}`);
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			ctx.outputLog.handleError(msg);
+			const msg = errorMsg(err);
+			app.output.handleError(msg);
 		}
-		ctx.requestRender();
+		app.requestRender();
 	});
 }
+
+// ============================================================================
+// Daemon commands
+// ============================================================================
 
 async function executeDaemonCommand(
 	method: string,
 	params: Record<string, unknown>,
-	ctx: CommandContext,
+	app: App,
 ): Promise<void> {
 	try {
 		const result = await DaemonClient.send(method, params);
 		const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-		ctx.outputLog.handleInfo(text);
+		app.output.handleInfo(text);
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		ctx.outputLog.handleError(msg);
+		const msg = errorMsg(err);
+		app.output.handleError(msg);
 	}
-	ctx.requestRender();
+	app.requestRender();
 }
 
-function showHelp(ctx: CommandContext): void {
+// ============================================================================
+// Help
+// ============================================================================
+
+function showHelp(app: App): void {
 	const lines = [
 		"Commands:",
 		"  /new         Start a new session",
@@ -218,7 +287,7 @@ function showHelp(ctx: CommandContext): void {
 		"  Ctrl+D       Exit",
 	];
 	for (const line of lines) {
-		ctx.outputLog.handleInfo(line);
+		app.output.handleInfo(line);
 	}
-	ctx.requestRender();
+	app.requestRender();
 }
