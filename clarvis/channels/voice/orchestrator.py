@@ -501,7 +501,8 @@ class VoiceCommandOrchestrator:
         self._prompt_reply_pending = False  # Reset before streaming
         t_query = time.monotonic()
         t_first_token = None
-        response_chunks: list[str] = []
+        response_buf: list[str] = []  # join only at tool boundaries and end
+        display_text = self._prev_display + "\n\n" if self._prev_display else ""
         all_spoken: list[str] = []
         interrupted = False
 
@@ -534,16 +535,15 @@ class VoiceCommandOrchestrator:
                                 if t_first_token is None:
                                     t_first_token = time.monotonic()
                                     hint_task.cancel()
-                                response_chunks.append(chunk)
-                                current = "".join(response_chunks)
-                                display = f"{self._prev_display}\n\n{current}" if self._prev_display else current
-                                self._set_voice_text(display)
+                                response_buf.append(chunk)
+                                display_text += chunk
+                                self._set_voice_text(display_text)
                             continue
 
                         if etype == "tool_execution_end":
                             # Tool boundary -- speak accumulated text now
-                            if response_chunks:
-                                segment = "".join(response_chunks).strip()
+                            if response_buf:
+                                segment = "".join(response_buf).strip()
                                 if segment:
                                     hint_task.cancel()
                                     self._transition(VoicePipelineState.RESPONDING)
@@ -555,7 +555,8 @@ class VoiceCommandOrchestrator:
                                     if self._interrupt.is_set():
                                         interrupted = True
                                         break
-                                response_chunks.clear()
+                                response_buf.clear()
+                                display_text = self._prev_display + "\n\n" if self._prev_display else ""
                                 self._clear_voice_text()
                             # Back to thinking while tool executes
                             self._transition(VoicePipelineState.THINKING)
@@ -579,7 +580,7 @@ class VoiceCommandOrchestrator:
             return None
 
         # Speak any remaining text after stream ends
-        final_segment = "".join(response_chunks).strip()
+        final_segment = "".join(response_buf).strip()
         expects_reply = self._prompt_reply_pending
 
         # When a follow-up turn is expected, mute wake word before

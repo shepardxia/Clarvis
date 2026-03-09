@@ -132,14 +132,14 @@ class DaemonClient:
             sock.sendall(request.encode("utf-8") + b"\n")
 
             # Read response
-            buffer = b""
+            buffer = bytearray()
             while b"\n" not in buffer:
                 chunk = sock.recv(4096)
                 if not chunk:
                     raise ConnectionError("Connection closed by daemon")
-                buffer += chunk
+                buffer.extend(chunk)
 
-            response_str = buffer.split(b"\n")[0].decode("utf-8")
+            response_str = buffer.split(b"\n", 1)[0].decode("utf-8")
             response = json.loads(response_str)
 
             if "error" in response:

@@ -149,6 +149,7 @@ class TimerService:
         self._timers: dict[str, Timer] = {}
         self._handles: dict[str, asyncio.TimerHandle] = {}
         self._lock = threading.Lock()
+        self._dirty = False
 
     def set_timer(
         self,
@@ -242,7 +243,10 @@ class TimerService:
         with self._lock:
             for name in list(self._handles):
                 self._cancel_handle(name)
-            self._persist()
+            # Flush directly on stop (bypass debounce)
+            data = [asdict(t) for t in self._timers.values()]
+            self._dirty = False
+        json_save_atomic(self._state_file, data)
         logger.info("TimerService stopped")
 
     def _fire(self, name: str) -> None:
@@ -288,8 +292,18 @@ class TimerService:
             handle.cancel()
 
     def _persist(self) -> None:
-        """Save active timers to disk. Caller must hold ``_lock``."""
-        data = [asdict(t) for t in self._timers.values()]
+        """Mark dirty and schedule a flush. Caller must hold ``_lock``."""
+        if not self._dirty:
+            self._dirty = True
+            self._loop.call_soon_threadsafe(self._flush_persist)
+
+    def _flush_persist(self) -> None:
+        """Actually write timers to disk (runs on event loop)."""
+        with self._lock:
+            if not self._dirty:
+                return
+            data = [asdict(t) for t in self._timers.values()]
+            self._dirty = False
         json_save_atomic(self._state_file, data)
 
     def _load(self) -> None:

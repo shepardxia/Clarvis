@@ -49,8 +49,9 @@ class SceneManager:
                 b = sprite.bbox
                 scratch_c = self._scratch_chars
                 scratch_k = self._scratch_colors
-                scratch_c.fill(SPACE)
-                scratch_k.fill(0)
+                # Only clear the bbox region, not the full canvas
+                scratch_c[b.y : b.y2, b.x : b.x2].fill(SPACE)
+                scratch_k[b.y : b.y2, b.x : b.x2].fill(0)
                 sprite.render(scratch_c, scratch_k)
                 region = scratch_c[b.y : b.y2, b.x : b.x2]
                 mask = region != SPACE

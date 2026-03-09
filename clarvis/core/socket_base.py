@@ -92,7 +92,7 @@ class UnixSocketServer:
 
         Stops when the connection closes or *running* (if given) is cleared.
         """
-        buffer = b""
+        buffer = bytearray()
         try:
             while True:
                 if running is not None and not running.is_set():
@@ -100,9 +100,11 @@ class UnixSocketServer:
                 chunk = client.recv(4096)
                 if not chunk:
                     break
-                buffer += chunk
+                buffer.extend(chunk)
                 while b"\n" in buffer:
-                    line, buffer = buffer.split(b"\n", 1)
+                    idx = buffer.index(b"\n")
+                    line = bytes(buffer[:idx])
+                    del buffer[: idx + 1]
                     if line:
                         yield line.decode("utf-8")
         except (ConnectionResetError, BrokenPipeError, OSError):

@@ -41,6 +41,8 @@ class UserRegistry:
         self._lock = RLock()
         self._data: dict[str, Any] = {"users": {}}
         self._admin_user_ids: set[str] = set(admin_user_ids or [])
+        # Reverse index: (channel, user_id) → username for O(1) lookup
+        self._channel_index: dict[tuple[str, str], str] = {}
         self.load()
         self._migrate_roles()
 
@@ -52,11 +54,22 @@ class UserRegistry:
                 self._data = raw
             else:
                 self._data = {"users": {}}
+            self._rebuild_index()
 
     def save(self) -> bool:
         """Persist registry to disk atomically."""
         with self._lock:
             return json_save_atomic(self._path, self._data)
+
+    def _rebuild_index(self) -> None:
+        """Rebuild reverse index from data. Caller must hold lock."""
+        idx: dict[tuple[str, str], str] = {}
+        for username, profile in self._data.get("users", {}).items():
+            for channel, ch_info in profile.get("channels", {}).items():
+                uid = ch_info.get("user_id")
+                if uid:
+                    idx[(channel, uid)] = username
+        self._channel_index = idx
 
     @property
     def orgs(self) -> list[str]:
@@ -100,13 +113,14 @@ class UserRegistry:
         """Look up a user by their channel-specific ID.
 
         Returns the full user dict (names, affiliations, channels) or None.
+        Uses reverse index for O(1) lookup.
         """
         with self._lock:
-            for _username, profile in self._data.get("users", {}).items():
-                ch_info = profile.get("channels", {}).get(channel, {})
-                if ch_info.get("user_id") == user_id:
-                    return dict(profile)
-        return None
+            username = self._channel_index.get((channel, user_id))
+            if username is None:
+                return None
+            profile = self._data.get("users", {}).get(username)
+            return dict(profile) if profile else None
 
     def get_by_name(self, name: str) -> dict | None:
         """Look up a user by username key or any name in their names list.
@@ -146,6 +160,7 @@ class UserRegistry:
             if channel and channel_user_id:
                 channels = profile.setdefault("channels", {})
                 channels[channel] = {"user_id": channel_user_id}
+                self._channel_index[(channel, channel_user_id)] = username
             if "role" not in profile:
                 profile["role"] = self._role_for(profile)
             self.save()
@@ -157,16 +172,17 @@ class UserRegistry:
         entire user.  Returns the removed username, or None if not found.
         """
         with self._lock:
-            for username, profile in self._data.get("users", {}).items():
-                ch_info = profile.get("channels", {}).get(channel, {})
-                if ch_info.get("user_id") != user_id:
-                    continue
-                del profile["channels"][channel]
-                if not profile["channels"]:
-                    del self._data["users"][username]
-                self.save()
-                return username
-        return None
+            username = self._channel_index.pop((channel, user_id), None)
+            if username is None:
+                return None
+            profile = self._data.get("users", {}).get(username)
+            if profile is None:
+                return None
+            profile.get("channels", {}).pop(channel, None)
+            if not profile.get("channels"):
+                self._data["users"].pop(username, None)
+            self.save()
+            return username
 
     def is_registered(self, channel: str, user_id: str) -> bool:
         """Check if a user is registered for the given channel."""
@@ -212,11 +228,11 @@ class UserRegistry:
     def get_role(self, channel: str, user_id: str) -> str | None:
         """Look up a user's role by channel identity. Returns None if not registered."""
         with self._lock:
-            for _username, profile in self._data.get("users", {}).items():
-                ch_info = profile.get("channels", {}).get(channel, {})
-                if ch_info.get("user_id") == user_id:
-                    return profile.get("role", "user")
-        return None
+            username = self._channel_index.get((channel, user_id))
+            if username is None:
+                return None
+            profile = self._data.get("users", {}).get(username)
+            return profile.get("role", "user") if profile else None
 
     def set_role(self, username: str, role: str) -> bool:
         """Set role by username. Returns False if user not found."""

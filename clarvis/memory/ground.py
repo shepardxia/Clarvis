@@ -13,6 +13,7 @@ Composes session-start context from multiple layers in priority order:
 Falls back to mental-models-only if no grounding files exist (pre-first-checkin).
 """
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -103,14 +104,28 @@ async def build_memory_context(
     return f"<memory_context>\n{body}\n</memory_context>"
 
 
+_grounding_cache: dict[str, tuple[float, str]] = {}  # dir_path → (mtime, content)
+
+
 def _read_grounding_files(grounding_dir: Path) -> str:
     """Read all ``*.md`` files from grounding directory, sorted by name.
 
+    Caches result and only re-reads when directory mtime changes.
     Returns concatenated content, or empty string if directory doesn't exist
     or contains no markdown files.
     """
     if not grounding_dir.is_dir():
         return ""
+
+    dir_key = str(grounding_dir)
+    try:
+        dir_mtime = grounding_dir.stat().st_mtime
+    except OSError:
+        return ""
+
+    cached = _grounding_cache.get(dir_key)
+    if cached and cached[0] >= dir_mtime:
+        return cached[1]
 
     parts: list[str] = []
     for md_file in sorted(grounding_dir.glob("*.md")):
@@ -121,7 +136,9 @@ def _read_grounding_files(grounding_dir: Path) -> str:
         except Exception:
             logger.debug("Failed to read grounding file %s", md_file, exc_info=True)
 
-    return "\n\n".join(parts)
+    result = "\n\n".join(parts)
+    _grounding_cache[dir_key] = (dir_mtime, result)
+    return result
 
 
 async def _build_bank_section(
@@ -137,17 +154,51 @@ async def _build_bank_section(
     """
     bank_lines: list[str] = []
 
-    # Core models — always included.
-    core_models: list[dict] = []
-    try:
-        core_models = await store.list_mental_models(
-            bank,
-            tags=["core"],
-            tags_match="any",
-        )
-    except Exception:
-        logger.debug("Failed to list core models for bank %s", bank, exc_info=True)
+    # Fetch all independent data in parallel.
+    async def _core_models():
+        try:
+            return await store.list_mental_models(bank, tags=["core"], tags_match="any")
+        except Exception:
+            logger.debug("Failed to list core models for bank %s", bank, exc_info=True)
+            return []
 
+    async def _stats():
+        try:
+            return await store.get_bank_stats(bank)
+        except Exception:
+            logger.debug("Failed to get stats for bank %s", bank, exc_info=True)
+            return None
+
+    async def _facts():
+        try:
+            return await store.list_facts(bank, limit=10)
+        except Exception:
+            logger.debug("Failed to list facts for bank %s", bank, exc_info=True)
+            return {}
+
+    async def _observations():
+        try:
+            return await store.list_observations(bank, limit=5)
+        except Exception:
+            logger.debug("Failed to list observations for bank %s", bank, exc_info=True)
+            return []
+
+    async def _all_models():
+        try:
+            return await store.list_mental_models(bank, limit=50)
+        except Exception:
+            logger.debug("Failed to list models for bank %s", bank, exc_info=True)
+            return []
+
+    core_models, stats, fact_result, observations, all_models = await asyncio.gather(
+        _core_models(),
+        _stats(),
+        _facts(),
+        _observations(),
+        _all_models(),
+    )
+
+    # Core models — always included.
     for model in core_models:
         entry = _format_model(model)
         if entry:
@@ -155,53 +206,33 @@ async def _build_bank_section(
             chars_used += len(entry)
 
     # Bank stats — compact summary.
-    try:
-        stats = await store.get_bank_stats(bank)
-        if stats:
-            stat_parts = [f"{k}: {v}" for k, v in stats.items()]
-            stat_line = f"*Stats: {', '.join(stat_parts)}*"
-            if chars_used + len(stat_line) <= char_budget:
-                bank_lines.append(stat_line)
-                chars_used += len(stat_line)
-    except Exception:
-        logger.debug("Failed to get stats for bank %s", bank, exc_info=True)
+    if stats:
+        stat_parts = [f"{k}: {v}" for k, v in stats.items()]
+        stat_line = f"*Stats: {', '.join(stat_parts)}*"
+        if chars_used + len(stat_line) <= char_budget:
+            bank_lines.append(stat_line)
+            chars_used += len(stat_line)
 
     # Recent facts — latest experiences and world knowledge.
-    try:
-        result = await store.list_facts(bank, limit=10)
-        facts = result.get("items", []) if isinstance(result, dict) else []
-        if facts:
-            fact_lines = [_format_fact(f) for f in facts]
-            fact_lines = [x for x in fact_lines if x]
-            if fact_lines:
-                block = "**Recent facts**\n" + "\n".join(fact_lines)
-                if chars_used + len(block) <= char_budget:
-                    bank_lines.append(block)
-                    chars_used += len(block)
-    except Exception:
-        logger.debug("Failed to list facts for bank %s", bank, exc_info=True)
+    facts = fact_result.get("items", []) if isinstance(fact_result, dict) else []
+    if facts:
+        fact_lines = [x for x in (_format_fact(f) for f in facts) if x]
+        if fact_lines:
+            block = "**Recent facts**\n" + "\n".join(fact_lines)
+            if chars_used + len(block) <= char_budget:
+                bank_lines.append(block)
+                chars_used += len(block)
 
     # Recent observations — consolidated insights.
-    try:
-        observations = await store.list_observations(bank, limit=5)
-        if observations:
-            obs_lines = [_format_observation(o) for o in observations]
-            obs_lines = [x for x in obs_lines if x]
-            if obs_lines:
-                block = "**Recent observations**\n" + "\n".join(obs_lines)
-                if chars_used + len(block) <= char_budget:
-                    bank_lines.append(block)
-                    chars_used += len(block)
-    except Exception:
-        logger.debug("Failed to list observations for bank %s", bank, exc_info=True)
+    if observations:
+        obs_lines = [x for x in (_format_observation(o) for o in observations) if x]
+        if obs_lines:
+            block = "**Recent observations**\n" + "\n".join(obs_lines)
+            if chars_used + len(block) <= char_budget:
+                bank_lines.append(block)
+                chars_used += len(block)
 
     # Extra models — fill remaining budget.
-    try:
-        all_models = await store.list_mental_models(bank, limit=50)
-    except Exception:
-        logger.debug("Failed to list models for bank %s", bank, exc_info=True)
-        all_models = []
-
     core_ids = {m.get("id") for m in core_models}
     for model in all_models:
         if model.get("id") in core_ids:

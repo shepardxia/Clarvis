@@ -56,9 +56,9 @@ class HookProcessor:
         return {
             "session_id": session_id,
             "status": status,
-            "status_history": session.get("status_history", []).copy(),
-            "tool_history": session.get("tool_history", []).copy(),
-            "tool_outcomes": session.get("tool_outcomes", []).copy(),
+            "status_history": session.get("status_history", []),
+            "tool_history": session.get("tool_history", []),
+            "tool_outcomes": session.get("tool_outcomes", []),
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -103,7 +103,7 @@ class HookProcessor:
 
         Returns True if status was reset, False otherwise.
         """
-        status = self.state.get("status")
+        status = self.state.peek("status")
         if not status:
             return False
 

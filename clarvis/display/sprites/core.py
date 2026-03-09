@@ -62,16 +62,26 @@ class SpriteRegistry:
 
     def __init__(self):
         self._sprites: list[Sprite] = []
+        self._alive_cache: list[Sprite] | None = None
 
     def add(self, sprite: Sprite) -> None:
         self._sprites.append(sprite)
+        self._alive_cache = None
 
     def alive(self) -> list[Sprite]:
-        """Return living sprites sorted by priority (low → high)."""
-        return sorted(
+        """Return living sprites sorted by priority (low → high).
+
+        Cached between add/process_kills calls. Cache is invalidated
+        if any sprite has died since last build.
+        """
+        cache = self._alive_cache
+        if cache is not None and all(s.alive for s in cache):
+            return cache
+        self._alive_cache = sorted(
             (s for s in self._sprites if s.alive),
             key=lambda s: s.priority,
         )
+        return self._alive_cache
 
     def by_type[T: Sprite](self, cls: type[T]) -> list[T]:
         """Return living sprites of exact type cls."""
@@ -79,4 +89,7 @@ class SpriteRegistry:
 
     def process_kills(self) -> None:
         """Remove dead sprites from internal storage."""
+        before = len(self._sprites)
         self._sprites = [s for s in self._sprites if s.alive]
+        if len(self._sprites) != before:
+            self._alive_cache = None

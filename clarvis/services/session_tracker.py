@@ -31,7 +31,7 @@ class SessionTracker:
 
     def get(self, session_id: str) -> dict:
         """Get or create session data."""
-        sessions = self.state.get("sessions")
+        sessions = self.state.peek("sessions")
         if session_id not in sessions:
             sessions[session_id] = _default_session()
             self.state.update("sessions", sessions)
@@ -86,7 +86,7 @@ class SessionTracker:
     def cleanup_stale(self) -> None:
         """Remove sessions inactive for > TIMEOUT."""
         now = time.time()
-        sessions = self.state.get("sessions")
+        sessions = self.state.peek("sessions")
         active = {sid: data for sid, data in sessions.items() if now - data.get("last_seen", 0) < self.TIMEOUT}
         if len(active) != len(sessions):
             self.state.update("sessions", active)
@@ -95,8 +95,8 @@ class SessionTracker:
 
     def list_all(self) -> list[dict]:
         """List all tracked sessions."""
-        sessions = self.state.get("sessions")
-        status = self.state.get("status")
+        sessions = self.state.peek("sessions")
+        status = self.state.peek("status")
         displayed = status.get("session_id") if status else None
 
         return [
@@ -111,8 +111,8 @@ class SessionTracker:
 
     def get_details(self, session_id: str) -> dict:
         """Get detailed info for a specific session."""
-        sessions = self.state.get("sessions")
-        status = self.state.get("status")
+        sessions = self.state.peek("sessions")
+        status = self.state.peek("status")
         displayed = status.get("session_id") if status else None
 
         if session_id not in sessions:

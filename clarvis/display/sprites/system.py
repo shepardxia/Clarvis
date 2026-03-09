@@ -248,6 +248,10 @@ class WeatherSandbox(Sprite):
         # Ambient clouds
         self._ambient_clouds: list[Particle] = []
 
+        # Cached blocked cells from face sprites (rebuilt when face bbox changes)
+        self._blocked: set[tuple[int, int]] = set()
+        self._blocked_bbox: tuple[int, int, int, int] | None = None
+
         # Shape cache
         self._shape_cache: list[Shape] = []
         self._shape_offsets: np.ndarray | None = None
@@ -439,16 +443,26 @@ class WeatherSandbox(Sprite):
         )
         self._p_count += count
 
+    def _update_blocked(self) -> None:
+        """Rebuild blocked-cell set only when face bbox changes."""
+        if not self._scene_registry:
+            return
+        for s in self._scene_registry.alive():
+            if isinstance(s, FaceCel):
+                b = s.bbox
+                key = (b.x, b.y, b.w, b.h)
+                if key != self._blocked_bbox:
+                    self._blocked = {(x, y) for y in range(b.y, b.y2) for x in range(b.x, b.x2)}
+                    self._blocked_bbox = key
+                return
+        # No face sprite found
+        if self._blocked:
+            self._blocked = set()
+            self._blocked_bbox = None
+
     def render(self, out_chars: np.ndarray, out_colors: np.ndarray) -> None:
-        # Build exclusion set from face sprites in the registry
-        blocked: set[tuple[int, int]] = set()
-        if self._scene_registry:
-            for s in self._scene_registry.alive():
-                if isinstance(s, FaceCel):
-                    b = s.bbox
-                    for x in range(b.x, b.x2):
-                        for y in range(b.y, b.y2):
-                            blocked.add((x, y))
+        self._update_blocked()
+        blocked = self._blocked
         color = 15
         w, h = self._width, self._height
 

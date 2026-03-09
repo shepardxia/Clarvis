@@ -57,6 +57,8 @@ class ChannelManager:
         self._outbound_hooks: dict[str, OutboundHook] = {}
         self._voice_channel = None
         self._transcript_path = agent_home("factoria") / "transcript.jsonl"
+        self._transcript_buf: list[str] = []
+        self._transcript_flush_task: asyncio.Task | None = None
 
     @property
     def bus(self) -> MessageBus:
@@ -75,7 +77,7 @@ class ChannelManager:
         return self._state
 
     def _log_transcript(self, channel: str, chat_id: str, sender: str, content: str) -> None:
-        """Append a single turn to the JSONL transcript file."""
+        """Buffer a transcript entry and schedule flush."""
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "channel": channel,
@@ -83,11 +85,22 @@ class ChannelManager:
             "sender": sender,
             "content": content,
         }
+        self._transcript_buf.append(json.dumps(entry, ensure_ascii=False) + "\n")
+        if self._transcript_flush_task is None or self._transcript_flush_task.done():
+            self._transcript_flush_task = asyncio.create_task(self._flush_transcript())
+
+    async def _flush_transcript(self) -> None:
+        """Flush buffered transcript entries to disk after a short delay."""
+        await asyncio.sleep(1.0)
+        if not self._transcript_buf:
+            return
+        lines = self._transcript_buf.copy()
+        self._transcript_buf.clear()
         try:
             with self._transcript_path.open("a") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                f.writelines(lines)
         except OSError:
-            logger.debug("Failed to write transcript entry")
+            logger.debug("Failed to write transcript entries")
 
     async def send_to_agent(self, text: str) -> str:
         """Send to agent -- lock is internal to Agent._send_inner()."""
@@ -171,12 +184,10 @@ class ChannelManager:
         logger.info("ChannelManager handler started")
         while True:
             try:
-                msg = await asyncio.wait_for(self._bus.consume_inbound(), timeout=1.0)
+                msg = await self._bus.consume_inbound()
                 task = asyncio.create_task(self._handle(msg))
                 self._inflight.add(task)
                 task.add_done_callback(self._inflight.discard)
-            except asyncio.TimeoutError:
-                continue
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -281,7 +292,7 @@ class ChannelManager:
         """Dispatch outbound messages to the appropriate channel."""
         while True:
             try:
-                msg = await asyncio.wait_for(self._bus.consume_outbound(), timeout=1.0)
+                msg = await self._bus.consume_outbound()
                 channel = self._channels.get(msg.channel)
                 if channel:
                     try:
@@ -290,8 +301,6 @@ class ChannelManager:
                         logger.exception("Error sending to %s", msg.channel)
                 else:
                     logger.warning("Unknown channel: %s", msg.channel)
-            except asyncio.TimeoutError:
-                continue
             except asyncio.CancelledError:
                 break
 
@@ -335,6 +344,16 @@ class ChannelManager:
 
         if self._voice_channel:
             await self._voice_channel.stop()
+
+        # Flush any buffered transcript entries
+        if self._transcript_buf:
+            try:
+                with self._transcript_path.open("a") as f:
+                    f.writelines(self._transcript_buf)
+                self._transcript_buf.clear()
+            except OSError:
+                pass
+
         logger.info("ChannelManager stopped")
 
     def get_channel(self, name: str) -> Any:
