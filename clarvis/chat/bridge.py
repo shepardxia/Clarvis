@@ -123,6 +123,8 @@ class ChatBridge:
             if self._active_agent:
                 await self._active_agent.reset()
             self._send_to_client({"type": "session_reset"})
+            # Push fresh (empty) history so TUI syncs after reset
+            await self._handle_get_messages()
 
         elif mtype == "extension_ui_response":
             # Forward TUI's UI response to Pi stdin

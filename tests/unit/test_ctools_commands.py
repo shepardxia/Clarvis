@@ -29,7 +29,7 @@ def mock_memory():
         return_value={"results": [{"text": "likes dark roast coffee", "score": 0.9, "fact_type": "world"}]}
     )
     store.store_facts = AsyncMock(return_value=["id-1"])
-    store.update_fact = AsyncMock(return_value={"success": True, "old_id": "x", "new_ids": ["y"]})
+    store.update_fact = AsyncMock(return_value={"success": True, "fact_id": "abc"})
     store.delete_fact = AsyncMock(return_value={})
     store.list_facts = AsyncMock(return_value={"items": [], "total": 0})
     store.get_bank_stats = AsyncMock(return_value={"fact_count": 42})
@@ -145,6 +145,43 @@ class TestFactCRUD:
         assert "No memories found" in result
         mock_memory.list_facts.assert_called_once()
 
+    def test_get_fact(self, handlers, mock_memory):
+        mock_memory.get_fact = AsyncMock(
+            return_value={
+                "id": "f1",
+                "text": "likes jazz",
+                "fact_type": "opinion",
+                "confidence": 0.9,
+                "tags": ["music"],
+                "consolidated_at": None,
+            }
+        )
+        result = handlers.get_fact(id="f1")
+        assert "likes jazz" in result
+        assert "opinion" in result
+        assert "0.9" in result
+        assert "music" in result
+        assert "bank:parletre" in result
+        assert "Consolidated: no" in result
+
+    def test_get_fact_not_found(self, handlers, mock_memory):
+        mock_memory.get_fact = AsyncMock(return_value=None)
+        result = handlers.get_fact(id="nonexistent")
+        assert "not found" in result
+
+    def test_recall_shows_bank(self, handlers, mock_memory):
+        """Recall output should include the bank tag for disambiguation."""
+        result = handlers.recall_memory(query="coffee", bank="agora")
+        assert "[agora]" in result
+
+    def test_list_facts_shows_bank(self, handlers, mock_memory):
+        """List facts output should include bank tag."""
+        mock_memory.list_facts = AsyncMock(
+            return_value={"items": [{"id": "f1", "text": "a fact", "fact_type": "world"}], "total": 1}
+        )
+        result = handlers.list_facts(bank="agora")
+        assert "[agora]" in result
+
 
 # ── Memory: stats & audit ──────────────────────────────────────────
 
@@ -179,18 +216,70 @@ class TestObservations:
         result = handlers.get_observation(id="obs-1")
         assert "test obs" in result
 
+    def test_get_observation_shows_text_key(self, handlers, mock_memory):
+        """Engine returns 'text' key — verify it surfaces in get_observation output."""
+        mock_memory.get_observation = AsyncMock(
+            return_value={"id": "obs-1", "text": "observation via text key", "tags": ["t1"]}
+        )
+        result = handlers.get_observation(id="obs-1")
+        assert "observation via text key" in result
+
+    def test_list_observations_shows_text_content(self, handlers, mock_memory):
+        """Engine returns 'text' key — verify fmt_observations surfaces it."""
+        mock_memory.list_observations = AsyncMock(
+            return_value=[
+                {"id": "obs-1", "text": "first obs text", "tags": [], "source_memory_ids": ["f1", "f2"]},
+                {"id": "obs-2", "text": "second obs text", "tags": ["tag1"], "source_memory_ids": []},
+            ]
+        )
+        result = handlers.list_observations()
+        assert "first obs text" in result
+        assert "second obs text" in result
+        assert "2 sources" in result
+
     def test_related_observations(self, handlers, mock_memory):
         """Verifies N+1 fact lookup and aggregation into related_observations call."""
         handlers.related_observations(fact_ids=["f1", "f2"])
         assert mock_memory.get_fact.call_count == 2
         mock_memory.get_related_observations.assert_called_once()
 
-    def test_consolidate(self, handlers, mock_memory):
+    def test_consolidate_create_only(self, handlers, mock_memory):
+        """Create-only decisions should NOT fetch observations (no need for validation)."""
         result = handlers.consolidate(
             decisions=[{"action": "create", "text": "obs text", "source_fact_ids": ["f1"]}],
             fact_ids_to_mark=["f1"],
         )
         assert "1 created" in result
+        mock_memory.list_observations.assert_not_called()
+
+    def test_consolidate_update_fetches_related_observations(self, handlers, mock_memory):
+        """Update decisions must auto-fetch observations so valid_obs_ids is populated."""
+        mock_memory.list_observations = AsyncMock(return_value=[{"id": "obs-1", "text": "existing obs", "tags": []}])
+        mock_memory.apply_consolidation_decisions = AsyncMock(
+            return_value={"created": 0, "updated": 1, "deleted": 0, "marked": 1}
+        )
+        result = handlers.consolidate(
+            decisions=[{"action": "update", "text": "revised", "observation_id": "obs-1", "source_fact_ids": ["f2"]}],
+            fact_ids_to_mark=["f2"],
+        )
+        assert "1 updated" in result
+        mock_memory.list_observations.assert_called_once()
+        # Verify related_observations was passed (not None)
+        call_kwargs = mock_memory.apply_consolidation_decisions.call_args
+        assert call_kwargs.kwargs.get("related_observations") is not None
+
+    def test_consolidate_delete_fetches_related_observations(self, handlers, mock_memory):
+        """Delete decisions also need observation fetch for validation."""
+        mock_memory.list_observations = AsyncMock(return_value=[{"id": "obs-1", "text": "to delete", "tags": []}])
+        mock_memory.apply_consolidation_decisions = AsyncMock(
+            return_value={"created": 0, "updated": 0, "deleted": 1, "marked": 0}
+        )
+        result = handlers.consolidate(
+            decisions=[{"action": "delete", "observation_id": "obs-1"}],
+            fact_ids_to_mark=[],
+        )
+        assert "1 deleted" in result
+        mock_memory.list_observations.assert_called_once()
 
     def test_consolidate_invalid_decisions(self, handlers):
         result = handlers.consolidate(decisions=[{"bad": "data"}], fact_ids_to_mark=[])

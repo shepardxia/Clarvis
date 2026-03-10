@@ -44,14 +44,17 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 
 		case "tool_execution_start":
 			app.output.handleToolStart(
-				event.toolName as string,
-				event.toolInput as Record<string, unknown> | undefined,
+				(event.toolName ?? event.tool_name) as string,
+				(event.toolInput ?? event.tool_input) as Record<string, unknown> | undefined,
 			);
 			app.requestRender();
 			return;
 
 		case "tool_execution_end":
-			app.output.handleToolEnd(event.toolName as string, event.result);
+			app.output.handleToolEnd(
+				(event.toolName ?? event.tool_name) as string,
+				event.result,
+			);
 			app.requestRender();
 			return;
 
@@ -81,6 +84,12 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 			}
 			return;
 		}
+
+		case "session_reset":
+			app.output.clear();
+			app.output.handleInfo("[session reset]");
+			app.requestRender();
+			return;
 
 		case "response":
 			if (event.success === false) {

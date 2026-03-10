@@ -89,10 +89,6 @@ palette classic {
         creating { eyes=open mouth=smile border=star }
         inspired { eyes=sparkle mouth=grin border=star }
 
-        # Awaiting
-        waiting { eyes=open mouth=smile border=dotted }
-        curious { eyes=wide mouth=smile border=dotted }
-
         # Thinking (deep)
         pondering { eyes=open mouth=neutral border=medium corners=heavy substrate=thinking }
 
@@ -289,34 +285,6 @@ sequence reviewing {
     ]
 }
 
-sequence awaiting {
-    tags [classic]
-    define wait [ waiting waiting waiting ]
-    define glance_up [
-        {eyes=half mouth=smile border=dotted}
-        {eyes=half mouth=smile border=dotted}
-        waiting
-    ]
-    define curious_seq [
-        curious
-        {eyes=wide mouth=smile border=dotted_sparse}
-        waiting
-    ]
-    define hmm_seq [
-        {eyes=open mouth=open border=dotted}
-        {eyes=open mouth=open border=dotted_sparse}
-        waiting
-    ]
-    define border_shift [
-        {eyes=open mouth=smile border=dotted_sparse}
-        waiting
-    ]
-    frames [
-        $wait $wait $glance_up $wait $border_shift $wait
-        $curious_seq $wait $wait $hmm_seq $wait $glance_up $wait $border_shift $wait
-    ]
-}
-
 sequence resting {
     tags [classic]
     define sleep [ asleep asleep asleep asleep ]
@@ -420,5 +388,52 @@ sequence activated {
     ]
     frames [
         $alert_eyes $sparkle_burst $settle
+    ]
+}
+
+sequence listening {
+    tags [classic]
+    define attentive [
+        {eyes=wide mouth=open border=thick}
+        {eyes=wide mouth=open border=thick}
+    ]
+    define bright_flash [
+        {eyes=bright mouth=open border=thick}
+        {eyes=wide mouth=open border=thick}
+    ]
+    define soft_shift [
+        {eyes=wide mouth=smile border=medium}
+        {eyes=wide mouth=open border=thick}
+    ]
+    frames [
+        $attentive $bright_flash $attentive $soft_shift
+        $attentive $bright_flash $attentive
+    ]
+}
+
+sequence responding {
+    tags [classic]
+    define talk_open [
+        {eyes=open mouth=open border=medium}
+        {eyes=open mouth=smile border=medium}
+    ]
+    define talk_grin [
+        {eyes=bright mouth=grin border=medium}
+        {eyes=open mouth=open border=thin}
+    ]
+    define talk_pause [
+        {eyes=open mouth=smile border=thin}
+        {eyes=half mouth=smile border=thin}
+        {eyes=open mouth=open border=medium}
+    ]
+    define talk_expressive [
+        {eyes=bright mouth=grin border=medium}
+        {eyes=open mouth=open border=thin}
+        {eyes=open mouth=smile border=medium}
+        {eyes=bright mouth=open border=thin}
+    ]
+    frames [
+        $talk_open $talk_grin $talk_open $talk_pause
+        $talk_expressive $talk_open $talk_grin $talk_pause $talk_open
     ]
 }

@@ -28,7 +28,7 @@ class ColorDef:
 # =============================================================================
 
 # Each theme maps status names to ColorDef instances
-# Statuses: idle, resting, thinking, running, executing, awaiting, reading, writing, reviewing, offline
+# Statuses: idle, resting, thinking, running, executing, reading, writing, reviewing, offline
 # Special: eureka, celebration (triggered on task completion), activated (wake word detected)
 
 THEMES: dict[str, dict[str, ColorDef]] = {
@@ -39,7 +39,6 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "thinking": ColorDef(11, (1.0, 0.87, 0.0)),
         "running": ColorDef(10, (0.0, 1.0, 0.67)),
         "executing": ColorDef(208, (1.0, 0.5, 0.0)),  # orange - shell commands
-        "awaiting": ColorDef(12, (0.4, 0.5, 1.0)),
         "reading": ColorDef(51, (0.0, 0.9, 0.9)),  # cyan - absorbing info
         "writing": ColorDef(207, (1.0, 0.4, 0.8)),  # pink/magenta - creative
         "reviewing": ColorDef(13, (1.0, 0.0, 1.0)),
@@ -57,7 +56,6 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "thinking": ColorDef(214, (1.0, 0.7, 0.0)),  # bright amber
         "running": ColorDef(220, (1.0, 0.8, 0.2)),  # warm amber
         "executing": ColorDef(220, (1.0, 0.8, 0.2)),
-        "awaiting": ColorDef(178, (0.8, 0.6, 0.1)),  # mid amber
         "reading": ColorDef(178, (0.8, 0.6, 0.1)),
         "writing": ColorDef(214, (1.0, 0.7, 0.0)),
         "reviewing": ColorDef(220, (1.0, 0.8, 0.2)),
@@ -75,7 +73,6 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "thinking": ColorDef(46, (0.0, 1.0, 0.0)),  # bright green
         "running": ColorDef(118, (0.5, 1.0, 0.2)),  # lime green
         "executing": ColorDef(118, (0.5, 1.0, 0.2)),
-        "awaiting": ColorDef(34, (0.0, 0.7, 0.2)),  # mid green
         "reading": ColorDef(34, (0.0, 0.7, 0.2)),
         "writing": ColorDef(46, (0.0, 1.0, 0.0)),
         "reviewing": ColorDef(118, (0.5, 1.0, 0.2)),
@@ -93,7 +90,6 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "thinking": ColorDef(199, (1.0, 0.2, 0.6)),  # hot pink
         "running": ColorDef(51, (0.0, 1.0, 1.0)),  # electric cyan
         "executing": ColorDef(208, (1.0, 0.5, 0.2)),  # neon orange
-        "awaiting": ColorDef(33, (0.2, 0.4, 1.0)),  # electric blue
         "reading": ColorDef(51, (0.0, 1.0, 1.0)),  # electric cyan
         "writing": ColorDef(207, (1.0, 0.4, 0.8)),  # pink
         "reviewing": ColorDef(201, (1.0, 0.0, 1.0)),  # magenta
@@ -111,7 +107,6 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "thinking": ColorDef(117, (0.6, 0.7, 1.0)),  # light blue
         "running": ColorDef(71, (0.4, 0.8, 0.4)),  # green
         "executing": ColorDef(208, (0.9, 0.6, 0.2)),  # orange
-        "awaiting": ColorDef(137, (0.6, 0.5, 0.3)),  # brown
         "reading": ColorDef(80, (0.4, 0.7, 0.7)),  # cyan
         "writing": ColorDef(98, (0.6, 0.5, 0.8)),  # purple
         "reviewing": ColorDef(168, (0.8, 0.5, 0.5)),  # light red
@@ -129,7 +124,6 @@ THEMES: dict[str, dict[str, ColorDef]] = {
         "thinking": ColorDef(46, (0.0, 1.0, 0.0)),  # bright green
         "running": ColorDef(118, (0.6, 1.0, 0.0)),  # lime
         "executing": ColorDef(118, (0.6, 1.0, 0.0)),
-        "awaiting": ColorDef(35, (0.0, 0.8, 0.4)),  # teal green
         "reading": ColorDef(35, (0.0, 0.8, 0.4)),
         "writing": ColorDef(46, (0.0, 1.0, 0.0)),
         "reviewing": ColorDef(154, (0.7, 1.0, 0.3)),  # yellow-green

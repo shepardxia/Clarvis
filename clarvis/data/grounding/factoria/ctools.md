@@ -7,6 +7,7 @@ Run commands via `ctools <command> '<json params>'` in bash.
 ```bash
 ctools recall '{"query": "topic", "bank": "agora"}'
 ctools remember '{"text": "fact text", "bank": "agora"}'
+ctools get_fact '{"id": "...", "bank": "agora"}'
 ctools update_fact '{"fact_id": "...", "content": "new text", "bank": "agora"}'
 ctools forget '{"fact_id": "..."}'
 ctools list_facts '{"bank": "agora", "limit": 50}'
@@ -84,8 +85,26 @@ ctools get_channels '{}'
 
 When users send attachments (images, files) through Discord, they are downloaded to `~/.clarvis/media/`. Files are named `{attachment_id}_{filename}`. You can read or view these files using their full path when referenced in messages.
 
+## Consolidation Examples
+
+Create a new observation from related facts:
+```bash
+ctools consolidate '{"decisions": [{"action": "create", "text": "Summary text", "source_fact_ids": ["f1", "f2"]}], "fact_ids_to_mark": ["f1", "f2"], "bank": "agora"}'
+```
+
+Update an existing observation with new information:
+```bash
+ctools consolidate '{"decisions": [{"action": "update", "text": "Revised summary", "observation_id": "obs-1", "source_fact_ids": ["f3"]}], "fact_ids_to_mark": ["f3"], "bank": "agora"}'
+```
+
+Delete an outdated observation:
+```bash
+ctools consolidate '{"decisions": [{"action": "delete", "observation_id": "obs-1"}], "fact_ids_to_mark": [], "bank": "agora"}'
+```
+
 ## Notes
 
 - Always use `bank="agora"` for memory commands. Factoria has agora access only.
 - `fact_type` options: `world`, `experience`, `opinion`.
 - Timer `duration` accepts: `30s`, `5m`, `2h`, `1d`.
+- For JSON with special characters (quotes, newlines), pipe via stdin: `echo '{"text": "..."}' | ctools remember`

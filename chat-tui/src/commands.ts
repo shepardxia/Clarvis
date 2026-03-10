@@ -76,9 +76,10 @@ export function dispatchCommand(input: string, app: App): CommandResult {
 		return { handled: true };
 	}
 
-	// /new — sends new_session to chat socket
+	// /new — reset agent session and clear TUI
 	if (cmd === "new") {
 		app.chatClient.send({ type: "new_session" });
+		app.output.clear();
 		app.output.handleInfo("[session reset]");
 		app.requestRender();
 		return { handled: true };

@@ -5,7 +5,7 @@ READING_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS", "Noteboo
 WRITING_TOOLS = {"Write", "Edit", "NotebookEdit"}
 EXECUTING_TOOLS = {"Bash", "TodoWrite", "TodoRead"}
 THINKING_TOOLS = {"Task", "EnterPlanMode", "ExitPlanMode"}
-AWAITING_TOOLS = {"AskUserQuestion"}
+IDLE_TOOLS = {"AskUserQuestion"}
 
 READING_KEYWORDS = {"read", "get", "list", "find", "search", "fetch", "query", "inspect", "browse", "view"}
 WRITING_KEYWORDS = {"write", "create", "edit", "replace", "insert", "delete", "update", "add", "remove", "set"}
@@ -22,8 +22,8 @@ def classify_tool(tool_name: str) -> str:
         return "executing"
     if tool_name in THINKING_TOOLS:
         return "thinking"
-    if tool_name in AWAITING_TOOLS:
-        return "awaiting"
+    if tool_name in IDLE_TOOLS:
+        return "idle"
 
     if tool_name.startswith("mcp__"):
         lower = tool_name.lower()

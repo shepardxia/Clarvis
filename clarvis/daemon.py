@@ -531,7 +531,7 @@ class CentralHubDaemon:
             current = self.state.get("status")
             current_status = current.get("status", "idle") if current else "idle"
             if current_status == "activated":
-                self.state.update("status", {"status": "awaiting"}, force=True)
+                self.state.update("status", {"status": "idle"}, force=True)
 
         if self.ctx:
             self.ctx.loop.call_later(2.0, _revert)

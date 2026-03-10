@@ -29,7 +29,7 @@ def _make_store():
     type(s).ready = PropertyMock(return_value=True)
     s.visible_banks.return_value = ["parletre", "agora"]
     s.list_mental_models = AsyncMock(return_value=[])
-    s.get_bank_stats = AsyncMock(return_value={"total_facts": 10, "pending": 2})
+    s.get_bank_stats = AsyncMock(return_value={"node_counts": {"world": 7, "experience": 3}, "total_observations": 2})
     s.list_facts = AsyncMock(return_value={"items": [], "total": 0})
     s.list_observations = AsyncMock(return_value=[])
     return s
@@ -219,11 +219,13 @@ async def test_recent_items_in_context(tmp_path):
             [],  # agora
         ]
     )
-    store.get_bank_stats = AsyncMock(return_value={"total_facts": 42, "pending": 5})
+    store.get_bank_stats = AsyncMock(
+        return_value={"node_counts": {"world": 29, "experience": 13}, "total_observations": 5}
+    )
 
     result = await build_memory_context(store, "master", grounding_dir=gdir)
-    assert "Stats:" in result
-    assert "total_facts: 42" in result
+    assert "42 facts" in result
+    assert "29 world" in result
 
     # recent facts included with type and date
     store.list_mental_models = AsyncMock(

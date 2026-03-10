@@ -41,6 +41,17 @@ class ContextInjector:
         self._grounded = False
         self._last_ambient_ts: float = 0.0
 
+    @property
+    def memory(self) -> Any | None:
+        return self._memory
+
+    @property
+    def visibility(self) -> str:
+        return self._visibility
+
+    def mark_grounded(self) -> None:
+        self._grounded = True
+
     async def enrich(
         self,
         text: str,

@@ -207,9 +207,8 @@ async def _build_bank_section(
 
     # Bank stats — compact summary.
     if stats:
-        stat_parts = [f"{k}: {v}" for k, v in stats.items()]
-        stat_line = f"*Stats: {', '.join(stat_parts)}*"
-        if chars_used + len(stat_line) <= char_budget:
+        stat_line = _format_stats(bank, stats, len(all_models))
+        if stat_line and chars_used + len(stat_line) <= char_budget:
             bank_lines.append(stat_line)
             chars_used += len(stat_line)
 
@@ -246,6 +245,32 @@ async def _build_bank_section(
         chars_used += len(entry)
 
     return bank_lines
+
+
+def _format_stats(bank: str, stats: dict, model_count: int) -> str:
+    """Format bank stats as a compact one-liner.
+
+    Example: ``parletre: 48 facts (29 world, 14 experience), 5 observations, 3 models``
+    """
+    node_counts = stats.get("node_counts") or {}
+    total_obs = stats.get("total_observations", 0)
+
+    # Fact counts by type (exclude observations from node_counts)
+    fact_types = {k: v for k, v in node_counts.items() if k != "observation"}
+    total_facts = sum(fact_types.values())
+
+    parts: list[str] = []
+    if total_facts:
+        type_breakdown = ", ".join(f"{v} {k}" for k, v in sorted(fact_types.items(), key=lambda x: -x[1]))
+        parts.append(f"{total_facts} facts ({type_breakdown})")
+    if total_obs:
+        parts.append(f"{total_obs} observations")
+    if model_count:
+        parts.append(f"{model_count} models")
+
+    if not parts:
+        return ""
+    return f"*{bank}: {', '.join(parts)}*"
 
 
 def _format_model(model: dict) -> str:

@@ -11,6 +11,7 @@ import logging
 import signal
 import time
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -247,6 +248,40 @@ class Agent:
             await self.connect()
         if self.context:
             self.context.reset()
+
+        await self._inject_grounding()
+
+    async def _inject_grounding(self) -> None:
+        """Send memory context as first message after session reset."""
+        if not self.context or not self._connected:
+            return
+
+        from ..memory.ground import build_memory_context
+
+        memory = self.context.memory
+        visibility = self.context.visibility
+        if not memory or not memory.ready:
+            return
+
+        try:
+            ctx = await build_memory_context(memory, visibility)
+            if not ctx:
+                return
+
+            async with aclosing(self.send(ctx, owner="grounding")) as stream:
+                async for event in stream:
+                    if event.get("type") == "agent_end":
+                        break
+
+            # Mark grounded so ContextInjector doesn't re-inject
+            self.context.mark_grounded()
+            logger.info("Injected memory grounding for %s", self._session_key)
+        except Exception:
+            logger.warning(
+                "Failed to inject grounding for %s",
+                self._session_key,
+                exc_info=True,
+            )
 
     async def reload(self) -> None:
         """Reload agent prompts, skills, and extensions.

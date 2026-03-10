@@ -423,7 +423,7 @@ class MemoryStore:
         entities: list[str] | None = None,
         tags: list[str] | None = None,
     ) -> dict:
-        """Update a fact by delete-and-re-retain."""
+        """Update a fact in place, preserving its ID and all links."""
         self._validate_bank(bank)
         rc = self._rc()
 
@@ -431,19 +431,45 @@ class MemoryStore:
             return {"success": False, "message": "content is required for update"}
 
         old = await self._engine.get_memory_unit(bank, fact_id, request_context=rc)
-        await self._engine.delete_memory_unit(fact_id, request_context=rc)
+        if not old:
+            return {"success": False, "message": f"fact {fact_id} not found in {bank}"}
 
-        new_fact = FactInput(
-            fact_text=content,
-            fact_type=fact_type or (old.get("fact_type") if old else "world"),
-            entities=entities if entities is not None else (old.get("entities") if old else []) or [],
-            confidence=confidence if confidence is not None else (old.get("confidence") if old else None),
-            tags=tags or (old.get("tags") if old else []) or [],
-            document_id=old.get("document_id") if old else None,
-        )
+        new_text = content
+        new_type = fact_type or old.get("fact_type", "world")
+        new_confidence = confidence if confidence is not None else old.get("confidence")
+        new_tags = tags if tags is not None else (old.get("tags") or [])
 
-        new_ids = await self._retain_direct(bank, [new_fact])
-        return {"success": True, "old_id": fact_id, "new_ids": new_ids}
+        # Regenerate embedding for the updated text
+        from hindsight_api.engine.db_utils import acquire_with_retry
+        from hindsight_api.engine.memory_engine import fq_table
+        from hindsight_api.engine.retain import embedding_processing
+
+        embeddings = await embedding_processing.generate_embeddings_batch(self._engine.embeddings, [new_text])
+        new_embedding = embeddings[0]
+
+        pool = await self._engine._get_pool()
+        async with acquire_with_retry(pool) as conn:
+            async with conn.transaction():
+                updated = await conn.fetchval(
+                    f"""
+                    UPDATE {fq_table("memory_units")}
+                    SET text = $1, embedding = $2, fact_type = $3,
+                        confidence_score = $4, tags = $5
+                    WHERE id = $6 AND bank_id = $7
+                    RETURNING id
+                    """,
+                    new_text,
+                    str(new_embedding),
+                    new_type,
+                    new_confidence,
+                    new_tags,
+                    fact_id,
+                    bank,
+                )
+
+        if not updated:
+            return {"success": False, "message": f"UPDATE matched no rows for {fact_id}"}
+        return {"success": True, "fact_id": str(updated)}
 
     async def list_facts(
         self,
@@ -457,15 +483,104 @@ class MemoryStore:
         tags: list[str] | None = None,
     ) -> dict:
         self._validate_bank(bank)
-        return await self._engine.list_memory_units(
-            bank,
-            fact_type=fact_type,
-            search_query=search_query,
-            since=since,
-            limit=limit,
-            offset=offset,
-            request_context=self._rc(),
-        )
+        # Use engine directly when no unsupported params
+        if since is None and tags is None:
+            return await self._engine.list_memory_units(
+                bank,
+                fact_type=fact_type,
+                search_query=search_query,
+                limit=limit,
+                offset=offset,
+                request_context=self._rc(),
+            )
+        # Direct SQL for since/tags filtering
+        from hindsight_api.engine.db_utils import acquire_with_retry
+        from hindsight_api.engine.memory_engine import fq_table
+
+        conditions = ["bank_id = $1"]
+        params: list = [bank]
+        pc = 1
+
+        if fact_type:
+            pc += 1
+            conditions.append(f"fact_type = ${pc}")
+            params.append(fact_type)
+        if search_query:
+            pc += 1
+            conditions.append(f"(text ILIKE ${pc} OR context ILIKE ${pc})")
+            params.append(f"%{search_query}%")
+        if since:
+            pc += 1
+            conditions.append(f"mentioned_at >= ${pc}")
+            params.append(since)
+        if tags:
+            pc += 1
+            conditions.append(f"tags && ${pc}::varchar[]")
+            params.append(tags)
+
+        where = "WHERE " + " AND ".join(conditions)
+
+        pool = await self._engine._get_pool()
+        async with acquire_with_retry(pool) as conn:
+            total = (await conn.fetchrow(f"SELECT COUNT(*) as total FROM {fq_table('memory_units')} {where}", *params))[
+                "total"
+            ]
+
+            pc += 1
+            pc_limit = pc
+            params.append(limit)
+            pc += 1
+            params.append(offset)
+
+            rows = await conn.fetch(
+                f"""
+                SELECT id, text, event_date, context, fact_type, mentioned_at,
+                       occurred_start, occurred_end, chunk_id, proof_count, tags
+                FROM {fq_table("memory_units")} {where}
+                ORDER BY mentioned_at DESC NULLS LAST, created_at DESC
+                LIMIT ${pc_limit} OFFSET ${pc_limit + 1}
+                """,
+                *params,
+            )
+
+            # Entity mapping
+            entity_map: dict = {}
+            if rows:
+                unit_ids = [r["id"] for r in rows]
+                ue_rows = await conn.fetch(
+                    f"""
+                    SELECT ue.unit_id, e.canonical_name
+                    FROM {fq_table("unit_entities")} ue
+                    JOIN {fq_table("entities")} e ON ue.entity_id = e.id
+                    WHERE ue.unit_id = ANY($1::uuid[])
+                    """,
+                    unit_ids,
+                )
+                for r in ue_rows:
+                    entity_map.setdefault(r["unit_id"], []).append(r["canonical_name"])
+
+            items = []
+            for r in rows:
+                uid = r["id"]
+                entities = entity_map.get(uid, [])
+                items.append(
+                    {
+                        "id": str(uid),
+                        "text": r["text"],
+                        "context": r["context"] or "",
+                        "date": r["event_date"].isoformat() if r["event_date"] else "",
+                        "fact_type": r["fact_type"],
+                        "mentioned_at": r["mentioned_at"].isoformat() if r["mentioned_at"] else None,
+                        "occurred_start": r["occurred_start"].isoformat() if r["occurred_start"] else None,
+                        "occurred_end": r["occurred_end"].isoformat() if r["occurred_end"] else None,
+                        "entities": ", ".join(entities) if entities else "",
+                        "chunk_id": r["chunk_id"] or None,
+                        "proof_count": r["proof_count"] if r["proof_count"] is not None else 1,
+                        "tags": list(r["tags"]) if r["tags"] else [],
+                    }
+                )
+
+            return {"items": items, "total": total, "limit": limit, "offset": offset}
 
     async def get_fact(self, bank: str, fact_id: str) -> dict | None:
         self._validate_bank(bank)
@@ -831,7 +946,6 @@ class MemoryStore:
         *,
         tags: list[str] | None = None,
         tags_match: str = "any",
-        since: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -840,7 +954,6 @@ class MemoryStore:
             bank,
             tags=tags,
             tags_match=tags_match,
-            since=since,
             limit=limit,
             offset=offset,
             request_context=self._rc(),
@@ -920,15 +1033,74 @@ class MemoryStore:
         offset: int = 0,
     ) -> list[dict]:
         self._validate_bank(bank)
-        return await self._engine.list_mental_models_consolidated(
-            bank,
-            tags=tags,
-            tags_match=tags_match,
-            since=since,
-            limit=limit,
-            offset=offset,
-            request_context=self._rc(),
-        )
+        # Use engine directly when no unsupported params
+        if since is None:
+            return await self._engine.list_mental_models_consolidated(
+                bank,
+                tags=tags,
+                tags_match=tags_match,
+                limit=limit,
+                offset=offset,
+                request_context=self._rc(),
+            )
+        # Direct SQL for since filtering
+        import json
+
+        from hindsight_api.engine.db_utils import acquire_with_retry
+        from hindsight_api.engine.memory_engine import fq_table
+
+        pool = await self._engine._get_pool()
+        params: list = [bank, limit, offset]
+        tag_filter = ""
+        if tags:
+            if tags_match == "all":
+                tag_filter = " AND tags @> $4::varchar[]"
+            elif tags_match == "exact":
+                tag_filter = " AND tags = $4::varchar[]"
+            else:
+                tag_filter = " AND tags && $4::varchar[]"
+            params.append(tags)
+        pc = len(params)
+        pc += 1
+        since_filter = f" AND updated_at >= ${pc}"
+        params.append(since)
+
+        async with acquire_with_retry(pool) as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, bank_id, text, proof_count, history, tags,
+                       source_memory_ids, created_at, updated_at
+                FROM {fq_table("memory_units")}
+                WHERE bank_id = $1 AND fact_type = 'observation' {tag_filter}{since_filter}
+                ORDER BY updated_at DESC NULLS LAST
+                LIMIT $2 OFFSET $3
+                """,
+                *params,
+            )
+
+            results = []
+            for row in rows:
+                history = row["history"]
+                if isinstance(history, str):
+                    history = json.loads(history)
+                elif history is None:
+                    history = []
+                source_ids = row.get("source_memory_ids") or []
+                results.append(
+                    {
+                        "id": str(row["id"]),
+                        "bank_id": row["bank_id"],
+                        "text": row["text"],
+                        "proof_count": row["proof_count"] or 1,
+                        "history": history,
+                        "tags": row["tags"] or [],
+                        "source_memory_ids": [str(s) for s in source_ids],
+                        "source_memories": [],
+                        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                    }
+                )
+            return results
 
     async def get_observation(
         self,

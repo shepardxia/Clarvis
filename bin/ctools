@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # ctools — Agent CLI for Clarvis daemon services.
 # Usage: ctools <command> [json_params]
+#        ctools <command> - < file.json
+#        cat file.json | ctools <command> -
 # Example: ctools recall '{"query": "music taste"}'
 #          ctools timer '{"action": "set", "name": "tea", "duration": "5m"}'
 
@@ -55,14 +57,38 @@ fi
 # --- Execute command ---
 SOCKET="/tmp/clarvis-daemon.sock"
 METHOD="$1"
-EMPTY='{}'
-PARAMS="${2:-$EMPTY}"
 
-echo "{\"method\": \"$METHOD\", \"params\": $PARAMS}" \
+# Read params: from stdin if "-" flag or if stdin is piped (no second arg)
+if [[ "${2:-}" == "-" ]]; then
+    PARAMS="$(cat)"
+elif [[ -n "${2:-}" ]]; then
+    PARAMS="$2"
+elif [[ ! -t 0 ]]; then
+    PARAMS="$(cat)"
+else
+    PARAMS="{}"
+fi
+
+# Build single-line request JSON via Python (handles newlines, quotes, special chars)
+# then send to daemon and parse response
+"$PYTHON" -c "
+import sys, json
+
+method, params_raw = sys.argv[1], sys.argv[2]
+try:
+    params = json.loads(params_raw)
+except (json.JSONDecodeError, ValueError):
+    print(f'Invalid params JSON: {params_raw[:200]}', file=sys.stderr)
+    sys.exit(1)
+print(json.dumps({'method': method, 'params': params}))
+" "$METHOD" "$PARAMS" \
   | nc -U "$SOCKET" -w 5 \
   | "$PYTHON" -c "
 import sys, json
-data = json.load(sys.stdin)
+raw = sys.stdin.read().strip()
+if not raw:
+    print('No response from daemon', file=sys.stderr); sys.exit(1)
+data = json.loads(raw.split('\n')[0])
 if 'error' in data:
     print(data['error'], file=sys.stderr); sys.exit(1)
 r = data.get('result', '')

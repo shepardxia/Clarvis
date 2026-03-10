@@ -41,9 +41,9 @@ class HookProcessor:
         elif event == "UserPromptSubmit":
             status = "thinking"
         elif event == "Stop":
-            status = self._check_special_animation(session_id) or "awaiting"
+            status = self._check_special_animation(session_id) or "idle"
         elif event == "Notification":
-            status = "awaiting"
+            status = "idle"
         else:
             status = "idle"
 
@@ -110,8 +110,8 @@ class HookProcessor:
         timestamp_str = status.get("timestamp")
         current_status = status.get("status", "idle")
 
-        # Don't reset if already idle or awaiting (these are resting states)
-        if current_status in ("idle", "awaiting"):
+        # Don't reset if already idle (resting state)
+        if current_status == "idle":
             return False
 
         if not timestamp_str:

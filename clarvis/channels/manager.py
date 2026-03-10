@@ -76,13 +76,22 @@ class ChannelManager:
     def state(self) -> ChannelState:
         return self._state
 
-    def _log_transcript(self, channel: str, chat_id: str, sender: str, content: str) -> None:
+    def _log_transcript(
+        self,
+        channel: str,
+        chat_id: str,
+        sender: str,
+        content: str,
+        *,
+        sender_name: str = "",
+    ) -> None:
         """Buffer a transcript entry and schedule flush."""
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "channel": channel,
             "chat_id": chat_id,
             "sender": sender,
+            "sender_name": sender_name or sender,
             "content": content,
         }
         self._transcript_buf.append(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -237,7 +246,10 @@ class ChannelManager:
             msg.chat_id,
             enriched[:500],
         )
-        self._log_transcript(msg.channel, msg.chat_id, msg.sender_id, msg.content)
+        # Resolve sender name for transcript
+        user = self._registry.get_by_channel_id(msg.channel, msg.sender_id)
+        sender_name = user.get("_username", msg.sender_id) if user else msg.sender_id
+        self._log_transcript(msg.channel, msg.chat_id, msg.sender_id, msg.content, sender_name=sender_name)
 
         # 4. Memory + ambient grounding via ContextInjector
         enriched = await self._agent.enrich(enriched)

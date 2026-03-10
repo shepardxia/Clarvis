@@ -207,7 +207,7 @@ The daemon maps Claude's tool calls to semantic states:
 | Write, Edit | `writing` | Sparkle borders, talking |
 | Bash | `executing` | Focused dots, arrow pulse |
 | Task | `thinking` | Eyes drift, pondering |
-| AskUserQuestion | `awaiting` | Curious, watching |
+| AskUserQuestion | `idle` | Waiting for user input |
 
 ## Project Structure
 

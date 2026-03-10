@@ -53,7 +53,6 @@ class VoicePipelineState(enum.Enum):
     THINKING = "thinking"
     RESPONDING = "responding"
     COOLDOWN = "cooldown"
-    AWAITING = "awaiting"
 
 
 # Allowed transitions: state -> set of reachable next states.
@@ -61,10 +60,9 @@ _S = VoicePipelineState
 _TRANSITIONS: dict[VoicePipelineState, set[VoicePipelineState]] = {
     _S.IDLE: {_S.ACTIVATED},
     _S.ACTIVATED: {_S.LISTENING, _S.THINKING, _S.COOLDOWN},
-    _S.LISTENING: {_S.THINKING, _S.AWAITING, _S.COOLDOWN},
+    _S.LISTENING: {_S.THINKING, _S.COOLDOWN},
     _S.THINKING: {_S.RESPONDING, _S.COOLDOWN},
     _S.RESPONDING: {_S.COOLDOWN, _S.LISTENING, _S.THINKING},
-    _S.AWAITING: {_S.LISTENING, _S.COOLDOWN},
     _S.COOLDOWN: {_S.IDLE},
 }
 
@@ -74,7 +72,6 @@ _STATE_TO_STATUS: dict[VoicePipelineState, str] = {
     _S.LISTENING: "listening",
     _S.THINKING: "thinking",
     _S.RESPONDING: "responding",
-    _S.AWAITING: "awaiting",
 }
 
 
@@ -442,7 +439,6 @@ class VoiceCommandOrchestrator:
         #    prevent accidental interrupts between turns.
         while expects_reply and not self._interrupt.is_set():
             self.wake.mute()
-            self._transition(VoicePipelineState.AWAITING)
             self._play_sound("Pop")  # Audible cue: "I'm listening for your reply"
             self._transition(VoicePipelineState.LISTENING)
 

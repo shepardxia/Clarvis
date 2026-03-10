@@ -1,7 +1,7 @@
 """Memory formatting helpers — facts, models, observations, stats."""
 
 
-def fmt_facts(facts: list[dict]) -> str:
+def fmt_facts(facts: list[dict], *, bank: str | None = None) -> str:
     """Format a list of fact dicts into numbered lines."""
     if not facts:
         return "No results."
@@ -12,7 +12,12 @@ def fmt_facts(facts: list[dict]) -> str:
         content = fact.get("content") or fact.get("text") or fact.get("fact_text") or str(fact)
         confidence = fact.get("confidence")
         tags = fact.get("tags")
-        parts = [f"[{ftype}]" if ftype else "", content]
+        parts = []
+        if bank:
+            parts.append(f"[{bank}]")
+        if ftype:
+            parts.append(f"[{ftype}]")
+        parts.append(content)
         if confidence is not None:
             parts.append(f"(confidence: {confidence})")
         if tags:
@@ -23,7 +28,7 @@ def fmt_facts(facts: list[dict]) -> str:
 
 
 def fmt_mental_models(models: list[dict]) -> str:
-    """Format mental models into numbered lines."""
+    """Format mental models with full content."""
     if not models:
         return "No mental models."
     lines = []
@@ -31,15 +36,12 @@ def fmt_mental_models(models: list[dict]) -> str:
         mid = str(m.get("id", "?"))
         name = m.get("name", "unnamed")
         tags = m.get("tags", [])
-        content_preview = (m.get("content") or "")[:100]
-        if len(m.get("content", "")) > 100:
-            content_preview += "..."
-        parts = [f"[id:{mid}]", name]
-        if tags:
-            parts.append(f"[tags: {', '.join(tags)}]")
-        if content_preview:
-            parts.append(f'-- "{content_preview}"')
-        lines.append(f"  {i}. {' '.join(parts)}")
+        content = (m.get("content") or "").strip()
+        tag_str = f" [tags: {', '.join(tags)}]" if tags else ""
+        lines.append(f"  {i}. [id:{mid}] {name}{tag_str}")
+        if content:
+            for cline in content.splitlines():
+                lines.append(f"     {cline}")
     return "\n".join(lines)
 
 
@@ -50,11 +52,15 @@ def fmt_observations(observations: list[dict]) -> str:
     lines = []
     for i, obs in enumerate(observations, 1):
         oid = str(obs.get("id", "?"))
-        content = (obs.get("content") or obs.get("summary") or "")[:120]
-        if len(obs.get("content", obs.get("summary", ""))) > 120:
+        full = obs.get("text") or obs.get("content") or obs.get("summary") or ""
+        content = full[:120]
+        if len(full) > 120:
             content += "..."
         tags = obs.get("tags", [])
+        source_count = len(obs.get("source_memory_ids") or [])
         parts = [f"[id:{oid}]", content]
+        if source_count:
+            parts.append(f"({source_count} sources)")
         if tags:
             parts.append(f"[tags: {', '.join(tags)}]")
         lines.append(f"  {i}. {' '.join(parts)}")

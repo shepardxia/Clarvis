@@ -39,7 +39,8 @@
       "channels": true,
       "prompt_response": true,
       "memory": true
-    }
+    },
+    "thinking": "high"
   },
   "voice": {
     "enabled": true,
@@ -93,7 +94,9 @@
       "prompt_response": false,
       "memory": false
     },
-    "admin_user_ids": ["650197363591348250"],
+    "admin_user_ids": [
+      "650197363591348250"
+    ],
     "discord": {
       "enabled": true,
       "token": "",

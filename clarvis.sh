@@ -269,9 +269,14 @@ except Exception:
         ;;
     new)
         rm -f "$HOME/.clarvis/clarvis/session_id"
-        # Tell daemon to reset Clarvis agent session (best-effort)
-        echo '{"method":"reset_clarvis_session","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null || true
-        echo "Session reset — next voice/chat starts fresh"
+        # Tell daemon to reset Clarvis agent session
+        _reset_result=$(echo '{"method":"reset_clarvis_session","params":{}}' | nc -U /tmp/clarvis-daemon.sock 2>/dev/null)
+        if echo "$_reset_result" | grep -q '"result"'; then
+            echo "Session reset — next voice/chat starts fresh"
+        else
+            echo "Warning: daemon did not confirm reset (is clarvis running?)"
+            echo "Local session_id cleared — restart daemon to take effect"
+        fi
         ;;
     reload)
         # Reload agent prompts (CLAUDE.md, AGENTS.md, skills, extensions)

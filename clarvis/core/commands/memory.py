@@ -35,7 +35,7 @@ def recall_memory(
     results = result.get("results") or result.get("facts") or []
     if not results:
         return "No memories found."
-    return f"Results:\n{fmt_facts(results)}"
+    return f"Results:\n{fmt_facts(results, bank=bank)}"
 
 
 def remember_fact(
@@ -92,8 +92,7 @@ def update_fact(
     if isinstance(result, dict) and "error" in result:
         return result
     if result.get("success"):
-        new_ids = result.get("new_ids", [])
-        return f"Updated. Old: {id}, New: {', '.join(str(i) for i in new_ids)}"
+        return f"Updated fact {result.get('fact_id', id)} in place."
     return f"Update failed: {result.get('message', 'unknown error')}"
 
 
@@ -119,7 +118,34 @@ def list_facts(
     header = f"Showing {len(items)} of {total} facts"
     if fact_type:
         header += f" (type: {fact_type})"
-    return f"{header}:\n{fmt_facts(items)}"
+    return f"{header}:\n{fmt_facts(items, bank=bank)}"
+
+
+def get_fact(self: CommandHandlers, *, id: str, bank: str = "parletre", **kw) -> str | dict:
+    """Get a single fact with full metadata."""
+    result = self._mem_op(lambda s: s.get_fact(bank, id))
+    if isinstance(result, dict) and "error" in result:
+        return result
+    if result is None:
+        return f"Fact {id} not found in bank '{bank}'."
+    ftype = result.get("fact_type") or result.get("type") or ""
+    content = result.get("content") or result.get("text") or result.get("fact_text") or ""
+    confidence = result.get("confidence")
+    tags = result.get("tags", [])
+    consolidated = result.get("consolidated_at")
+    parts = [f"Fact [id:{id}] [bank:{bank}]"]
+    if ftype:
+        parts.append(f"Type: {ftype}")
+    parts.append(f"Content: {content}")
+    if confidence is not None:
+        parts.append(f"Confidence: {confidence}")
+    if tags:
+        parts.append(f"Tags: {', '.join(tags)}")
+    if consolidated:
+        parts.append(f"Consolidated: {consolidated}")
+    else:
+        parts.append("Consolidated: no")
+    return "\n".join(parts)
 
 
 # --- Stats & audit ---
@@ -258,7 +284,7 @@ def get_observation(
         return result
     if result is None:
         return f"Observation {id} not found."
-    content = result.get("content") or result.get("summary") or ""
+    content = result.get("text") or result.get("content") or result.get("summary") or ""
     tags = result.get("tags", [])
     parts = [f"Observation [id:{id}]:", content]
     if tags:
@@ -323,17 +349,30 @@ def consolidate(
         ]
     except (KeyError, TypeError) as exc:
         return {"error": f"Invalid decisions: {exc}"}
-    result = self._mem_op(lambda s: s.apply_consolidation_decisions(bank, parsed, fact_ids_to_mark))
+
+    needs_observations = any(d.action in ("update", "delete") for d in parsed)
+
+    async def _do(s):
+        related = None
+        if needs_observations:
+            related = await s.list_observations(bank, limit=500)
+        return await s.apply_consolidation_decisions(bank, parsed, fact_ids_to_mark, related_observations=related)
+
+    result = self._mem_op(_do)
     if isinstance(result, dict) and "error" in result:
         return result
     created = result.get("created", 0) if isinstance(result, dict) else 0
     updated = result.get("updated", 0) if isinstance(result, dict) else 0
     deleted = result.get("deleted", 0) if isinstance(result, dict) else 0
     marked = result.get("marked", 0) if isinstance(result, dict) else len(fact_ids_to_mark)
-    return (
+    skipped = result.get("skipped", 0) if isinstance(result, dict) else 0
+    msg = (
         f"Consolidation applied: {created} created, {updated} updated, "
         f"{deleted} deleted, {marked} facts marked as consolidated."
     )
+    if skipped:
+        msg += f" ({skipped} skipped — observation ID not found)"
+    return msg
 
 
 def stale_models(self: CommandHandlers, *, bank: str = "parletre", **kw) -> str | dict:
@@ -349,6 +388,7 @@ COMMANDS: dict[str, str] = {
     "remember": "remember_fact",
     "update_fact": "update_fact",
     "forget": "forget",
+    "get_fact": "get_fact",
     "list_facts": "list_facts",
     "stats": "stats",
     "audit": "audit",

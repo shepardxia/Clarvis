@@ -302,7 +302,6 @@ def test_production_cv_files():
         "executing",
         "running",
         "reviewing",
-        "awaiting",
         "resting",
         "offline",
     ]

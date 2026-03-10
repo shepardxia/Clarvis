@@ -32,7 +32,7 @@ const markdownTheme: MarkdownTheme = {
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 
 /** Compact mode: max lines of collapsible body to show */
-const COMPACT_LINES = 5;
+const COMPACT_LINES = 12;
 /** Detail mode: max lines of collapsible body to show */
 const DETAIL_LINES = 200;
 
@@ -351,8 +351,8 @@ function buildToolHeader(toolName: string, toolInput?: Record<string, unknown>):
 				return `${DIM}[ctools ${method}]${RESET}`;
 			}
 
-			const brief = cmd.length > 80 ? cmd.slice(0, 80) + "…" : cmd;
-			return `${DIM}$ ${brief}${RESET}`;
+			const brief = cmd.length > 120 ? cmd.slice(0, 120) + "…" : cmd;
+			return `${CYAN}$${RESET} ${DIM}${brief}${RESET}`;
 		}
 		case "Read":
 		case "read": {
@@ -369,47 +369,53 @@ function buildToolHeader(toolName: string, toolInput?: Record<string, unknown>):
 			const path = toolInput?.file_path as string | undefined;
 			return `${DIM}[writing ${path ?? "file"}]${RESET}`;
 		}
-		default:
-			return `${DIM}[${toolName}]${RESET}`;
+		default: {
+			// Show key input params for non-trivial tools
+			let detail = "";
+			if (toolInput) {
+				const keys = Object.keys(toolInput).slice(0, 2);
+				const parts = keys.map((k) => {
+					const v = toolInput![k];
+					const vs = typeof v === "string" ? v : JSON.stringify(v);
+					return vs && vs.length > 60 ? vs.slice(0, 60) + "…" : vs;
+				}).filter(Boolean);
+				if (parts.length > 0) detail = ` ${parts.join(" ")}`;
+			}
+			return `${DIM}[${toolName}]${detail}${RESET}`;
+		}
 	}
 }
 
-function extractResultLines(toolName: string, result: unknown): string[] {
-	// Bash: extract output string
-	if (toolName === "bash" || toolName === "Bash") {
-		const output = typeof result === "string"
-			? result
-			: (result as Record<string, unknown>)?.output as string | undefined;
-		if (!output) return [];
-		return output.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
-	}
+function extractResultLines(_toolName: string, result: unknown): string[] {
+	const text = extractResultText(result);
+	if (!text) return [];
+	return text.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
+}
 
-	// Pi tool result: try content[].text extraction
+/** Try all known result formats: string, {output}, {content[].text}, JSON fallback. */
+function extractResultText(result: unknown): string | null {
+	if (typeof result === "string") return result || null;
+
 	if (result && typeof result === "object" && !Array.isArray(result)) {
 		const r = result as Record<string, unknown>;
+
+		// Bash format: { output: "..." }
+		if (typeof r.output === "string" && r.output) return r.output;
+
+		// Pi/MCP format: { content: [{ type: "text", text: "..." }] }
 		if (Array.isArray(r.content)) {
 			const texts = (r.content as Array<Record<string, unknown>>)
 				.filter((c) => c.type === "text")
 				.map((c) => c.text as string);
-			if (texts.length > 0) {
-				return texts
-					.join("\n")
-					.split("\n")
-					.map((l) => `${DIM}  ${l}${RESET}`);
-			}
+			if (texts.length > 0) return texts.join("\n");
 		}
-	}
-
-	// String result
-	if (typeof result === "string") {
-		return result.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
 	}
 
 	// Fallback: JSON pretty-print
 	try {
 		const json = JSON.stringify(result, null, 2);
-		return json.split("\n").map((l) => `${DIM}  ${l}${RESET}`);
+		return json;
 	} catch {
-		return [`${DIM}  [result]${RESET}`];
+		return null;
 	}
 }
