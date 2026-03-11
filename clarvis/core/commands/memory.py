@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from . import CommandHandlers
-
 from ...formatters.memory import (
     fmt_bank_stats,
     fmt_facts,
@@ -14,6 +11,11 @@ from ...formatters.memory import (
     fmt_observations,
     fmt_stale_models,
 )
+
+if TYPE_CHECKING:
+    from . import CommandHandlers
+
+_CONSOLIDATION_OBS_LIMIT = 500  # max observations fetched for update/delete validation
 
 # --- Facts ---
 
@@ -25,6 +27,7 @@ def recall_memory(
     bank: str = "parletre",
     fact_type: str | None = None,
     tags: list[str] | None = None,
+    limit: int = 50,
     **kw,
 ) -> str | dict:
     """Search memory for facts matching a query."""
@@ -32,7 +35,7 @@ def recall_memory(
     result = self._mem_op(lambda s: s.recall(query, bank=bank, fact_type=fact_types, tags=tags))
     if isinstance(result, dict) and "error" in result:
         return result
-    results = result.get("results") or result.get("facts") or []
+    results = (result.get("results") or result.get("facts") or [])[:limit]
     if not results:
         return "No memories found."
     return f"Results:\n{fmt_facts(results, bank=bank)}"
@@ -214,14 +217,29 @@ def list_models(self: CommandHandlers, *, bank: str = "parletre", **kw) -> str |
 
 
 def search_models(
-    self: CommandHandlers, *, query: str, bank: str = "parletre", tags: list[str] | None = None, **kw
+    self: CommandHandlers,
+    *,
+    query: str,
+    bank: str = "parletre",
+    tags: list[str] | None = None,
+    tags_match: str = "any",
+    **kw,
 ) -> str | dict:
-    """Search mental models by query and optional tags."""
-    result = self._mem_op(lambda s: s.search_mental_models(query, bank=bank, tags=tags))
+    """Search mental models by query and optional tags (AND logic — both must match)."""
+    result = self._mem_op(lambda s: s.search_mental_models(query, bank=bank, tags=tags, tags_match=tags_match))
     if isinstance(result, dict) and "error" in result:
         return result
-    models = result.get("results", []) if isinstance(result, dict) else result
+    models = result.get("mental_models", []) if isinstance(result, dict) else result
     if not models:
+        if tags:
+            # Diagnose: was it the tags that narrowed to zero?
+            without_tags = self._mem_op(lambda s: s.search_mental_models(query, bank=bank))
+            if isinstance(without_tags, dict) and without_tags.get("mental_models"):
+                n = len(without_tags["mental_models"])
+                return (
+                    f"No models matched query + tags={tags} (tags_match={tags_match}). "
+                    f"{n} model(s) matched the query alone — try without tags."
+                )
         return "No matching mental models."
     return f"Matching models ({len(models)}):\n{fmt_mental_models(models)}"
 
@@ -332,7 +350,12 @@ def related_observations(self: CommandHandlers, *, fact_ids: list[str], bank: st
 
 
 def consolidate(
-    self: CommandHandlers, *, decisions: list[dict], fact_ids_to_mark: list[str], bank: str = "parletre", **kw
+    self: CommandHandlers,
+    *,
+    decisions: list[dict],
+    fact_ids_to_mark: list[str] | None = None,
+    bank: str = "parletre",
+    **kw,
 ) -> str | dict:
     """Apply consolidation decisions (create/update/delete observations)."""
     from clarvis.memory.store import ConsolidationDecision
@@ -350,12 +373,15 @@ def consolidate(
     except (KeyError, TypeError) as exc:
         return {"error": f"Invalid decisions: {exc}"}
 
+    if fact_ids_to_mark is None:
+        fact_ids_to_mark = list({fid for d in parsed for fid in d.source_fact_ids})
+
     needs_observations = any(d.action in ("update", "delete") for d in parsed)
 
     async def _do(s):
         related = None
         if needs_observations:
-            related = await s.list_observations(bank, limit=500)
+            related = await s.list_observations(bank, limit=_CONSOLIDATION_OBS_LIMIT)
         return await s.apply_consolidation_decisions(bank, parsed, fact_ids_to_mark, related_observations=related)
 
     result = self._mem_op(_do)

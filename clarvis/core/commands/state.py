@@ -40,16 +40,7 @@ def send_message(self: CommandHandlers, *, channel: str, chat_id: str, content: 
         return {"error": str(exc)}
 
 
-def get_channels(self: CommandHandlers, **kw) -> dict:
-    """List available channels and their status."""
-    mgr = self._get_service("channel_manager")
-    if mgr is None:
-        return {"error": "Channel manager not available"}
-    return mgr.get_status()
-
-
 COMMANDS: dict[str, str] = {
     "get_context": "get_context",
     "send_message": "send_message",
-    "get_channels": "get_channels",
 }

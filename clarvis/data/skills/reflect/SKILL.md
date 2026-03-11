@@ -46,44 +46,11 @@ Guidelines:
 
 ## Phase 3: Consolidate
 
-### Entity hierarchy
-
-The memory system has three levels of abstraction:
-- **Facts** — atomic units of knowledge (`remember`). Raw input.
-- **Observations** — consolidated summaries grouping related facts (`consolidate` with action `create`). Each observation tracks its source fact IDs.
-- **Mental models** — high-level structured knowledge (`create_model`). Authored by you, not auto-generated.
-
-### Consolidation workflow
-
 1. Check `stats` for the current state of each bank
 2. Run `unconsolidated` to find facts not yet grouped
 3. If fewer than 10 unconsolidated facts, skip consolidation
-4. Use `related_observations '{"fact_ids": [...]}' ` to find existing observations that overlap
+4. Use `related_observations` to find existing observations that cover the cluster
 5. Apply consolidation decisions via `consolidate`
-
-### Consolidation actions
-
-Each decision in the `decisions` array has an `action`:
-
-- **`create`** — New observation from a cluster of related facts.
-  ```json
-  {"action": "create", "text": "Summary of facts", "source_fact_ids": ["f1", "f2", "f3"]}
-  ```
-- **`update`** — Revise an existing observation with new source facts. Requires `observation_id`.
-  ```json
-  {"action": "update", "text": "Revised summary", "observation_id": "obs-1", "source_fact_ids": ["f4"]}
-  ```
-- **`delete`** — Remove an observation that's outdated or wrong. Requires `observation_id`.
-  ```json
-  {"action": "delete", "observation_id": "obs-1"}
-  ```
-
-### Order of operations
-
-1. **Create** new observations first (group fresh facts)
-2. **Update** existing observations if new facts add to them
-3. **Delete** observations only if they're clearly wrong or superseded
-4. Set `fact_ids_to_mark` to all fact IDs you've processed — marks them as consolidated
 
 ## Phase 4: Mental model review
 

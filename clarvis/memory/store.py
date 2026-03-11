@@ -440,6 +440,8 @@ class MemoryStore:
         new_tags = tags if tags is not None else (old.get("tags") or [])
 
         # Regenerate embedding for the updated text
+        import uuid as uuid_module
+
         from hindsight_api.engine.db_utils import acquire_with_retry
         from hindsight_api.engine.memory_engine import fq_table
         from hindsight_api.engine.retain import embedding_processing
@@ -463,7 +465,7 @@ class MemoryStore:
                     new_type,
                     new_confidence,
                     new_tags,
-                    fact_id,
+                    uuid_module.UUID(fact_id),
                     bank,
                 )
 
@@ -832,14 +834,20 @@ class MemoryStore:
 
             for obs in related_observations:
                 if isinstance(obs, dict):
-                    obs_obj = MemoryFact(**obs)
+                    # Enrich observation dicts for MemoryFact validation:
+                    # - observations lack fact_type (DB stores it but list_observations omits it)
+                    # - source_memory_ids → source_fact_ids (MemoryFact field name)
+                    enriched = {**obs, "fact_type": "observation"}
+                    if "source_memory_ids" in enriched:
+                        enriched.setdefault("source_fact_ids", enriched.pop("source_memory_ids"))
+                    obs_obj = MemoryFact(**enriched)
                     obs_objects.append(obs_obj)
                     valid_obs_ids.add(str(obs_obj.id))
                 else:
                     obs_objects.append(obs)
                     valid_obs_ids.add(str(obs.id))
 
-        created = updated = deleted = 0
+        created = updated = deleted = skipped = 0
 
         async with acquire_with_retry(pool) as conn:
             for d in decisions:
@@ -856,11 +864,13 @@ class MemoryStore:
                 elif d.action == "update":
                     if not d.observation_id:
                         logger.warning("[CONSOLIDATION L2] Rejected update -- no observation_id")
+                        skipped += 1
                         continue
                     if d.observation_id not in valid_obs_ids:
                         logger.warning(
                             "[CONSOLIDATION L2] Rejected update -- observation %s not in related set", d.observation_id
                         )
+                        skipped += 1
                         continue
                     source_uuids = [uuid_module.UUID(fid) for fid in d.source_fact_ids]
                     await _execute_update_action(
@@ -876,11 +886,13 @@ class MemoryStore:
                 elif d.action == "delete":
                     if not d.observation_id:
                         logger.warning("[CONSOLIDATION L2] Rejected delete -- no observation_id")
+                        skipped += 1
                         continue
                     if d.observation_id not in valid_obs_ids:
                         logger.warning(
                             "[CONSOLIDATION L2] Rejected delete -- observation %s not in related set", d.observation_id
                         )
+                        skipped += 1
                         continue
                     await _execute_delete_action(conn=conn, bank_id=bank, observation_id=d.observation_id)
                     deleted += 1
@@ -894,7 +906,7 @@ class MemoryStore:
                 )
                 marked += 1
 
-        return {"created": created, "updated": updated, "deleted": deleted, "marked": marked}
+        return {"created": created, "updated": updated, "deleted": deleted, "skipped": skipped, "marked": marked}
 
     # ── Mental Models ─────────────────────────────────────────────
 

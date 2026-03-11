@@ -34,7 +34,7 @@ def mock_memory():
     store.list_facts = AsyncMock(return_value={"items": [], "total": 0})
     store.get_bank_stats = AsyncMock(return_value={"fact_count": 42})
     store.list_mental_models = AsyncMock(return_value=[])
-    store.search_mental_models = AsyncMock(return_value={"results": []})
+    store.search_mental_models = AsyncMock(return_value={"mental_models": [], "count": 0})
     store.create_mental_model = AsyncMock(return_value={"id": "mm-1"})
     store.update_mental_model = AsyncMock(return_value={})
     store.delete_mental_model = AsyncMock(return_value={})
@@ -105,6 +105,15 @@ class TestRecallCommand:
         mock_memory.ready = False
         result = handlers.recall_memory(query="test")
         assert result == {"error": "Memory not available"}
+
+    def test_recall_limit(self, handlers, mock_memory):
+        """limit= truncates results after retrieval."""
+        mock_memory.recall = AsyncMock(
+            return_value={"results": [{"text": f"fact-{i}", "score": 0.9, "fact_type": "world"} for i in range(20)]}
+        )
+        result = handlers.recall_memory(query="test", limit=5)
+        # Should only show 5 facts, not 20
+        assert result.count("[world]") == 5
 
     def test_recall_when_no_store(self, loop):
         h = _make_handlers(loop)
@@ -202,6 +211,27 @@ class TestStatsAndAudit:
 
 
 class TestMentalModels:
+    def test_search_models_tags_match(self, handlers, mock_memory):
+        """tags_match parameter should be passed through to the store."""
+        mock_memory.search_mental_models.return_value = {
+            "mental_models": [{"id": "mm-1", "name": "Test", "content": "body", "tags": ["music"]}],
+            "count": 1,
+        }
+        handlers.search_models(query="test", tags=["music", "people"], tags_match="all")
+        mock_memory.search_mental_models.assert_called_once_with(
+            "test", bank="parletre", tags=["music", "people"], tags_match="all"
+        )
+
+    def test_search_models_empty_with_tags_diagnoses(self, handlers, mock_memory):
+        """When tags narrow to zero, a follow-up query-only search diagnoses the cause."""
+        mock_memory.search_mental_models.side_effect = [
+            {"mental_models": [], "count": 0},  # first call: query + tags
+            {"mental_models": [{"id": "mm-1", "name": "M"}], "count": 1},  # follow-up: query only
+        ]
+        result = handlers.search_models(query="test", tags=["nonexistent"])
+        assert "matched the query alone" in result
+        assert mock_memory.search_mental_models.call_count == 2
+
     def test_create_model(self, handlers, mock_memory):
         result = handlers.create_model(name="Test", content="body", source_query="q")
         assert "Created mental model 'Test'" in result
@@ -281,8 +311,70 @@ class TestObservations:
         assert "1 deleted" in result
         mock_memory.list_observations.assert_called_once()
 
+    def test_consolidate_observation_dict_to_memoryfact(self):
+        """Verify list_observations output can be converted to MemoryFact for apply_consolidation_decisions.
+
+        This is the exact shape returned by MemoryStore.list_observations() — the conversion
+        must add fact_type='observation' and map source_memory_ids → source_fact_ids.
+        """
+        from hindsight_api.engine.response_models import MemoryFact
+
+        # Real shape from list_observations (both SQL branch and engine branch)
+        obs_dict = {
+            "id": "e0852599-28dd-4a6b-bd71-7f1f051abd32",
+            "bank_id": "parletre",
+            "text": "Sinthome comrades known as of early 2026",
+            "proof_count": 3,
+            "history": [],
+            "tags": ["people"],
+            "source_memory_ids": ["f1-uuid", "f2-uuid", "f3-uuid"],
+            "source_memories": [],
+            "created_at": "2026-03-10T12:00:00+00:00",
+            "updated_at": "2026-03-10T14:00:00+00:00",
+        }
+        enriched = {**obs_dict, "fact_type": "observation"}
+        if "source_memory_ids" in enriched:
+            enriched.setdefault("source_fact_ids", enriched.pop("source_memory_ids"))
+        obj = MemoryFact(**enriched)
+        assert str(obj.id) == obs_dict["id"]
+        assert obj.fact_type == "observation"
+        assert obj.text == obs_dict["text"]
+        assert obj.source_fact_ids == ["f1-uuid", "f2-uuid", "f3-uuid"]
+        assert obj.tags == ["people"]
+
+    def test_consolidate_auto_derives_mark_ids(self, handlers, mock_memory):
+        """When fact_ids_to_mark is omitted, auto-derive from decisions' source_fact_ids."""
+        mock_memory.apply_consolidation_decisions = AsyncMock(
+            return_value={"created": 1, "updated": 0, "deleted": 0, "marked": 2}
+        )
+        result = handlers.consolidate(
+            decisions=[
+                {"action": "create", "text": "obs1", "source_fact_ids": ["f1", "f2"]},
+                {"action": "create", "text": "obs2", "source_fact_ids": ["f2", "f3"]},
+            ],
+        )
+        assert "created" in result
+        # Verify the auto-derived set {f1, f2, f3} was passed
+        call_args = mock_memory.apply_consolidation_decisions.call_args
+        mark_ids = call_args[0][2]  # positional arg: fact_ids_to_mark
+        assert set(mark_ids) == {"f1", "f2", "f3"}
+
+    def test_consolidate_explicit_mark_ids_override(self, handlers, mock_memory):
+        """Explicit fact_ids_to_mark should be used as-is, not auto-derived."""
+        mock_memory.apply_consolidation_decisions = AsyncMock(
+            return_value={"created": 1, "updated": 0, "deleted": 0, "marked": 1}
+        )
+        result = handlers.consolidate(
+            decisions=[{"action": "create", "text": "obs", "source_fact_ids": ["f1", "f2"]}],
+            fact_ids_to_mark=["f1"],
+        )
+        assert "created" in result
+        call_args = mock_memory.apply_consolidation_decisions.call_args
+        mark_ids = call_args[0][2]
+        assert mark_ids == ["f1"]
+
     def test_consolidate_invalid_decisions(self, handlers):
-        result = handlers.consolidate(decisions=[{"bad": "data"}], fact_ids_to_mark=[])
+        result = handlers.consolidate(decisions=[{"bad": "data"}])
         assert "error" in result
 
 
@@ -393,16 +485,6 @@ class TestTimerCommand:
         h = _make_handlers(loop)
         result = h.timer(action="list")
         assert result == {"error": "Timer service not available"}
-
-
-# ── Channels ───────────────────────────────────────────────────────
-
-
-class TestChannels:
-    def test_get_channels_when_no_manager(self, loop):
-        h = _make_handlers(loop)
-        result = h.get_channels()
-        assert result == {"error": "Channel manager not available"}
 
 
 # ── Core tools ─────────────────────────────────────────────────────

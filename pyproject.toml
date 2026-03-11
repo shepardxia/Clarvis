@@ -23,6 +23,7 @@ nanobuddy = { path = "../nanobuddy", editable = true }
 
 [project.scripts]
 clarvis = "clarvis.daemon:main"
+ctools = "clarvis.cli.ctools:main"
 
 [project.optional-dependencies]
 voice = ["claude-agent-sdk", "nanobuddy[detect]"]
