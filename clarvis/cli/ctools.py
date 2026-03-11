@@ -83,6 +83,28 @@ def coerce_value(value_str: str, spec: ParamSpec) -> Any:
         return value_str
 
 
+def _resolve_annotations(fn) -> dict[str, type]:
+    """Resolve string annotations individually, skipping unresolvable ones (e.g. TYPE_CHECKING imports)."""
+    hints = {}
+    ns = {**vars(typing), **__builtins__} if isinstance(__builtins__, dict) else {**vars(typing), **vars(__builtins__)}
+    # Add the function's module globals for any module-level names
+    mod = inspect.getmodule(fn)
+    if mod:
+        ns.update(vars(mod))
+    raw = fn.__annotations__ if hasattr(fn, "__annotations__") else {}
+    for name, ann in raw.items():
+        if name == "return":
+            continue
+        if isinstance(ann, str):
+            try:
+                hints[name] = eval(ann, ns)  # noqa: S307
+            except Exception:
+                pass
+        else:
+            hints[name] = ann
+    return hints
+
+
 def build_registry() -> dict[str, CommandSpec]:
     """Build command registry from domain module COMMANDS dicts and handler signatures."""
     from clarvis.core.commands import _DOMAIN_MODULES
@@ -99,7 +121,9 @@ def build_registry() -> dict[str, CommandSpec]:
             try:
                 hints = typing.get_type_hints(fn)
             except Exception:
-                hints = {}
+                # from __future__ import annotations + TYPE_CHECKING guards
+                # cause get_type_hints to fail. Resolve annotation strings manually.
+                hints = _resolve_annotations(fn)
 
             params = []
             for p in sig.parameters.values():
