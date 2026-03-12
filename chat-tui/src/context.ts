@@ -1,8 +1,8 @@
 /**
- * Message text extraction and context stripping utilities.
+ * Message text extraction and history rendering utilities.
  *
- * Handles extracting display text from Pi API messages and removing
- * injected context (memory grounding, ambient) from user messages.
+ * Handles extracting display text from Pi API messages and rendering
+ * conversation history with full tool context into the output log.
  */
 
 import type { OutputLog } from "./components/output-log.js";
@@ -20,31 +20,57 @@ export function extractText(msg: Record<string, unknown>): string {
 	return (msg.text as string) ?? "";
 }
 
-/** Strip injected context (memory grounding, ambient) from user messages */
-export function stripContext(text: string): string {
-	let stripped = text;
-	// Remove <memory_context>...</memory_context> blocks
-	stripped = stripped.replace(/<memory_context>[\s\S]*?<\/memory_context>/g, "");
-	// Remove ambient context lines (date/time, weather/location)
-	stripped = stripped.replace(/^\s*\w+day,\s+\w+\s+\d+,\s+\d+:\d+[ap]m\s*/im, "");
-	stripped = stripped.replace(/^\s*[\d.]+°?F\s+.*?\(.*?\)\s*/im, "");
-	return stripped.trim();
-}
-
-/** Render message history into the output log */
+/** Render message history into the output log, including tool context */
 export function renderHistory(output: OutputLog, messages: unknown[]): void {
 	output.clear();
 	for (const msg of messages) {
 		const m = msg as Record<string, unknown>;
 		const role = m.role as string;
-		const raw = extractText(m);
-		if (!raw) continue;
-		const text = role === "user" ? stripContext(raw) : raw;
-		if (!text) continue;
-		if (role === "user") {
-			output.appendUserMessage(text);
-		} else if (role === "assistant") {
-			output.appendMarkdown(text);
+		const content = m.content;
+
+		if (role === "assistant" && Array.isArray(content)) {
+			// Process content blocks: text blocks and tool_use blocks
+			let firstText = true;
+			for (const block of content) {
+				const b = block as Record<string, unknown>;
+				if (b.type === "text") {
+					const text = (b.text as string) ?? "";
+					if (!text) continue;
+					if (firstText) {
+						output.appendMarkdown(text);
+						firstText = false;
+					} else {
+						output.appendMarkdownContinuation(text);
+					}
+				} else if (b.type === "tool_use") {
+					const name = (b.name as string) ?? "tool";
+					const input = b.input as Record<string, unknown> | undefined;
+					output.handleToolStart(name, input);
+				}
+			}
+		} else if (role === "user" && Array.isArray(content)) {
+			// Process content blocks: text blocks and tool_result blocks
+			for (const block of content) {
+				const b = block as Record<string, unknown>;
+				if (b.type === "text") {
+					const text = (b.text as string) ?? "";
+					if (!text) continue;
+					output.appendUserMessage(text);
+				} else if (b.type === "tool_result") {
+					const name = (b.tool_name ?? b.name ?? "tool") as string;
+					const resultContent = b.content;
+					output.handleToolEnd(name, resultContent);
+				}
+			}
+		} else {
+			// Non-array content: simple text extraction
+			const raw = extractText(m);
+			if (!raw) continue;
+			if (role === "user") {
+				output.appendUserMessage(raw);
+			} else if (role === "assistant") {
+				output.appendMarkdown(raw);
+			}
 		}
 	}
 	output.append("");

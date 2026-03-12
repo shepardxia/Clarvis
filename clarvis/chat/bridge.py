@@ -50,6 +50,7 @@ class ChatBridge:
         self._client_task: asyncio.Task | None = None
         self._streaming_task: asyncio.Task | None = None
         self._prev_status: str | None = None
+        self._queued_messages: list[str] = []
 
     def start(self) -> None:
         """Start the chat socket server."""
@@ -76,6 +77,7 @@ class ChatBridge:
         self._writer = writer
         # Reset to default agent for each new connection
         self._active_agent = self._agents.get("clarvis")
+        self._queued_messages = []
         logger.info("Chat TUI connected")
 
         self._client_task = asyncio.current_task()
@@ -100,6 +102,7 @@ class ChatBridge:
                 await self._active_agent.interrupt()
             self._reader = None
             self._client_task = None
+            self._queued_messages = []
             logger.info("Chat TUI disconnected")
 
     async def _dispatch(self, msg: dict) -> None:
@@ -116,12 +119,15 @@ class ChatBridge:
             await self._handle_prompt(text)
 
         elif mtype == "abort":
-            if self._active_agent:
-                await self._active_agent.interrupt()
+            await self._handle_abort(steer=msg.get("steer", False))
+
+        elif mtype == "dequeue":
+            self._handle_dequeue()
 
         elif mtype == "new_session":
             if self._active_agent:
                 await self._active_agent.reset()
+            self._queued_messages = []
             self._send_to_client({"type": "session_reset"})
             # Push fresh (empty) history so TUI syncs after reset
             await self._handle_get_messages()
@@ -303,20 +309,15 @@ class ChatBridge:
             self._send_to_client({"type": "error", "message": str(exc)})
 
     async def _handle_prompt(self, text: str) -> None:
-        """Send a prompt to the agent, streaming events to the TUI."""
+        """Send a prompt to the agent, or queue if busy."""
         if not self._active_agent:
             self._send_to_client({"type": "error", "message": "No agent selected"})
             return
 
-        # Check if agent is busy
+        # If agent is busy, queue the message
         if self._active_agent.is_busy:
-            owner = self._active_agent.send_owner or "unknown"
-            self._send_to_client(
-                {
-                    "type": "error",
-                    "message": f"Agent busy ({owner} pipeline active)",
-                }
-            )
+            self._queued_messages.append(text)
+            self._send_to_client({"type": "queued", "messages": list(self._queued_messages)})
             return
 
         # Cancel any previous streaming task
@@ -324,6 +325,42 @@ class ChatBridge:
             self._streaming_task.cancel()
 
         self._streaming_task = asyncio.create_task(self._stream_prompt(text))
+
+    async def _handle_abort(self, *, steer: bool = False) -> None:
+        """Handle abort request — steer if queue non-empty, else abort."""
+        if not self._active_agent:
+            return
+
+        if steer and self._queued_messages:
+            combined = self._dequeue_all()
+            self._send_to_client({"type": "queued", "messages": []})
+            self._active_agent.steer(combined)
+            logger.info("Steered agent with queued messages")
+        else:
+            await self._do_abort()
+
+    def _handle_dequeue(self) -> None:
+        """Pop all queued messages and send back to TUI editor."""
+        if not self._queued_messages:
+            return
+        self._send_to_client({"type": "dequeued", "text": self._dequeue_all()})
+
+    def _dequeue_all(self) -> str:
+        """Pop all queued messages and return as combined string."""
+        combined = "\n\n".join(self._queued_messages)
+        self._queued_messages = []
+        return combined
+
+    async def _do_abort(self) -> None:
+        """Send abort to Pi + force-cancel streaming with timeout."""
+        if self._active_agent:
+            await self._active_agent.interrupt()
+        if self._streaming_task and not self._streaming_task.done():
+            self._streaming_task.cancel()
+            try:
+                await asyncio.wait_for(self._streaming_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
     async def _stream_prompt(self, text: str) -> None:
         """Stream a prompt through the agent to the TUI."""
@@ -347,11 +384,21 @@ class ChatBridge:
                         break
                     elif etype == "message_update":
                         self._push_status("responding")
+        except asyncio.CancelledError:
+            # Streaming was cancelled (abort or steer) — don't re-raise,
+            # the agent will handle the interrupt
+            logger.debug("Chat stream cancelled")
         except Exception as exc:
             logger.warning("Chat stream error: %s", exc)
             self._send_to_client({"type": "error", "message": str(exc)})
         finally:
             self._restore_status()
+
+        # After agent finishes, auto-send queued messages
+        if self._queued_messages:
+            combined = self._dequeue_all()
+            self._send_to_client({"type": "queued_sent", "text": combined})
+            self._streaming_task = asyncio.create_task(self._stream_prompt(combined))
 
     def _send_to_client(self, data: dict) -> None:
         """Send an NDJSON line to the connected TUI client."""

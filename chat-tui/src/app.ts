@@ -24,7 +24,7 @@ import { OutputLog } from "./components/output-log.js";
 import { PromptInput } from "./components/prompt-input.js";
 import { createLoader } from "./components/loading.js";
 import { FilterSelectDialog, InputDialog, SelectDialog } from "./components/dialogs.js";
-import { BOLD, DIM, RESET } from "./theme.js";
+import { BOLD, CYAN, DIM, RESET } from "./theme.js";
 
 const DIALOG_OVERLAY: OverlayOptions = {
 	anchor: "bottom-center",
@@ -42,6 +42,7 @@ export class App {
 	private loader: CancellableLoader | null = null;
 
 	isStreaming = false;
+	queuedMessages: string[] = [];
 
 	constructor(tui: TUI) {
 		this.tui = tui;
@@ -72,9 +73,30 @@ export class App {
 		this.root.clear();
 		this.root.addChild(this.output);
 		if (this.isStreaming && this.loader) this.root.addChild(this.loader);
+		if (this.queuedMessages.length > 0) {
+			this.root.addChild(this.queueDisplay);
+		}
 		this.root.addChild(this.prompt);
 		this.tui.setFocus(this.prompt.editor);
 		this.tui.requestRender();
+	}
+
+	private get queueDisplay(): Component {
+		const lines: string[] = [];
+		const rule = `${DIM}${"─".repeat(40)}${RESET}`;
+		lines.push(rule);
+		for (const msg of this.queuedMessages) {
+			lines.push(`${CYAN}❯${RESET} ${msg}`);
+		}
+		lines.push(`${DIM}❯ Press up to edit queued messages${RESET}`);
+		lines.push(rule);
+
+		// Create a simple component that renders static lines
+		return {
+			render(width: number): string[] {
+				return lines;
+			},
+		} as Component;
 	}
 
 	requestRender(full = false): void {
@@ -93,9 +115,18 @@ export class App {
 	}
 
 	abort(): void {
-		this.chatClient.send({ type: "abort" });
-		this.output.handleInfo("[aborted]");
+		if (this.queuedMessages.length > 0) {
+			this.chatClient.send({ type: "abort", steer: true });
+			this.output.handleInfo("[steering to queued message]");
+		} else {
+			this.chatClient.send({ type: "abort" });
+			this.output.handleInfo("[aborted]");
+		}
 		this.requestRender();
+	}
+
+	setLoadingMessage(msg: string): void {
+		this.loader?.setMessage(msg);
 	}
 
 	hideLoading(): void {
@@ -151,20 +182,28 @@ export class App {
 			this.loader.stop();
 			this.loader.dispose();
 		}
+		if (process.env.TERM_PROGRAM === "iTerm.app") {
+			process.stdout.write("\x1b]50;SetProfile=Default\x07");
+		}
 		this.tui.stop();
 		this.chatClient.disconnect();
 		process.exit(0);
 	}
 
 	async start(agent?: string): Promise<void> {
+		this.tui.start();
+		this.tui.terminal.clearScreen();
+
+		if (process.env.TERM_PROGRAM === "iTerm.app") {
+			process.stdout.write("\x1b]50;SetProfile=ClarvisChat\x07");
+		}
+
 		const agentLabel = agent ? ` (${agent})` : "";
 		this.output.append(`${BOLD}Clarvis Chat${agentLabel}${RESET}`);
 		this.output.append(
 			`${DIM}Type a message and press Enter. Esc to abort, Esc×2 to rewind, Ctrl+L to expand tool output, Ctrl+D to quit.${RESET}`,
 		);
 		this.output.append("");
-
-		this.tui.start();
 
 		try {
 			await this.chatClient.connect();
@@ -206,6 +245,13 @@ export class App {
 			this.prompt.editor.setText("");
 			this.prompt.editor.addToHistory(trimmed);
 
+			// If streaming, queue the message instead of sending
+			if (this.isStreaming) {
+				this.chatClient.send({ type: "prompt", message: trimmed });
+				// Bridge will queue it and send back a "queued" event
+				return;
+			}
+
 			const result = dispatchCommand(trimmed, this);
 			if (!result.handled) {
 				this.output.appendUserMessage(trimmed);
@@ -235,6 +281,12 @@ export class App {
 						escResetTimer = setTimeout(() => { escPressCount = 0; }, 600);
 					}
 				}
+				return { consume: true };
+			}
+
+			// Up arrow with empty editor + queued messages → dequeue
+			if (matchesKey(data, "up") && this.queuedMessages.length > 0 && !this.prompt.editor.getText()) {
+				this.chatClient.send({ type: "dequeue" });
 				return { consume: true };
 			}
 

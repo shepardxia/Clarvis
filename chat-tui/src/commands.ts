@@ -14,7 +14,7 @@ import type { SlashCommand } from "@mariozechner/pi-tui";
 import { DaemonClient } from "./daemon-client.js";
 import type { App } from "./app.js";
 import { type RewindEntry, RewindDialog } from "./components/dialogs.js";
-import { extractText, stripContext } from "./context.js";
+import { extractText } from "./context.js";
 
 export type CommandResult =
 	| { handled: true }
@@ -124,8 +124,7 @@ export async function handleRewind(app: App): Promise<void> {
 		}
 
 		const entries: RewindEntry[] = messages.map((m) => {
-			const raw = extractText(m);
-			const text = (m.role === "user" ? stripContext(raw) : raw).trim();
+			const text = extractText(m).trim();
 			return {
 				entryId: m.entryId as string,
 				role: m.role as string,
@@ -282,10 +281,13 @@ function showHelp(app: App): void {
 		"  /help        Show this help",
 		"  /quit        Exit",
 		"",
-		"  Esc          Abort current response",
-		"  Esc×2        Rewind / fork",
+		"  Esc          Steer agent (if queued) / abort",
+		"  Esc×2        Rewind / fork (when idle)",
+		"  Up           Edit queued message (when busy)",
 		"  Ctrl+L       Toggle expanded tool output",
 		"  Ctrl+D       Exit",
+		"",
+		"Messages sent while busy are queued and auto-sent when done.",
 	];
 	for (const line of lines) {
 		app.output.handleInfo(line);

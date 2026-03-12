@@ -29,6 +29,7 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 			if (evt?.type === "text_delta") {
 				if (!app.output.hasActiveResponse) {
 					app.output.startResponseBlock();
+					app.setLoadingMessage("Responding...");
 				}
 				app.output.handleTextDelta(evt.delta as string);
 				app.requestRender();
@@ -42,19 +43,23 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 			return;
 		}
 
-		case "tool_execution_start":
+		case "tool_execution_start": {
+			const toolName = (event.toolName ?? event.tool_name) as string;
 			app.output.handleToolStart(
-				(event.toolName ?? event.tool_name) as string,
-				(event.toolInput ?? event.tool_input) as Record<string, unknown> | undefined,
+				toolName,
+				(event.toolInput ?? event.tool_input ?? event.args) as Record<string, unknown> | undefined,
 			);
+			app.setLoadingMessage(`Running ${toolName}...`);
 			app.requestRender();
 			return;
+		}
 
 		case "tool_execution_end":
 			app.output.handleToolEnd(
 				(event.toolName ?? event.tool_name) as string,
 				event.result,
 			);
+			app.setLoadingMessage("Thinking...");
 			app.requestRender();
 			return;
 
@@ -82,6 +87,28 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 				renderHistory(app.output, messages);
 				app.requestRender();
 			}
+			return;
+		}
+
+		case "queued":
+			app.queuedMessages = (event.messages as string[]) ?? [];
+			app.rebuildLayout();
+			return;
+
+		case "dequeued": {
+			const text = (event.text as string) ?? "";
+			app.queuedMessages = [];
+			app.prompt.editor.setText(text);
+			app.rebuildLayout();
+			return;
+		}
+
+		case "queued_sent": {
+			// Queued messages were auto-sent after agent finished
+			const sent = (event.text as string) ?? "";
+			app.queuedMessages = [];
+			if (sent) app.output.appendUserMessage(sent);
+			app.rebuildLayout();
 			return;
 		}
 

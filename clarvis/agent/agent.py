@@ -299,6 +299,10 @@ class Agent:
             return
         self._send_command({"type": "abort"})
 
+    def steer(self, text: str) -> None:
+        """Interrupt current run and redirect agent to new message."""
+        self._send_command({"type": "steer", "message": text})
+
     def forward_ui_response(self, response: dict) -> None:
         """Forward an extension UI response to Pi."""
         self._send_command(response)

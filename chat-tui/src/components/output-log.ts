@@ -35,6 +35,8 @@ const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 const COMPACT_LINES = 12;
 /** Detail mode: max lines of collapsible body to show */
 const DETAIL_LINES = 200;
+/** Trailing cursor shown during streaming responses */
+const STREAM_CURSOR = "_";
 
 // ============================================================================
 // Block — unified output element
@@ -45,6 +47,7 @@ interface BlockOptions {
 	collapsible?: boolean;
 	rich?: boolean;
 	style?: (line: string) => string;
+	indent?: boolean;
 }
 
 /**
@@ -63,6 +66,7 @@ class Block {
 	readonly collapsible: boolean;
 	readonly rich: boolean;
 	readonly style: ((line: string) => string) | null;
+	readonly indent: boolean;
 
 	private md: Markdown | null = null;
 	private buffer = "";
@@ -73,6 +77,7 @@ class Block {
 		this.collapsible = opts.collapsible ?? false;
 		this.rich = opts.rich ?? false;
 		this.style = opts.style ?? null;
+		this.indent = opts.indent ?? false;
 		if (this.rich) {
 			this.md = new Markdown("", 0, 0, markdownTheme);
 		}
@@ -81,6 +86,11 @@ class Block {
 	/** Append streaming text to the buffer */
 	write(text: string): void {
 		this.buffer += text;
+		this.md?.setText(this.buffer + STREAM_CURSOR);
+	}
+
+	/** Remove the trailing stream cursor after streaming ends */
+	finalize(): void {
 		this.md?.setText(this.buffer);
 	}
 
@@ -103,13 +113,17 @@ class Block {
 
 	render(width: number, detailMode: boolean): string[] {
 		const result: string[] = [];
+		const prefix = this.indent ? "  " : "";
+		const contentWidth = this.indent ? width - 2 : width;
 
 		if (this.header !== null) {
-			result.push(truncateToWidth(this.header, width));
+			result.push(prefix + truncateToWidth(this.header, contentWidth));
 		}
 
 		if (this.md) {
-			result.push(...this.md.render(width));
+			for (const line of this.md.render(contentWidth)) {
+				result.push(prefix + line);
+			}
 		} else {
 			const body = this.bodyLines;
 			if (body.length > 0) {
@@ -119,11 +133,11 @@ class Block {
 				const max = Math.min(body.length, cap);
 				for (let i = 0; i < max; i++) {
 					const styled = this.style ? this.style(body[i]) : body[i];
-					result.push(truncateToWidth(styled, width));
+					result.push(prefix + truncateToWidth(styled, contentWidth));
 				}
 				const remaining = body.length - max;
 				if (remaining > 0) {
-					result.push(`${DIM}  [+${remaining} lines — Ctrl+L to expand]${RESET}`);
+					result.push(`${prefix}${DIM}[+${remaining} lines — Ctrl+L to expand]${RESET}`);
 				}
 			}
 		}
@@ -133,16 +147,20 @@ class Block {
 
 	renderPlain(width: number): string[] {
 		const result: string[] = [];
+		const prefix = this.indent ? "  " : "";
+		const contentWidth = this.indent ? width - 2 : width;
 
 		if (this.header !== null) {
-			result.push(stripAnsi(this.header));
+			result.push(prefix + stripAnsi(this.header));
 		}
 
 		if (this.md) {
-			result.push(...this.md.render(width).map(stripAnsi));
+			for (const line of this.md.render(contentWidth)) {
+				result.push(prefix + stripAnsi(line));
+			}
 		} else {
 			for (const line of this.bodyLines) {
-				result.push(stripAnsi(line));
+				result.push(prefix + stripAnsi(line));
 			}
 		}
 
@@ -166,6 +184,7 @@ export class OutputLog implements Component {
 
 	/** Append a raw styled line */
 	append(line: string): void {
+		this.streaming?.finalize();
 		this.streaming = null;
 		const block = new Block();
 		block.setLines([line]);
@@ -175,20 +194,26 @@ export class OutputLog implements Component {
 	/** Append a user message with styled prefix */
 	appendUserMessage(text: string): void {
 		this.append("");
-		this.append(`${GREEN}${BOLD}${this.userLabel}:${RESET}`);
+		this.append(`${GREEN}${BOLD}${this.userLabel.toUpperCase()}:${RESET}`);
 		this.pushRich(text);
 	}
 
 	/** Append a complete Markdown block (for history replay) */
 	appendMarkdown(text: string): void {
 		this.append("");
-		this.append(`${BLUE}${BOLD}${this.agentLabel}:${RESET}`);
+		this.append(`${BLUE}${BOLD}${this.agentLabel.toUpperCase()}:${RESET}`);
+		this.pushRich(text);
+	}
+
+	/** Append a continuation Markdown block without agent label (for history replay) */
+	appendMarkdownContinuation(text: string): void {
 		this.pushRich(text);
 	}
 
 	/** Clear all output */
 	clear(): void {
 		this.blocks = [];
+		this.streaming?.finalize();
 		this.streaming = null;
 		this.pendingTools = [];
 	}
@@ -230,8 +255,8 @@ export class OutputLog implements Component {
 	/** Start a new agent response block — creates a streaming Markdown block */
 	startResponseBlock(): void {
 		this.append("");
-		this.append(`${BLUE}${BOLD}${this.agentLabel}:${RESET}`);
-		this.streaming = new Block({ rich: true });
+		this.append(`${BLUE}${BOLD}${this.agentLabel.toUpperCase()}:${RESET}`);
+		this.streaming = new Block({ rich: true, indent: true });
 		this.push(this.streaming);
 	}
 
@@ -241,7 +266,7 @@ export class OutputLog implements Component {
 			this.streaming.write(delta);
 		} else {
 			// After tool output — start a new markdown block (continuation, no header)
-			this.streaming = new Block({ rich: true });
+			this.streaming = new Block({ rich: true, indent: true });
 			this.streaming.write(delta);
 			this.push(this.streaming);
 		}
@@ -256,6 +281,7 @@ export class OutputLog implements Component {
 				header: `${DIM}${ITALIC}[thinking]${RESET}`,
 				collapsible: true,
 				style: (l) => `${DIM}${ITALIC}${l}${RESET}`,
+				indent: true,
 			});
 			this.streaming.write(delta);
 			this.push(this.streaming);
@@ -263,10 +289,12 @@ export class OutputLog implements Component {
 	}
 
 	handleToolStart(toolName: string, toolInput?: Record<string, unknown>): void {
+		this.streaming?.finalize();
 		this.streaming = null;
 		const block = new Block({
 			header: buildToolHeader(toolName, toolInput),
 			collapsible: true,
+			indent: true,
 		});
 		this.pendingTools.push(block);
 		this.push(block);
@@ -282,6 +310,7 @@ export class OutputLog implements Component {
 			const block = new Block({
 				header: `${DIM}[${toolName}]${RESET}`,
 				collapsible: true,
+				indent: true,
 			});
 			block.setLines(lines);
 			this.push(block);
@@ -289,23 +318,33 @@ export class OutputLog implements Component {
 	}
 
 	handleAgentEnd(): void {
+		this.streaming?.finalize();
 		this.streaming = null;
 		this.append("");
 	}
 
 	handleError(message: string): void {
-		this.append(`${RED}${BOLD}Error:${RESET} ${message}`);
+		this.appendIndented(`${RED}${BOLD}Error:${RESET} ${message}`);
 	}
 
 	handleInfo(message: string): void {
-		this.append(`${YELLOW}${message}${RESET}`);
+		this.appendIndented(`${YELLOW}${message}${RESET}`);
 	}
 
 	// -- Private helpers --
 
+	private appendIndented(line: string): void {
+		this.streaming?.finalize();
+		this.streaming = null;
+		const block = new Block({ indent: true });
+		block.setLines([line]);
+		this.push(block);
+	}
+
 	private pushRich(text: string): void {
-		const block = new Block({ rich: true });
+		const block = new Block({ rich: true, indent: true });
 		block.write(text);
+		block.finalize();
 		this.push(block);
 	}
 
