@@ -16,17 +16,16 @@ def build_ambient_context(state, include_paused: bool = False) -> str:
 
     Returns formatted lines: time, weather (+location), now-playing.
     """
-    getter = state.get if hasattr(state, "get") else (lambda _: {})
     parts: list[str] = []
 
     # Time
-    time_state = getter("time")
+    time_state = state.get("time")
     ts = _time_summary(time_state)
     parts.append(ts or datetime.now().astimezone().strftime("%A %H:%M"))
 
     # Weather + location
-    ws = _weather_summary(getter("weather"))
-    loc = _location_summary(getter("location"))
+    ws = _weather_summary(state.get("weather"))
+    loc = _location_summary(state.get("location"))
     if ws:
         parts.append(f"{ws} ({loc})" if loc else ws)
     elif loc:

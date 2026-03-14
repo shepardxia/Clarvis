@@ -104,28 +104,14 @@ async def build_memory_context(
     return f"<memory_context>\n{body}\n</memory_context>"
 
 
-_grounding_cache: dict[str, tuple[float, str]] = {}  # dir_path → (mtime, content)
-
-
 def _read_grounding_files(grounding_dir: Path) -> str:
     """Read all ``*.md`` files from grounding directory, sorted by name.
 
-    Caches result and only re-reads when directory mtime changes.
     Returns concatenated content, or empty string if directory doesn't exist
     or contains no markdown files.
     """
     if not grounding_dir.is_dir():
         return ""
-
-    dir_key = str(grounding_dir)
-    try:
-        dir_mtime = grounding_dir.stat().st_mtime
-    except OSError:
-        return ""
-
-    cached = _grounding_cache.get(dir_key)
-    if cached and cached[0] >= dir_mtime:
-        return cached[1]
 
     parts: list[str] = []
     for md_file in sorted(grounding_dir.glob("*.md")):
@@ -136,9 +122,7 @@ def _read_grounding_files(grounding_dir: Path) -> str:
         except Exception:
             logger.debug("Failed to read grounding file %s", md_file, exc_info=True)
 
-    result = "\n\n".join(parts)
-    _grounding_cache[dir_key] = (dir_mtime, result)
-    return result
+    return "\n\n".join(parts)
 
 
 async def _build_bank_section(

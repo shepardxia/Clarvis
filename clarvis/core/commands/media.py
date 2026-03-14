@@ -74,7 +74,7 @@ def timer(
         return {"error": f"Unknown action: {action}"}
 
 
-COMMANDS: dict[str, str] = {
-    "spotify": "spotify",
-    "timer": "timer",
-}
+COMMANDS: list[str] = [
+    "spotify",
+    "timer",
+]

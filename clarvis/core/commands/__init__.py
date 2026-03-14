@@ -2,7 +2,7 @@
 
 Splits handlers into domain modules (memory, knowledge, media, agent, state).
 Each module defines standalone functions that take ``self`` as a CommandHandlers
-instance. This ``__init__`` binds them as methods and registers with the IPC server.
+instance. ``register_all`` binds them directly to the IPC server.
 """
 
 from typing import TYPE_CHECKING, Any, Callable
@@ -18,17 +18,9 @@ from . import knowledge as _knowledge
 from . import media as _media
 from . import memory as _memory
 from . import state as _state
+from . import web as _web
 
-_DOMAIN_MODULES = [_memory, _knowledge, _media, _agent, _state]
-
-
-def _bind(fn, handlers):
-    """Create a closure that binds a domain function to a CommandHandlers instance."""
-
-    def wrapper(**kw):
-        return fn(handlers, **kw)
-
-    return wrapper
+_DOMAIN_MODULES = [_memory, _knowledge, _media, _agent, _state, _web]
 
 
 class CommandHandlers:
@@ -52,11 +44,6 @@ class CommandHandlers:
         self.command_server = command_server
         self._services = services or {}
 
-        # Bind all domain functions as instance methods
-        for mod in _DOMAIN_MODULES:
-            for _ipc_name, fn_name in mod.COMMANDS.items():
-                setattr(self, fn_name, _bind(getattr(mod, fn_name), self))
-
     def register_all(self) -> None:
         """Register all command handlers with the IPC server."""
         reg = self.command_server.register
@@ -67,8 +54,16 @@ class CommandHandlers:
 
         # Register all domain commands
         for mod in _DOMAIN_MODULES:
-            for ipc_name, fn_name in mod.COMMANDS.items():
-                reg(ipc_name, getattr(self, fn_name))
+            for name in mod.COMMANDS:
+                fn = getattr(mod, name)
+
+                def _make_handler(_fn=fn):
+                    def handler(**kw):
+                        return _fn(self, **kw)
+
+                    return handler
+
+                reg(name, _make_handler())
 
     def _get_service(self, name: str):
         """Get a service by name from the services dict."""

@@ -5,7 +5,7 @@ Element registry - discovers, loads, and caches YAML element definitions.
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
@@ -42,8 +42,6 @@ class ElementRegistry:
         self.paths = [Path(p) for p in paths]
         self._elements: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
-        self._listeners: list[Callable[[str, str], None]] = []
-        self._shorthands: dict | None = None
 
     def load_all(self) -> None:
         """Discover and load all YAML files from element paths."""
@@ -70,10 +68,9 @@ class ElementRegistry:
             # e.g., elements/eyes/normal.yaml -> kind='eyes', name='normal'
             kind, name = self._parse_path(file_path)
 
-            # Expand sequences and shorthands for animations
+            # Expand sequences for animations
             if kind == "animations" and "frames" in data:
                 data = self._expand_sequences(data)
-                data = self._expand_shorthands(data)
 
             # Store with kind as key
             if kind not in self._elements:
@@ -143,86 +140,6 @@ class ElementRegistry:
         result["frames"] = expanded_frames
         return result
 
-    def _load_shorthands(self) -> dict:
-        """
-        Load shorthands definition file (cached).
-
-        Returns:
-            Dict with 'eyes', 'mouth', 'border', 'corners', 'presets' mappings.
-        """
-        if self._shorthands is not None:
-            return self._shorthands
-
-        # Look for _shorthands.yaml in animations directory
-        for base_path in self.paths:
-            shorthand_file = base_path / "animations" / "_shorthands.yaml"
-            if shorthand_file.exists():
-                try:
-                    with open(shorthand_file, "r") as f:
-                        self._shorthands = yaml.safe_load(f) or {}
-                        return self._shorthands
-                except (yaml.YAMLError, IOError):
-                    pass
-
-        self._shorthands = {}
-        return self._shorthands
-
-    def _expand_shorthands(self, data: dict) -> dict:
-        """
-        Expand shorthand names in animation frames.
-
-        Supports:
-        - Component shorthands: { eyes: "open" } -> { eyes: "◕" }
-        - Frame presets: "happy" -> { eyes: "◕", mouth: "◡", border: "─" }
-
-        Example YAML:
-            frames:
-              - happy                           # Preset expands to full frame
-              - { eyes: "open", mouth: "smile" }  # Component shorthands expand
-              - { eyes: "◕", mouth: "◡" }       # Already Unicode, unchanged
-        """
-        shorthands = self._load_shorthands()
-        if not shorthands:
-            return data
-
-        frames = data.get("frames", [])
-        if not frames:
-            return data
-
-        presets = shorthands.get("presets", {})
-        component_maps = {
-            "eyes": shorthands.get("eyes", {}),
-            "mouth": shorthands.get("mouth", {}),
-            "border": shorthands.get("border", {}),
-            "corners": shorthands.get("corners", {}),
-        }
-
-        expanded_frames = []
-        for frame in frames:
-            if isinstance(frame, str):
-                # Check if it's a preset name (not a sequence reference)
-                if not frame.startswith("$") and frame in presets:
-                    expanded_frames.append(dict(presets[frame]))
-                else:
-                    # Unknown string, keep as-is
-                    expanded_frames.append(frame)
-            elif isinstance(frame, dict):
-                # Expand component shorthands in dict
-                expanded_frame = {}
-                for key, value in frame.items():
-                    if key in component_maps and isinstance(value, str):
-                        # Try to expand shorthand, fall back to original
-                        expanded_frame[key] = component_maps[key].get(value, value)
-                    else:
-                        expanded_frame[key] = value
-                expanded_frames.append(expanded_frame)
-            else:
-                expanded_frames.append(frame)
-
-        result = dict(data)
-        result["frames"] = expanded_frames
-        return result
-
     def _parse_path(self, file_path: Path) -> tuple[str, str]:
         """
         Parse file path to extract kind and name.
@@ -264,38 +181,3 @@ class ElementRegistry:
         """
         with self._lock:
             return self._elements.get(kind, {}).get(name)
-
-    def get_all(self, kind: str) -> dict[str, Any]:
-        """
-        Get all elements of a given kind.
-
-        Args:
-            kind: Element category
-
-        Returns:
-            Dict mapping names to element definitions
-        """
-        with self._lock:
-            return dict(self._elements.get(kind, {}))
-
-    def list_names(self, kind: str) -> list[str]:
-        """List all element names for a given kind."""
-        with self._lock:
-            return list(self._elements.get(kind, {}).keys())
-
-    def on_change(self, callback: Callable[[str, str], None]) -> None:
-        """
-        Register a callback for element changes.
-
-        Args:
-            callback: Function called with (kind, name) when an element changes
-        """
-        self._listeners.append(callback)
-
-    def _notify_listeners(self, kind: str, name: str) -> None:
-        """Notify all listeners of an element change."""
-        for listener in self._listeners:
-            try:
-                listener(kind, name)
-            except Exception as e:
-                logger.warning("Listener error on %s/%s: %s", kind, name, e)

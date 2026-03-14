@@ -89,18 +89,3 @@ class StateStore:
         with self._lock:
             data = self._state.get(section, {})
             return dict(data)
-
-
-# Global instance for singleton access
-_store_instance: StateStore | None = None
-_store_lock = threading.Lock()
-
-
-def get_state_store() -> StateStore:
-    """Get or create the global StateStore instance."""
-    global _store_instance
-    if _store_instance is None:
-        with _store_lock:
-            if _store_instance is None:
-                _store_instance = StateStore()
-    return _store_instance

@@ -98,27 +98,6 @@ def _fmt_search_results(results: list[dict]) -> str:
     return f"Results ({len(results)}):\n" + "\n".join(lines)
 
 
-_SEARCH_TYPE_MAP: dict[str, Any] = {}  # populated lazily on first kg_search
-
-
-def _get_search_type_map() -> dict[str, Any]:
-    if not _SEARCH_TYPE_MAP:
-        from cognee.api.v1.search import SearchType
-
-        _SEARCH_TYPE_MAP.update(
-            {
-                "graph_completion": SearchType.GRAPH_COMPLETION,
-                "chunks": SearchType.CHUNKS,
-                "summaries": SearchType.SUMMARIES,
-                "rag_completion": SearchType.RAG_COMPLETION,
-                "graph_summary_completion": SearchType.GRAPH_SUMMARY_COMPLETION,
-                "natural_language": SearchType.NATURAL_LANGUAGE,
-                "triplet_completion": SearchType.TRIPLET_COMPLETION,
-            }
-        )
-    return _SEARCH_TYPE_MAP
-
-
 # ── MemoryStore ────────────────────────────────────────────────────────
 
 
@@ -266,10 +245,6 @@ class MemoryStore:
     @property
     def kg_ready(self) -> bool:
         return self._kg_ready
-
-    @property
-    def engine(self) -> Any:
-        return self._engine
 
     # ── Helpers ────────────────────────────────────────────────────
 
@@ -1311,11 +1286,9 @@ class MemoryStore:
     ) -> list[dict[str, Any]] | str:
         """Search the knowledge graph."""
         import cognee
-
-        st_map = _get_search_type_map()
         from cognee.api.v1.search import SearchType
 
-        st = st_map.get(search_type, SearchType.GRAPH_COMPLETION)
+        st = getattr(SearchType, search_type.upper(), SearchType.GRAPH_COMPLETION)
         kwargs: dict[str, Any] = {
             "query_text": query,
             "query_type": st,

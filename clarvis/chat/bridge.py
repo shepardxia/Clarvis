@@ -368,14 +368,13 @@ class ChatBridge:
         if not agent:
             return
 
-        # No context injection for chat — user sees exactly what's sent
-        enriched = text
-
-        # Push thinking status
-        self._save_and_push_status("thinking")
+        # Save current status so we can restore after streaming
+        current = self._state.get("status") or {}
+        self._prev_status = current.get("status", "idle")
+        self._set_status("thinking")
 
         try:
-            async with aclosing(agent.send(enriched, owner="chat")) as stream:
+            async with aclosing(agent.send(text, owner="chat")) as stream:
                 async for event in stream:
                     self._send_to_client(event)
 
@@ -383,7 +382,7 @@ class ChatBridge:
                     if etype == "agent_end":
                         break
                     elif etype == "message_update":
-                        self._push_status("responding")
+                        self._set_status("responding")
         except asyncio.CancelledError:
             # Streaming was cancelled (abort or steer) — don't re-raise,
             # the agent will handle the interrupt
@@ -392,7 +391,9 @@ class ChatBridge:
             logger.warning("Chat stream error: %s", exc)
             self._send_to_client({"type": "error", "message": str(exc)})
         finally:
-            self._restore_status()
+            if self._prev_status is not None:
+                self._set_status(self._prev_status)
+                self._prev_status = None
 
         # After agent finishes, auto-send queued messages
         if self._queued_messages:
@@ -410,27 +411,12 @@ class ChatBridge:
         except Exception:
             logger.debug("Failed to write to chat client")
 
-    def _save_and_push_status(self, status: str) -> None:
-        """Save current status and push a new one for the chat session."""
-        current = self._state.get("status") or {}
-        self._prev_status = current.get("status", "idle")
-        current["status"] = status
-        self._state.update("status", current)
-
-    def _push_status(self, status: str) -> None:
-        """Update display status without saving the previous."""
+    def _set_status(self, status: str) -> None:
+        """Update the display status."""
         current = self._state.get("status") or {}
         if current.get("status") != status:
             current["status"] = status
             self._state.update("status", current)
-
-    def _restore_status(self) -> None:
-        """Restore the status saved before the chat session started."""
-        if self._prev_status is not None:
-            current = self._state.get("status") or {}
-            current["status"] = self._prev_status
-            self._state.update("status", current)
-            self._prev_status = None
 
     async def _disconnect_client(self) -> None:
         """Disconnect the current client."""

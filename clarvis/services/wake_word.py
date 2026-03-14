@@ -5,7 +5,7 @@ Leaf dependency of channels.voice.orchestrator.
 """
 
 import logging
-from typing import Any, Callable
+from typing import Any
 
 from ..display.config import WakeWordConfig
 
@@ -18,17 +18,11 @@ class WakeWordService:
 
     def __init__(
         self,
-        state_store: Any = None,
         config: WakeWordConfig | None = None,
-        bus: Any | None = None,
-        on_detected: Callable[[], None] | None = None,
-        on_audio_lost: Callable[[str], None] | None = None,
+        bus: Any = None,
     ):
-        self.state_store = state_store
         self.config = config or WakeWordConfig()
         self._bus = bus
-        self._on_detected_callback = on_detected
-        self._on_audio_lost_callback = on_audio_lost
         self._detector = None  # nanobuddy.WakeDetector, lazy import
 
     def start(self) -> bool:
@@ -41,23 +35,11 @@ class WakeWordService:
         cfg = self.config
 
         def on_detected():
-            if self._bus:
-                self._bus.emit("wake_word:detected")
-            elif self._on_detected_callback:
-                try:
-                    self._on_detected_callback()
-                except Exception as e:
-                    logger.error("Detection callback failed: %s", e)
+            self._bus.emit("wake_word:detected")
 
         def on_audio_lost(reason: str):
             logger.warning("Audio lost: %s", reason)
-            if self._bus:
-                self._bus.emit("wake_word:audio_lost", reason=reason)
-            elif self._on_audio_lost_callback:
-                try:
-                    self._on_audio_lost_callback(reason)
-                except Exception as e:
-                    logger.error("Audio lost callback failed: %s", e)
+            self._bus.emit("wake_word:audio_lost", reason=reason)
 
         self._detector = WakeDetector(
             model_path=cfg.model_path,

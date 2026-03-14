@@ -12,7 +12,7 @@ from cachetools import TTLCache
 CORELOCATION_CMD = "CoreLocationCLI"
 _corelocation_available: bool | None = None
 
-# Single-entry TTL cache for location data; default TTL overridden per call via get_location_full()
+# Single-entry TTL cache for location data
 _location_cache: TTLCache = TTLCache(maxsize=1, ttl=60)
 
 DEFAULT_LOCATION = {
@@ -79,20 +79,11 @@ def _get_location_ip() -> dict | None:
     return None
 
 
-def get_location_full(cache_max_age: int = 60) -> dict:
+def get_location_full() -> dict:
     """Get full location dict with automatic fallback.
 
     Tries: CoreLocation cache → CoreLocation → IP cache → IP API → default.
     """
-    global _location_cache
-
-    # Recreate cache if TTL changed (e.g. caller passes different max_age)
-    if _location_cache.ttl != cache_max_age:
-        old = _location_cache.get("loc")
-        _location_cache = TTLCache(maxsize=1, ttl=cache_max_age)
-        if old is not None:
-            _location_cache["loc"] = old
-
     cached = _location_cache.get("loc")
 
     if cached and cached.get("source") == "corelocation":
@@ -114,9 +105,9 @@ def get_location_full(cache_max_age: int = 60) -> dict:
     return DEFAULT_LOCATION
 
 
-def get_location(cache_max_age: int = 60) -> tuple[float, float, str]:
+def get_location() -> tuple[float, float, str]:
     """Get current location as (latitude, longitude, city) tuple."""
-    loc = get_location_full(cache_max_age)
+    loc = get_location_full()
     return loc["latitude"], loc["longitude"], loc["city"]
 
 

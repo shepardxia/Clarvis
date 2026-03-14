@@ -20,7 +20,7 @@ _CONSOLIDATION_OBS_LIMIT = 500  # max observations fetched for update/delete val
 # --- Facts ---
 
 
-def recall_memory(
+def recall(
     self: CommandHandlers,
     *,
     query: str,
@@ -41,7 +41,7 @@ def recall_memory(
     return f"Results:\n{fmt_facts(results, bank=bank)}"
 
 
-def remember_fact(
+def remember(
     self: CommandHandlers,
     *,
     text: str,
@@ -263,10 +263,17 @@ def create_model(
 
 
 def update_model(
-    self: CommandHandlers, *, id: str, bank: str = "parletre", content: str | None = None, name: str | None = None, **kw
+    self: CommandHandlers,
+    *,
+    id: str,
+    bank: str = "parletre",
+    content: str | None = None,
+    name: str | None = None,
+    tags: list[str] | None = None,
+    **kw,
 ) -> str | dict:
-    """Update a mental model's name or content."""
-    result = self._mem_op(lambda s: s.update_mental_model(bank, id, content=content, name=name))
+    """Update a mental model's name, content, or tags."""
+    result = self._mem_op(lambda s: s.update_mental_model(bank, id, content=content, name=name, tags=tags))
     if isinstance(result, dict) and "error" in result:
         return result
     return f"Updated mental model [id:{id}]"
@@ -409,24 +416,24 @@ def stale_models(self: CommandHandlers, *, bank: str = "parletre", **kw) -> str 
     return fmt_stale_models(result)
 
 
-COMMANDS: dict[str, str] = {
-    "recall": "recall_memory",
-    "remember": "remember_fact",
-    "update_fact": "update_fact",
-    "forget": "forget",
-    "get_fact": "get_fact",
-    "list_facts": "list_facts",
-    "stats": "stats",
-    "audit": "audit",
-    "list_models": "list_models",
-    "search_models": "search_models",
-    "create_model": "create_model",
-    "update_model": "update_model",
-    "delete_model": "delete_model",
-    "list_observations": "list_observations",
-    "get_observation": "get_observation",
-    "unconsolidated": "unconsolidated",
-    "related_observations": "related_observations",
-    "consolidate": "consolidate",
-    "stale_models": "stale_models",
-}
+COMMANDS: list[str] = [
+    "recall",
+    "remember",
+    "update_fact",
+    "forget",
+    "get_fact",
+    "list_facts",
+    "stats",
+    "audit",
+    "list_models",
+    "search_models",
+    "create_model",
+    "update_model",
+    "delete_model",
+    "list_observations",
+    "get_observation",
+    "unconsolidated",
+    "related_observations",
+    "consolidate",
+    "stale_models",
+]

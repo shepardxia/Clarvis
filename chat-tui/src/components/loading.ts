@@ -10,5 +10,5 @@ const spinnerColor = (s: string) => `${CYAN}${s}`;
 const messageColor = (s: string) => `${DIM}${s}`;
 
 export function createLoader(tui: TUI): CancellableLoader {
-	return new CancellableLoader(tui, spinnerColor, messageColor, "Thinking...");
+	return new CancellableLoader(tui, spinnerColor, messageColor, "THINKING...");
 }

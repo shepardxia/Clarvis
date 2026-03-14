@@ -23,7 +23,7 @@ def test_build_registry_discovers_all_commands():
 
     expected = set()
     for mod in _DOMAIN_MODULES:
-        expected.update(getattr(mod, "COMMANDS", {}).keys())
+        expected.update(getattr(mod, "COMMANDS", []))
 
     registry = build_registry()
     assert set(registry.keys()) == expected
@@ -199,13 +199,85 @@ def test_parse_args_unknown_param_passthrough():
     assert result == {"extra": "value"}
 
 
-def test_parse_args_invalid_format():
+def test_parse_args_positional_single():
+    """Bare arg matched to the single required param."""
+    spec = CommandSpec(
+        ipc_name="speak",
+        module_name="agent",
+        params=[_spec("text", str)],
+    )
+    result = parse_args(spec, ["hello world"])
+    assert result == {"text": "hello world"}
+
+
+def test_parse_args_positional_with_kwargs():
+    """Positional arg followed by key=value kwargs."""
+    spec = CommandSpec(
+        ipc_name="recall",
+        module_name="memory",
+        params=[
+            _spec("query", str),
+            _spec("bank", str, default="parletre"),
+        ],
+    )
+    result = parse_args(spec, ["music taste", "bank=agora"])
+    assert result == {"query": "music taste", "bank": "agora"}
+
+
+def test_parse_args_positional_multi_required():
+    """Multiple positional args for multiple required params."""
+    spec = CommandSpec(
+        ipc_name="update_fact",
+        module_name="memory",
+        params=[
+            _spec("id", str),
+            _spec("text", str),
+            _spec("bank", str, default="parletre"),
+        ],
+    )
+    result = parse_args(spec, ["abc123", "new fact text"])
+    assert result == {"id": "abc123", "text": "new fact text"}
+
+
+def test_parse_args_positional_too_many():
+    """More positional args than required params should error."""
     spec = CommandSpec(ipc_name="test", module_name="test", params=[])
     try:
-        parse_args(spec, ["no-equals-sign"])
+        parse_args(spec, ["extra"])
         assert False, "Should have raised ValueError"
     except ValueError as e:
-        assert "key=value" in str(e)
+        assert "Too many positional" in str(e)
+
+
+def test_parse_args_positional_after_kwarg():
+    """Positional arg after key=value should error."""
+    spec = CommandSpec(
+        ipc_name="recall",
+        module_name="memory",
+        params=[
+            _spec("query", str),
+            _spec("bank", str, default="parletre"),
+        ],
+    )
+    try:
+        parse_args(spec, ["bank=agora", "topic"])
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "after key=value" in str(e)
+
+
+def test_parse_args_positional_skips_complex_types():
+    """Complex types (list, dict) are not eligible for positional matching."""
+    spec = CommandSpec(
+        ipc_name="consolidate",
+        module_name="memory",
+        params=[_spec("decisions", list[dict])],
+    )
+    try:
+        parse_args(spec, ['[{"action":"create"}]'])
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "Too many positional" in str(e)
 
 
 def test_parse_args_value_with_equals():
@@ -234,6 +306,17 @@ def test_print_help_contains_commands():
     assert "spotify" in output
 
 
+def test_print_help_shows_positional_format():
+    """Required params should display as <name> in help."""
+    registry = build_registry()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print_help(registry)
+    output = buf.getvalue()
+    assert "<query>" in output  # recall's required param
+    assert "<text>" in output  # speak's required param
+
+
 def test_print_grounding_format():
     registry = build_registry()
     buf = io.StringIO()
@@ -243,5 +326,5 @@ def test_print_grounding_format():
     # Should be markdown
     assert "# ctools" in output
     assert "**recall**" in output
-    assert "required" in output
+    assert "<query>" in output  # positional in signature
     assert "default:" in output

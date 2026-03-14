@@ -1,6 +1,6 @@
 """ctools — Python CLI for Clarvis daemon services.
 
-Usage: ctools <command> [key=value ...]
+Usage: ctools <command> [args...] [key=value ...]
        ctools --help
        ctools --dump-grounding
 """
@@ -106,15 +106,15 @@ def _resolve_annotations(fn) -> dict[str, type]:
 
 
 def build_registry() -> dict[str, CommandSpec]:
-    """Build command registry from domain module COMMANDS dicts and handler signatures."""
+    """Build command registry from domain module COMMANDS lists and handler signatures."""
     from clarvis.core.commands import _DOMAIN_MODULES
 
     registry: dict[str, CommandSpec] = {}
     for mod in _DOMAIN_MODULES:
         mod_label = mod.__name__.rsplit(".", 1)[-1]
-        commands = getattr(mod, "COMMANDS", {})
-        for ipc_name, fn_name in commands.items():
-            fn = getattr(mod, fn_name, None)
+        commands = getattr(mod, "COMMANDS", [])
+        for name in commands:
+            fn = getattr(mod, name, None)
             if fn is None:
                 continue
             sig = inspect.signature(fn)
@@ -139,8 +139,8 @@ def build_registry() -> dict[str, CommandSpec]:
                 )
 
             doc = (fn.__doc__ or "").strip().split("\n")[0]
-            registry[ipc_name] = CommandSpec(
-                ipc_name=ipc_name,
+            registry[name] = CommandSpec(
+                ipc_name=name,
                 module_name=mod_label,
                 params=params,
                 doc=doc,
@@ -148,14 +148,52 @@ def build_registry() -> dict[str, CommandSpec]:
     return registry
 
 
+def _is_scalar_type(ann: type | None) -> bool:
+    """Check if annotation is a simple scalar (eligible for positional args)."""
+    if ann is None:
+        return True
+    inner, _ = _unwrap_optional(ann)
+    return inner in (str, int, float, bool)
+
+
 def parse_args(spec: CommandSpec, raw_args: list[str]) -> dict[str, Any]:
-    """Parse key=value arguments into a dict, coercing types based on CommandSpec."""
+    """Parse positional and key=value arguments into a dict.
+
+    Positional args (no ``=``) are matched to required params in declaration
+    order.  Only scalar types (str/int/float/bool) accept positional values;
+    complex types (list, dict) must use key=value.  Positional args must
+    come before any key=value args.
+    """
     result = {}
     param_map = {p.name: p for p in spec.params}
 
+    # Split into positional (no '=') and keyword (has '=').
+    # Positional must come before keyword.
+    positional: list[str] = []
+    keyword: list[str] = []
+    seen_keyword = False
     for arg in raw_args:
-        if "=" not in arg:
-            raise ValueError(f"Invalid argument (expected key=value): {arg}")
+        if "=" in arg:
+            seen_keyword = True
+            keyword.append(arg)
+        else:
+            if seen_keyword:
+                raise ValueError(f"Positional argument after key=value: {arg}")
+            positional.append(arg)
+
+    # Match positional args to required params with scalar types
+    positional_targets = [p for p in spec.params if p.required and _is_scalar_type(p.annotation)]
+    if len(positional) > len(positional_targets):
+        names = ", ".join(p.name for p in positional_targets) or "none"
+        raise ValueError(
+            f"Too many positional arguments ({len(positional)}) — accepts at most {len(positional_targets)} ({names})"
+        )
+
+    for val, ps in zip(positional, positional_targets):
+        result[ps.name] = coerce_value(val, ps)
+
+    # Process keyword args
+    for arg in keyword:
         key, value = arg.split("=", 1)
         ps = param_map.get(key)
         if ps is None:
@@ -178,7 +216,7 @@ def parse_args(spec: CommandSpec, raw_args: list[str]) -> dict[str, Any]:
 def _format_param(p: ParamSpec) -> str:
     """Format a single param for help display."""
     if p.required:
-        return p.name
+        return f"<{p.name}>"
     return f"{p.name}={p.default!r}"
 
 
@@ -193,11 +231,38 @@ def print_help(registry: dict[str, CommandSpec]) -> None:
         print(f"\n  {mod_name}")
         print(f"  {'─' * 40}")
         for spec in specs:
-            param_line = f"  ({', '.join(_format_param(p) for p in spec.params)})" if spec.params else ""
-            print(f"    {spec.ipc_name}{param_line}")
+            positional = [_format_param(p) for p in spec.params if p.required]
+            optional = [_format_param(p) for p in spec.params if not p.required]
+            parts = " ".join(positional)
+            if optional:
+                parts += f"  [{', '.join(optional)}]"
+            line = f"    {spec.ipc_name}  {parts}" if parts else f"    {spec.ipc_name}"
+            print(line)
             if spec.doc:
                 print(f"      {spec.doc}")
     print()
+
+
+def _type_label(ann: type | None) -> str:
+    """Human-readable type label for grounding output."""
+    if ann is None:
+        return "str"
+    inner, _ = _unwrap_optional(ann)
+    if inner is str:
+        return "str"
+    if inner is int:
+        return "int"
+    if inner is float:
+        return "float"
+    if inner is bool:
+        return "bool"
+    if _is_list_of(inner, str):
+        return "list (comma-separated)"
+    if inner is dict or (inner and typing.get_origin(inner) is dict):
+        return "JSON"
+    if inner and typing.get_origin(inner) is list:
+        return "JSON array"
+    return "str"
 
 
 def print_grounding(registry: dict[str, CommandSpec]) -> None:
@@ -207,41 +272,21 @@ def print_grounding(registry: dict[str, CommandSpec]) -> None:
         by_module.setdefault(spec.module_name, []).append(spec)
 
     print("# ctools — Daemon Commands\n")
-    print("Usage: `ctools <command> [key=value ...]`\n")
+    print("Usage: `ctools <command> [args...] [key=value ...]`\n")
 
     for mod_name, specs in by_module.items():
         print(f"## {mod_name}\n")
         for spec in specs:
-            params_parts = []
-            for p in spec.params:
-                ann = p.annotation
-                inner, was_opt = _unwrap_optional(ann) if ann else (None, False)
-                type_str = ""
-                if inner is str:
-                    type_str = "str"
-                elif inner is int:
-                    type_str = "int"
-                elif inner is float:
-                    type_str = "float"
-                elif inner is bool:
-                    type_str = "bool"
-                elif _is_list_of(inner, str) if inner else False:
-                    type_str = "list (comma-separated)"
-                elif inner is dict or (inner and typing.get_origin(inner) is dict):
-                    type_str = "JSON"
-                elif inner and typing.get_origin(inner) is list:
-                    type_str = "JSON array"
-                else:
-                    type_str = "str"
+            # Build signature with positional args inline
+            positional = [f"<{p.name}>" for p in spec.params if p.required]
+            sig = " ".join(positional)
+            header = f"**{spec.ipc_name}** {sig}" if sig else f"**{spec.ipc_name}**"
+            print(f"{header} — {spec.doc}")
 
-                if p.required:
-                    params_parts.append(f"  - `{p.name}` ({type_str}) — required")
-                else:
-                    params_parts.append(f"  - `{p.name}` ({type_str}, default: {p.default!r})")
-
-            print(f"**{spec.ipc_name}** — {spec.doc}")
-            if params_parts:
-                print("\n".join(params_parts))
+            # Only list optional params (required are shown in signature)
+            optional = [p for p in spec.params if not p.required]
+            for p in optional:
+                print(f"  - `{p.name}` ({_type_label(p.annotation)}, default: {p.default!r})")
             print()
 
 
@@ -293,8 +338,11 @@ def main() -> None:
     # Call daemon
     from clarvis.core.ipc import DaemonClient
 
+    _SLOW_COMMANDS = {"web_research"}
+    timeout = 300.0 if command in _SLOW_COMMANDS else 30.0
+
     try:
-        client = DaemonClient()
+        client = DaemonClient(timeout=timeout)
         result = client.call(command, **params)
     except ConnectionError as e:
         print(str(e), file=sys.stderr)

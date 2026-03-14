@@ -58,13 +58,13 @@ def build_communities(self: CommandHandlers, **kw) -> str | dict:
     return self._mem_op(lambda s: s.kg_build_communities(format=True))
 
 
-COMMANDS: dict[str, str] = {
-    "knowledge": "knowledge",
-    "ingest": "ingest",
-    "entities": "entities",
-    "relations": "relations",
-    "update_entity": "update_entity",
-    "merge_entities": "merge_entities",
-    "delete_entity": "delete_entity",
-    "build_communities": "build_communities",
-}
+COMMANDS: list[str] = [
+    "knowledge",
+    "ingest",
+    "entities",
+    "relations",
+    "update_entity",
+    "merge_entities",
+    "delete_entity",
+    "build_communities",
+]

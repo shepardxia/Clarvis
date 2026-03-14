@@ -26,7 +26,7 @@ from .core.paths import STAGING_DIGESTED, STAGING_INBOX
 from .core.persistence import json_load_safe
 from .core.scheduler import Scheduler
 from .core.signals import SignalBus
-from .core.state import StateStore, get_state_store
+from .core.state import StateStore
 from .display.click_regions import ClickRegion, ClickRegionManager
 from .display.config import CONFIG_PATH, get_config
 from .display.display_manager import DisplayManager
@@ -120,7 +120,7 @@ class CentralHubDaemon:
         self.display_fps = display_fps if display_fps is not None else config.display.fps
 
         # Core state
-        self.state = state_store or get_state_store()
+        self.state = state_store or StateStore()
         self.session_tracker = SessionTracker(self.state)
         self.command_server = DaemonServer()
         self.wake_word_service = None
@@ -335,6 +335,15 @@ class CentralHubDaemon:
         except Exception:
             return None
 
+    def _get_tavily_client(self):
+        """Lazy TavilyClient getter."""
+        try:
+            from .services.tavily_client import get_tavily_client
+
+            return get_tavily_client()
+        except Exception:
+            return None
+
     # --- Voice pipeline ---
 
     def _init_agents(self) -> None:
@@ -361,7 +370,6 @@ class CentralHubDaemon:
             state=self.state,
             memory=self.memory,
             visibility="master",
-            include_ambient=True,
         )
         self._agents["clarvis"] = agent
 
@@ -443,7 +451,6 @@ class CentralHubDaemon:
                 state=self.state,
                 memory=self.memory,
                 visibility="all",
-                include_ambient=False,
             )
             self._agents["factoria"] = factoria_agent
 
@@ -579,7 +586,6 @@ class CentralHubDaemon:
                 from .services.wake_word import WakeWordService
 
                 self.wake_word_service = WakeWordService(
-                    state_store=self.state,
                     config=config.voice.wake_word,
                     bus=self.bus,
                 )
@@ -632,12 +638,7 @@ class CentralHubDaemon:
 
         from .services.timer_notifier import TimerNotifier
 
-        self._owned_services.append(
-            TimerNotifier(
-                ctx=self.ctx,
-                voice_orchestrator_provider=lambda: self.voice_orchestrator,
-            )
-        )
+        self._owned_services.append(TimerNotifier(ctx=self.ctx))
 
         self.scheduler.start()
 
@@ -657,7 +658,7 @@ class CentralHubDaemon:
         # Shut down all agents — we're inside the event loop, so await directly
         for agent in self._agents.values():
             try:
-                await asyncio.wait_for(agent.shutdown(), timeout=5.0)
+                await asyncio.wait_for(agent.disconnect(), timeout=5.0)
             except Exception:
                 pass  # Best-effort — daemon is exiting anyway
         # Stop channel manager
@@ -697,10 +698,10 @@ class CentralHubDaemon:
             except Exception:
                 pass
 
-    async def reset_all_agents(self) -> None:
+    async def reset_all_agents(self, *, stage: bool = True) -> None:
         """Reset all agent sessions in parallel."""
         results = await asyncio.gather(
-            *(agent.reset() for agent in self._agents.values()),
+            *(agent.reset(stage=stage) for agent in self._agents.values()),
             return_exceptions=True,
         )
         for name, result in zip(self._agents, results):
@@ -716,7 +717,7 @@ class CentralHubDaemon:
             for f in STAGING_INBOX.glob("*"):
                 if f.is_file():
                     f.rename(STAGING_DIGESTED / f.name)
-        await self.reset_all_agents()
+        await self.reset_all_agents(stage=False)
         return {"status": "reflect complete"}
 
     async def run(self) -> None:
@@ -748,6 +749,7 @@ class CentralHubDaemon:
                 "memory": lambda: self.memory,
                 "agents": lambda: self._agents,
                 "spotify_session": lambda: self._get_spotify_session(),
+                "tavily": lambda: self._get_tavily_client(),
                 "timer_service": lambda: self.timer_service,
                 "channel_manager": lambda: self.channel_manager,
                 "daemon": lambda: self,
@@ -837,7 +839,7 @@ def main():
     global _daemon_lock
 
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh":
-        refresh = RefreshManager(state=get_state_store())
+        refresh = RefreshManager(state=StateStore())
         refresh.refresh_all()
     else:
         _daemon_lock = PidLock()

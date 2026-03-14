@@ -29,7 +29,7 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 			if (evt?.type === "text_delta") {
 				if (!app.output.hasActiveResponse) {
 					app.output.startResponseBlock();
-					app.setLoadingMessage("Responding...");
+					app.setLoadingMessage("RESPONDING...");
 				}
 				app.output.handleTextDelta(evt.delta as string);
 				app.requestRender();
@@ -49,7 +49,7 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 				toolName,
 				(event.toolInput ?? event.tool_input ?? event.args) as Record<string, unknown> | undefined,
 			);
-			app.setLoadingMessage(`Running ${toolName}...`);
+			app.setLoadingMessage(`RUNNING ${toolName}...`);
 			app.requestRender();
 			return;
 		}
@@ -59,7 +59,7 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 				(event.toolName ?? event.tool_name) as string,
 				event.result,
 			);
-			app.setLoadingMessage("Thinking...");
+			app.setLoadingMessage("THINKING...");
 			app.requestRender();
 			return;
 
@@ -76,7 +76,7 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 		case "state":
 			if (event.agent_busy) {
 				const owner = event.owner ? ` (${event.owner})` : "";
-				app.output.handleInfo(`Agent busy${owner}`);
+				app.output.handleInfo(`AGENT BUSY${owner}`);
 				app.requestRender();
 			}
 			return;
@@ -114,7 +114,7 @@ export function handleChatEvent(app: App, event: ChatEvent): void {
 
 		case "session_reset":
 			app.output.clear();
-			app.output.handleInfo("[session reset]");
+			app.output.handleInfo("[SESSION RESET]");
 			app.requestRender();
 			return;
 

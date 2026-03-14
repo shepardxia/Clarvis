@@ -117,10 +117,10 @@ export class App {
 	abort(): void {
 		if (this.queuedMessages.length > 0) {
 			this.chatClient.send({ type: "abort", steer: true });
-			this.output.handleInfo("[steering to queued message]");
+			this.output.handleInfo("[STEERING TO QUEUED MESSAGE]");
 		} else {
 			this.chatClient.send({ type: "abort" });
-			this.output.handleInfo("[aborted]");
+			this.output.handleInfo("[ABORTED]");
 		}
 		this.requestRender();
 	}

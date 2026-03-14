@@ -33,6 +33,70 @@ _DEFAULT_PRIORITIES = {
 }
 
 
+def build(
+    registry: CvRegistry,
+    scene_name: str = "default",
+    width: int | None = None,
+    height: int | None = None,
+    *,
+    include_on_blocks: bool = False,
+) -> SceneManager | tuple[SceneManager, dict[str, list[OnBlock]]]:
+    """Build a SceneManager from CV specs.
+
+    Args:
+        registry: CvRegistry with loaded .cv files.
+        scene_name: Name of the scene to build.
+        width: Override scene width.
+        height: Override scene height.
+        include_on_blocks: If True, return (scene, on_block_map) tuple.
+
+    Returns:
+        SceneManager, or (SceneManager, on_block_map) if include_on_blocks is True.
+    """
+    spec = registry.get_scene(scene_name)
+    if spec is None:
+        raise ValueError(f"Scene '{scene_name}' not found in registry")
+
+    w = width or spec.width
+    h = height or spec.height
+    scene = SceneManager(w, h)
+
+    # Element registry for weather (still uses YAML)
+    elem_registry = ElementRegistry()
+    elem_registry.load_all()
+
+    # Two-pass: first create sprites with known sizes, then resolve relative placements
+    sprite_map: dict[str, object] = {}
+    sprite_order: list[tuple[SpriteSpec, object]] = []
+    on_block_map: dict[str, list[OnBlock]] = {}
+
+    for sspec in spec.sprites:
+        priority = sspec.priority or _DEFAULT_PRIORITIES.get(sspec.type, 0)
+        sprite = _create_sprite(sspec, w, h, priority, registry, elem_registry)
+        sprite_map[sspec.type] = sprite
+        sprite_order.append((sspec, sprite))
+        if include_on_blocks and sspec.on_blocks:
+            on_block_map[sspec.type] = sspec.on_blocks
+
+    # Resolve relative placements now that we know all bboxes
+    for sspec, sprite in sprite_order:
+        _resolve_placement(sspec, sprite, sprite_map, w, h)
+
+    # Post-placement fixups
+    _fixup_celestial(sprite_map)
+
+    # Add to scene in spec order (SceneManager sorts by priority)
+    for _sspec, sprite in sprite_order:
+        if isinstance(sprite, WeatherSandbox):
+            sprite._scene_registry = scene.registry
+        scene.add(sprite)
+
+    if include_on_blocks:
+        return scene, on_block_map
+    return scene
+
+
+# Backward-compatible class wrapper — delegates to module-level build()
 class SceneBuilder:
     """Builds a SceneManager from CV specs."""
 
@@ -43,42 +107,7 @@ class SceneBuilder:
         width: int | None = None,
         height: int | None = None,
     ) -> SceneManager:
-        spec = registry.get_scene(scene_name)
-        if spec is None:
-            raise ValueError(f"Scene '{scene_name}' not found in registry")
-
-        w = width or spec.width
-        h = height or spec.height
-        scene = SceneManager(w, h)
-
-        # Element registry for weather (still uses YAML)
-        elem_registry = ElementRegistry()
-        elem_registry.load_all()
-
-        # Two-pass: first create sprites with known sizes, then resolve relative placements
-        sprite_map: dict[str, object] = {}
-        sprite_order: list[tuple[SpriteSpec, object]] = []
-
-        for sspec in spec.sprites:
-            priority = sspec.priority or _DEFAULT_PRIORITIES.get(sspec.type, 0)
-            sprite = _create_sprite(sspec, w, h, priority, registry, elem_registry)
-            sprite_map[sspec.type] = sprite
-            sprite_order.append((sspec, sprite))
-
-        # Resolve relative placements now that we know all bboxes
-        for sspec, sprite in sprite_order:
-            _resolve_placement(sspec, sprite, sprite_map, w, h)
-
-        # Post-placement fixups
-        _fixup_celestial(sprite_map)
-
-        # Add to scene in spec order (SceneManager sorts by priority)
-        for _sspec, sprite in sprite_order:
-            if isinstance(sprite, WeatherSandbox):
-                sprite._scene_registry = scene.registry
-            scene.add(sprite)
-
-        return scene
+        return build(registry, scene_name=scene_name, width=width, height=height)
 
     @staticmethod
     def build_with_on_blocks(
@@ -87,41 +116,7 @@ class SceneBuilder:
         width: int | None = None,
         height: int | None = None,
     ) -> tuple[SceneManager, dict[str, list[OnBlock]]]:
-        """Build scene and return on-block map (sprite_type -> on_blocks)."""
-        spec = registry.get_scene(scene_name)
-        if spec is None:
-            raise ValueError(f"Scene '{scene_name}' not found in registry")
-
-        w = width or spec.width
-        h = height or spec.height
-        scene = SceneManager(w, h)
-
-        elem_registry = ElementRegistry()
-        elem_registry.load_all()
-
-        sprite_map: dict[str, object] = {}
-        sprite_order: list[tuple[SpriteSpec, object]] = []
-        on_block_map: dict[str, list[OnBlock]] = {}
-
-        for sspec in spec.sprites:
-            priority = sspec.priority or _DEFAULT_PRIORITIES.get(sspec.type, 0)
-            sprite = _create_sprite(sspec, w, h, priority, registry, elem_registry)
-            sprite_map[sspec.type] = sprite
-            sprite_order.append((sspec, sprite))
-            if sspec.on_blocks:
-                on_block_map[sspec.type] = sspec.on_blocks
-
-        for sspec, sprite in sprite_order:
-            _resolve_placement(sspec, sprite, sprite_map, w, h)
-
-        _fixup_celestial(sprite_map)
-
-        for _sspec, sprite in sprite_order:
-            if isinstance(sprite, WeatherSandbox):
-                sprite._scene_registry = scene.registry
-            scene.add(sprite)
-
-        return scene, on_block_map
+        return build(registry, scene_name=scene_name, width=width, height=height, include_on_blocks=True)
 
 
 def _create_sprite(sspec, w, h, priority, cv_registry, elem_registry):

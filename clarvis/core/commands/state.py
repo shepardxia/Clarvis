@@ -40,7 +40,7 @@ def send_message(self: CommandHandlers, *, channel: str, chat_id: str, content: 
         return {"error": str(exc)}
 
 
-COMMANDS: dict[str, str] = {
-    "get_context": "get_context",
-    "send_message": "send_message",
-}
+COMMANDS: list[str] = [
+    "get_context",
+    "send_message",
+]

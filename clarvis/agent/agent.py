@@ -229,25 +229,28 @@ class Agent:
                 exc_info=True,
             )
 
-    async def shutdown(self) -> None:
-        """Permanent shutdown -- disconnect."""
-        await self.disconnect()
+    async def reset(self, *, stage: bool = True) -> None:
+        """Reset by restarting Pi fresh.
 
-    async def reset(self) -> None:
-        """Reset by moving session file to inbox and restarting Pi fresh."""
+        Args:
+            stage: Move session file to inbox for future reflect.
+                   False when called from reflect_complete (already digested).
+        """
         was_connected = self._connected
         await self.disconnect()
 
         if self._session_file.exists():
-            STAGING_INBOX.mkdir(parents=True, exist_ok=True)
-            dest = STAGING_INBOX / f"session_{self._session_key}_{int(time.time())}.jsonl"
-            self._session_file.rename(dest)
-            logger.info("Moved session to %s", dest.name)
+            if stage:
+                STAGING_INBOX.mkdir(parents=True, exist_ok=True)
+                dest = STAGING_INBOX / f"session_{self._session_key}_{int(time.time())}.jsonl"
+                self._session_file.rename(dest)
+                logger.info("Moved session to %s", dest.name)
+            else:
+                self._session_file.unlink()
+                logger.info("Discarded post-reflect session %s", self._session_key)
 
         if was_connected:
             await self.connect()
-        if self.context:
-            self.context.reset()
 
         await self._inject_grounding()
 
@@ -273,8 +276,6 @@ class Agent:
                     if event.get("type") == "agent_end":
                         break
 
-            # Mark grounded so ContextInjector doesn't re-inject
-            self.context.mark_grounded()
             logger.info("Injected memory grounding for %s", self._session_key)
         except Exception:
             logger.warning(

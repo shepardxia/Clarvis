@@ -52,19 +52,16 @@ export class PromptInput implements Component {
 		const editorLines = this.editor.render(contentWidth);
 		const prompt = `${GREEN}${BOLD}>${RESET} `;
 		const indent = "  ";
-		return editorLines.map((line, i) => {
-			// Replace block cursor with underscore cursor
-			const cursored = line.replace(/\x1b\[7m(.)\x1b\[0m/, (_, ch) =>
-				ch === " " ? "_" : `${ch}\x1b[0m_`,
-			);
-			// Lines 0 and last are borders — replace ─ with = for retro look
-			if (i === 0 || i === editorLines.length - 1) {
-				return truncateToWidth(indent + cursored.replace(/─/g, "="), width);
-			}
+		const result: string[] = [""];
+		for (let i = 0; i < editorLines.length; i++) {
+			// Skip border lines
+			if (i === 0 || i === editorLines.length - 1) continue;
 			// First content line gets the prompt symbol
-			if (i === 1) return truncateToWidth(prompt + cursored, width);
+			if (i === 1) result.push(truncateToWidth(prompt + editorLines[i], width));
 			// Continuation lines get 2-space indent
-			return truncateToWidth(indent + cursored, width);
-		});
+			else result.push(truncateToWidth(indent + editorLines[i], width));
+		}
+		result.push("", "");
+		return result;
 	}
 }

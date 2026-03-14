@@ -6,6 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from clarvis.core.commands import agent as _agent
+from clarvis.core.commands import knowledge as _knowledge
+from clarvis.core.commands import media as _media
+from clarvis.core.commands import memory as _memory
+
 
 @pytest.fixture
 def loop():
@@ -89,21 +94,21 @@ def handlers(loop, mock_memory):
 
 class TestRecallCommand:
     def test_recall_returns_results(self, handlers, mock_memory):
-        result = handlers.recall_memory(query="coffee preferences")
+        result = _memory.recall(handlers, query="coffee preferences")
         assert "dark roast coffee" in result
         mock_memory.recall.assert_called_once()
 
     def test_recall_passes_bank(self, handlers, mock_memory):
-        handlers.recall_memory(query="test", bank="agora")
+        _memory.recall(handlers, query="test", bank="agora")
         mock_memory.recall.assert_called_once_with("test", bank="agora", fact_type=None, tags=None)
 
     def test_recall_requires_query(self, handlers):
         with pytest.raises(TypeError):
-            handlers.recall_memory()
+            _memory.recall(handlers)
 
     def test_recall_when_store_not_ready(self, handlers, mock_memory):
         mock_memory.ready = False
-        result = handlers.recall_memory(query="test")
+        result = _memory.recall(handlers, query="test")
         assert result == {"error": "Memory not available"}
 
     def test_recall_limit(self, handlers, mock_memory):
@@ -111,46 +116,46 @@ class TestRecallCommand:
         mock_memory.recall = AsyncMock(
             return_value={"results": [{"text": f"fact-{i}", "score": 0.9, "fact_type": "world"} for i in range(20)]}
         )
-        result = handlers.recall_memory(query="test", limit=5)
+        result = _memory.recall(handlers, query="test", limit=5)
         # Should only show 5 facts, not 20
         assert result.count("[world]") == 5
 
     def test_recall_when_no_store(self, loop):
         h = _make_handlers(loop)
-        result = h.recall_memory(query="test")
+        result = _memory.recall(h, query="test")
         assert result == {"error": "Memory not available"}
 
 
 class TestRememberCommand:
     def test_remember_stores_fact(self, handlers, mock_memory):
-        result = handlers.remember_fact(text="prefers dark roast coffee")
+        result = _memory.remember(handlers, text="prefers dark roast coffee")
         assert "Stored" in result
         assert "id-1" in result
         mock_memory.store_facts.assert_called_once()
 
     def test_remember_defaults_to_world_type(self, handlers, mock_memory):
-        handlers.remember_fact(text="some fact")
+        _memory.remember(handlers, text="some fact")
         facts = mock_memory.store_facts.call_args[0][0]
         assert facts[0].fact_type == "world"
 
     def test_remember_requires_text(self, handlers):
         with pytest.raises(TypeError):
-            handlers.remember_fact()
+            _memory.remember(handlers)
 
 
 class TestFactCRUD:
     def test_update_fact(self, handlers, mock_memory):
-        result = handlers.update_fact(id="abc", text="updated text")
+        result = _memory.update_fact(handlers, id="abc", text="updated text")
         assert "Updated" in result
         mock_memory.update_fact.assert_called_once()
 
     def test_forget(self, handlers, mock_memory):
-        result = handlers.forget(id="abc")
+        result = _memory.forget(handlers, id="abc")
         assert "Forgotten" in result
         mock_memory.delete_fact.assert_called_once_with("abc")
 
     def test_list_facts(self, handlers, mock_memory):
-        result = handlers.list_facts(bank="parletre")
+        result = _memory.list_facts(handlers, bank="parletre")
         assert "No memories found" in result
         mock_memory.list_facts.assert_called_once()
 
@@ -165,7 +170,7 @@ class TestFactCRUD:
                 "consolidated_at": None,
             }
         )
-        result = handlers.get_fact(id="f1")
+        result = _memory.get_fact(handlers, id="f1")
         assert "likes jazz" in result
         assert "opinion" in result
         assert "0.9" in result
@@ -175,12 +180,12 @@ class TestFactCRUD:
 
     def test_get_fact_not_found(self, handlers, mock_memory):
         mock_memory.get_fact = AsyncMock(return_value=None)
-        result = handlers.get_fact(id="nonexistent")
+        result = _memory.get_fact(handlers, id="nonexistent")
         assert "not found" in result
 
     def test_recall_shows_bank(self, handlers, mock_memory):
         """Recall output should include the bank tag for disambiguation."""
-        result = handlers.recall_memory(query="coffee", bank="agora")
+        result = _memory.recall(handlers, query="coffee", bank="agora")
         assert "[agora]" in result
 
     def test_list_facts_shows_bank(self, handlers, mock_memory):
@@ -188,7 +193,7 @@ class TestFactCRUD:
         mock_memory.list_facts = AsyncMock(
             return_value={"items": [{"id": "f1", "text": "a fact", "fact_type": "world"}], "total": 1}
         )
-        result = handlers.list_facts(bank="agora")
+        result = _memory.list_facts(handlers, bank="agora")
         assert "[agora]" in result
 
 
@@ -197,11 +202,11 @@ class TestFactCRUD:
 
 class TestStatsAndAudit:
     def test_stats(self, handlers, mock_memory):
-        result = handlers.stats(bank="parletre")
+        result = _memory.stats(handlers, bank="parletre")
         assert "fact_count: 42" in result
 
     def test_audit_returns_all_categories(self, handlers, mock_memory):
-        result = handlers.audit()
+        result = _memory.audit(handlers)
         assert "Facts since" in result
         assert "Observations since" in result
         assert "Mental models since" in result
@@ -217,7 +222,7 @@ class TestMentalModels:
             "mental_models": [{"id": "mm-1", "name": "Test", "content": "body", "tags": ["music"]}],
             "count": 1,
         }
-        handlers.search_models(query="test", tags=["music", "people"], tags_match="all")
+        _memory.search_models(handlers, query="test", tags=["music", "people"], tags_match="all")
         mock_memory.search_mental_models.assert_called_once_with(
             "test", bank="parletre", tags=["music", "people"], tags_match="all"
         )
@@ -228,12 +233,12 @@ class TestMentalModels:
             {"mental_models": [], "count": 0},  # first call: query + tags
             {"mental_models": [{"id": "mm-1", "name": "M"}], "count": 1},  # follow-up: query only
         ]
-        result = handlers.search_models(query="test", tags=["nonexistent"])
+        result = _memory.search_models(handlers, query="test", tags=["nonexistent"])
         assert "matched the query alone" in result
         assert mock_memory.search_mental_models.call_count == 2
 
     def test_create_model(self, handlers, mock_memory):
-        result = handlers.create_model(name="Test", content="body", source_query="q")
+        result = _memory.create_model(handlers, name="Test", content="body", source_query="q")
         assert "Created mental model 'Test'" in result
         assert "mm-1" in result
 
@@ -243,7 +248,7 @@ class TestMentalModels:
 
 class TestObservations:
     def test_get_observation(self, handlers, mock_memory):
-        result = handlers.get_observation(id="obs-1")
+        result = _memory.get_observation(handlers, id="obs-1")
         assert "test obs" in result
 
     def test_get_observation_shows_text_key(self, handlers, mock_memory):
@@ -251,7 +256,7 @@ class TestObservations:
         mock_memory.get_observation = AsyncMock(
             return_value={"id": "obs-1", "text": "observation via text key", "tags": ["t1"]}
         )
-        result = handlers.get_observation(id="obs-1")
+        result = _memory.get_observation(handlers, id="obs-1")
         assert "observation via text key" in result
 
     def test_list_observations_shows_text_content(self, handlers, mock_memory):
@@ -262,20 +267,21 @@ class TestObservations:
                 {"id": "obs-2", "text": "second obs text", "tags": ["tag1"], "source_memory_ids": []},
             ]
         )
-        result = handlers.list_observations()
+        result = _memory.list_observations(handlers)
         assert "first obs text" in result
         assert "second obs text" in result
         assert "2 sources" in result
 
     def test_related_observations(self, handlers, mock_memory):
         """Verifies N+1 fact lookup and aggregation into related_observations call."""
-        handlers.related_observations(fact_ids=["f1", "f2"])
+        _memory.related_observations(handlers, fact_ids=["f1", "f2"])
         assert mock_memory.get_fact.call_count == 2
         mock_memory.get_related_observations.assert_called_once()
 
     def test_consolidate_create_only(self, handlers, mock_memory):
         """Create-only decisions should NOT fetch observations (no need for validation)."""
-        result = handlers.consolidate(
+        result = _memory.consolidate(
+            handlers,
             decisions=[{"action": "create", "text": "obs text", "source_fact_ids": ["f1"]}],
             fact_ids_to_mark=["f1"],
         )
@@ -288,7 +294,8 @@ class TestObservations:
         mock_memory.apply_consolidation_decisions = AsyncMock(
             return_value={"created": 0, "updated": 1, "deleted": 0, "marked": 1}
         )
-        result = handlers.consolidate(
+        result = _memory.consolidate(
+            handlers,
             decisions=[{"action": "update", "text": "revised", "observation_id": "obs-1", "source_fact_ids": ["f2"]}],
             fact_ids_to_mark=["f2"],
         )
@@ -304,7 +311,8 @@ class TestObservations:
         mock_memory.apply_consolidation_decisions = AsyncMock(
             return_value={"created": 0, "updated": 0, "deleted": 1, "marked": 0}
         )
-        result = handlers.consolidate(
+        result = _memory.consolidate(
+            handlers,
             decisions=[{"action": "delete", "observation_id": "obs-1"}],
             fact_ids_to_mark=[],
         )
@@ -347,7 +355,8 @@ class TestObservations:
         mock_memory.apply_consolidation_decisions = AsyncMock(
             return_value={"created": 1, "updated": 0, "deleted": 0, "marked": 2}
         )
-        result = handlers.consolidate(
+        result = _memory.consolidate(
+            handlers,
             decisions=[
                 {"action": "create", "text": "obs1", "source_fact_ids": ["f1", "f2"]},
                 {"action": "create", "text": "obs2", "source_fact_ids": ["f2", "f3"]},
@@ -364,7 +373,8 @@ class TestObservations:
         mock_memory.apply_consolidation_decisions = AsyncMock(
             return_value={"created": 1, "updated": 0, "deleted": 0, "marked": 1}
         )
-        result = handlers.consolidate(
+        result = _memory.consolidate(
+            handlers,
             decisions=[{"action": "create", "text": "obs", "source_fact_ids": ["f1", "f2"]}],
             fact_ids_to_mark=["f1"],
         )
@@ -374,7 +384,7 @@ class TestObservations:
         assert mark_ids == ["f1"]
 
     def test_consolidate_invalid_decisions(self, handlers):
-        result = handlers.consolidate(decisions=[{"bad": "data"}])
+        result = _memory.consolidate(handlers, decisions=[{"bad": "data"}])
         assert "error" in result
 
 
@@ -383,22 +393,22 @@ class TestObservations:
 
 class TestKnowledge:
     def test_knowledge_search(self, handlers, mock_memory):
-        result = handlers.knowledge(query="test")
+        result = _knowledge.knowledge(handlers, query="test")
         assert "Results (1)" in result
 
     def test_ingest(self, handlers, mock_memory):
-        result = handlers.ingest(content_or_path="some text")
+        result = _knowledge.ingest(handlers, content_or_path="some text")
         assert "Ingested" in result
         assert "status: ok" in result
 
     def test_merge_entities_requires_two(self, handlers, mock_memory):
         mock_memory.kg_merge_entities = AsyncMock(return_value="Error: need at least 2 entity IDs to merge")
-        result = handlers.merge_entities(entity_ids=["e1"])
+        result = _knowledge.merge_entities(handlers, entity_ids=["e1"])
         assert "Error" in result
 
     def test_knowledge_when_no_backend(self, loop):
         h = _make_handlers(loop)
-        result = h.knowledge(query="test")
+        result = _knowledge.knowledge(h, query="test")
         assert result == {"error": "Memory not available"}
 
 
@@ -415,24 +425,24 @@ class TestSpotifyCommand:
 
     def test_spotify_runs_dsl_command(self, spotify_handlers):
         h, mock_session = spotify_handlers
-        result = h.spotify(command='play "jazz" volume 70')
+        result = _media.spotify(h, command='play "jazz" volume 70')
         assert isinstance(result, str)
         mock_session.run.assert_called_once_with('play "jazz" volume 70')
 
     def test_spotify_requires_command(self, spotify_handlers):
         h, _ = spotify_handlers
         with pytest.raises(TypeError):
-            h.spotify()
+            _media.spotify(h)
 
     def test_spotify_when_no_session(self, loop):
         h = _make_handlers(loop)
-        result = h.spotify(command="play jazz")
+        result = _media.spotify(h, command="play jazz")
         assert result == {"error": "Spotify not available"}
 
     def test_spotify_catches_dsl_error(self, spotify_handlers):
         h, mock_session = spotify_handlers
         mock_session.run.side_effect = Exception("No active device")
-        result = h.spotify(command="play jazz")
+        result = _media.spotify(h, command="play jazz")
         assert "No active device" in result["error"]
 
 
@@ -455,35 +465,35 @@ class TestTimerCommand:
 
     def test_timer_set(self, timer_handlers):
         h, mock_timer = timer_handlers
-        result = h.timer(action="set", name="checkin", duration="2h")
+        result = _media.timer(h, action="set", name="checkin", duration="2h")
         mock_timer.set_timer.assert_called_once_with("checkin", 7200.0, False, "", False)
         assert "Timer 'checkin' set" in result
 
     def test_timer_list(self, timer_handlers):
         h, mock_timer = timer_handlers
-        result = h.timer(action="list")
+        result = _media.timer(h, action="list")
         mock_timer.list_timers.assert_called_once()
         assert "No active timers" in result
 
     def test_timer_cancel(self, timer_handlers):
         h, mock_timer = timer_handlers
-        result = h.timer(action="cancel", name="checkin")
+        result = _media.timer(h, action="cancel", name="checkin")
         mock_timer.cancel.assert_called_once_with("checkin")
         assert "Cancelled timer 'checkin'" in result
 
     def test_timer_requires_action(self, timer_handlers):
         h, _ = timer_handlers
         with pytest.raises(TypeError):
-            h.timer()
+            _media.timer(h)
 
     def test_timer_unknown_action(self, timer_handlers):
         h, _ = timer_handlers
-        result = h.timer(action="explode")
+        result = _media.timer(h, action="explode")
         assert result == {"error": "Unknown action: explode"}
 
     def test_timer_when_no_service(self, loop):
         h = _make_handlers(loop)
-        result = h.timer(action="list")
+        result = _media.timer(h, action="list")
         assert result == {"error": "Timer service not available"}
 
 
@@ -492,5 +502,5 @@ class TestTimerCommand:
 
 class TestCoreTools:
     def test_listen(self, handlers):
-        result = handlers.listen()
+        result = _agent.listen(handlers)
         assert result["status"] == "listening"

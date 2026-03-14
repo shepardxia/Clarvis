@@ -59,7 +59,7 @@ class VoicePipelineState(enum.Enum):
 _S = VoicePipelineState
 _TRANSITIONS: dict[VoicePipelineState, set[VoicePipelineState]] = {
     _S.IDLE: {_S.ACTIVATED},
-    _S.ACTIVATED: {_S.LISTENING, _S.THINKING, _S.COOLDOWN},
+    _S.ACTIVATED: {_S.LISTENING, _S.THINKING, _S.RESPONDING, _S.COOLDOWN},
     _S.LISTENING: {_S.THINKING, _S.COOLDOWN},
     _S.THINKING: {_S.RESPONDING, _S.COOLDOWN},
     _S.RESPONDING: {_S.COOLDOWN, _S.LISTENING, _S.THINKING},
@@ -238,6 +238,18 @@ class VoiceCommandOrchestrator:
         """Clear voice text from display."""
         self.state.update("voice_text", {"active": False})
 
+    def _end_session(self) -> None:
+        """Shared cleanup for all pipeline entry points (on_wake_word/notify/speak)."""
+        self._interrupt.clear()
+        self._clear_voice_text()
+        self._state = VoicePipelineState.IDLE
+        self.state.unlock_status()
+        restored = self.state.get("status") or {}
+        self._push_status_now(restored.get("status", "idle"))
+        if not self._cancelled:
+            self.wake.unmute()
+        self._cancelled = False
+
     async def _interruptible_sleep(self, seconds: float) -> None:
         """Sleep that returns early if wake word interrupt fires."""
         try:
@@ -311,18 +323,7 @@ class VoiceCommandOrchestrator:
 
                 break
         finally:
-            self._interrupt.clear()
-            self._clear_voice_text()
-            self._state = VoicePipelineState.IDLE
-            # Unlock status and restore pre-voice state
-            self.state.unlock_status()
-            restored = self.state.get("status") or {}
-            restored_status = restored.get("status", "idle")
-            self._push_status_now(restored_status)
-            # Only unmute wake word if not cancelled by mic toggle
-            if not self._cancelled:
-                self.wake.unmute()
-            self._cancelled = False
+            self._end_session()
 
     async def notify(self, prompt: str) -> None:
         """Programmatic voice notification -- skips wake word + ASR.
@@ -348,15 +349,55 @@ class VoiceCommandOrchestrator:
         except Exception:
             logger.exception("Voice notification failed")
         finally:
-            self._interrupt.clear()
-            self._clear_voice_text()
-            self._state = VoicePipelineState.IDLE
-            self.state.unlock_status()
-            restored = self.state.get("status") or {}
-            self._push_status_now(restored.get("status", "idle"))
-            if not self._cancelled:
+            self._end_session()
+
+    async def speak(self, text: str) -> None:
+        """Agent-initiated voice -- speak pre-formed text aloud via TTS.
+
+        If the agent also called ``listen`` (setting ``_prompt_reply_pending``),
+        opens the mic after TTS and enters the follow-up conversation loop.
+
+        Drops silently if the pipeline is already active.
+        """
+        if self._state is not VoicePipelineState.IDLE:
+            logger.warning(
+                "speak() dropped -- pipeline busy (%s)",
+                self._state.name,
+            )
+            return
+
+        self._prev_display = ""
+        self._cancelled = False
+        self.state.lock_status()
+        try:
+            self._transition(VoicePipelineState.ACTIVATED)
+            self.wake.mute()
+
+            # Wait for agent to finish (nudge holds _send_lock)
+            agent_free = await self._wait_for_agent_free()
+            if not agent_free:
+                self._transition(VoicePipelineState.COOLDOWN)
+                return
+
+            # Skip LISTENING/THINKING -- text already provided
+            self._transition(VoicePipelineState.RESPONDING)
+            self._set_voice_text(text, streaming=False)
+            await self._speak(text)
+
+            # If agent also called listen, enter follow-up conversation
+            if self._prompt_reply_pending and not self._interrupt.is_set():
+                self._prompt_reply_pending = False
+                self._clear_voice_text()
+                self._prev_display = text
                 self.wake.unmute()
-            self._cancelled = False
+                await self._follow_up_loop()
+
+            if self._state is not VoicePipelineState.COOLDOWN:
+                self._transition(VoicePipelineState.COOLDOWN)
+        except Exception:
+            logger.exception("speak() pipeline failed")
+        finally:
+            self._end_session()
 
     async def _run_pipeline(self, is_restart: bool = False, prompt: str | None = None) -> None:
         t_start = time.monotonic()
@@ -434,10 +475,21 @@ class VoiceCommandOrchestrator:
 
         clean_text, expects_reply = result
 
-        # 6. Follow-up conversation loop (no repeat wake word needed)
-        #    Wake word stays muted for the entire follow-up loop to
-        #    prevent accidental interrupts between turns.
-        while expects_reply and not self._interrupt.is_set():
+        # 6. Follow-up conversation loop
+        if expects_reply:
+            await self._follow_up_loop()
+
+        if self._state is not VoicePipelineState.COOLDOWN:
+            self._transition(VoicePipelineState.COOLDOWN)
+
+    async def _follow_up_loop(self) -> None:
+        """Follow-up conversation -- ASR -> Claude -> TTS.
+
+        Runs until the agent stops requesting replies, ASR fails/times out,
+        or the pipeline is interrupted.  On interrupt, returns early
+        without COOLDOWN transition (_stream_and_speak already did it).
+        """
+        while not self._interrupt.is_set():
             self.wake.mute()
             self._play_sound("Pop")  # Audible cue: "I'm listening for your reply"
             self._transition(VoicePipelineState.LISTENING)
@@ -446,7 +498,6 @@ class VoiceCommandOrchestrator:
             if self._interrupt.is_set():
                 break
 
-            # Start follow-up ASR with extended timeout
             asr_result = await self._asr_backend.listen(
                 timeout=self.asr_timeout,
                 silence_timeout=self.silence_timeout,
@@ -465,17 +516,15 @@ class VoiceCommandOrchestrator:
             self.wake.unmute()
 
             self._transition(VoicePipelineState.THINKING)
-
-            # Enrich follow-ups with ambient context (no memory re-grounding)
             follow_up_enriched = await self.agent.enrich(follow_up_text, include_ambient=True)
 
             result = await self._stream_and_speak(follow_up_enriched)
             if result is None:
-                return
+                return  # Interrupted -- _stream_and_speak already did COOLDOWN
 
-            clean_text, expects_reply = result
-
-        self._transition(VoicePipelineState.COOLDOWN)
+            _, expects_reply = result
+            if not expects_reply:
+                break
 
     # ------------------------------------------------------------------
     # Helpers
@@ -698,13 +747,9 @@ class VoiceCommandOrchestrator:
 
         if self.agent.is_busy:
             logger.warning("Agent still busy after %.0fs -- preempting", AGENT_FREE_TIMEOUT)
-            await self._preempt_agent()
+            await self._safe_interrupt()
 
         return not self.agent.is_busy
-
-    async def _preempt_agent(self) -> None:
-        """Interrupt the current agent operation so voice can take over."""
-        await self._safe_interrupt()
 
     async def _bail(self, message: str) -> None:
         """Speak an error/abort message and transition to COOLDOWN."""

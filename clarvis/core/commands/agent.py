@@ -84,7 +84,7 @@ def listen(self: CommandHandlers, **kw) -> dict:
     return {"status": "listening"}
 
 
-def nudge_agent(self: CommandHandlers, *, reason: str = "timer", **kw) -> dict:
+def nudge(self: CommandHandlers, *, reason: str = "timer", **kw) -> dict:
     """Send a context-rich nudge to the Clarvis agent."""
     import asyncio
 
@@ -115,11 +115,49 @@ def read_sessions(self: CommandHandlers, *, path: str, **kw) -> dict:
     return {"messages": messages, "count": len(messages)}
 
 
-COMMANDS: dict[str, str] = {
-    "reload_agents": "reload_agents",
-    "reset_clarvis_session": "reset_clarvis_session",
-    "reflect_complete": "reflect_complete",
-    "listen": "listen",
-    "nudge": "nudge_agent",
-    "read_sessions": "read_sessions",
-}
+def speak(self: CommandHandlers, *, text: str, **kw) -> dict:
+    """Speak text aloud. Uses voice pipeline if available, raw say otherwise."""
+    import asyncio
+
+    orchestrator = self._get_service("voice")
+    if orchestrator:
+        future = asyncio.run_coroutine_threadsafe(
+            orchestrator.speak(text),
+            self.ctx.loop,
+        )
+
+        def _on_done(f):
+            exc = f.exception()
+            if exc:
+                logger.error("orchestrator.speak() failed: %s", exc, exc_info=exc)
+
+        future.add_done_callback(_on_done)
+        return {"status": "ok"}
+
+    # Fallback: raw macOS say (no voice pipeline configured)
+    voice_cfg = self.ctx.config.voice
+
+    async def _say() -> None:
+        proc = await asyncio.create_subprocess_exec(
+            "say",
+            "-v",
+            voice_cfg.tts_voice,
+            "-r",
+            str(voice_cfg.tts_speed),
+            text,
+        )
+        await proc.wait()
+
+    asyncio.run_coroutine_threadsafe(_say(), self.ctx.loop)
+    return {"status": "ok"}
+
+
+COMMANDS: list[str] = [
+    "reload_agents",
+    "reset_clarvis_session",
+    "reflect_complete",
+    "listen",
+    "nudge",
+    "read_sessions",
+    "speak",
+]

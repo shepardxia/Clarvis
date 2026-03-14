@@ -1,7 +1,7 @@
-"""Timer notification handler — display flash + sound + optional voice."""
+"""Timer notification handler — display flash + sound."""
 
 import logging
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.context import AppContext
@@ -10,21 +10,14 @@ logger = logging.getLogger(__name__)
 
 
 class TimerNotifier:
-    """Subscribes to ``timer:fired`` and handles UI notification + optional voice."""
+    """Subscribes to ``timer:fired`` and handles UI notification (flash + sound)."""
 
-    def __init__(
-        self,
-        ctx: "AppContext",
-        voice_orchestrator_provider: Callable,
-    ):
+    def __init__(self, ctx: "AppContext"):
         self._ctx = ctx
-        self._get_voice = voice_orchestrator_provider
         ctx.bus.on("timer:fired", self._on_fired)
 
-    def _on_fired(self, signal: str, *, name: str, label: str, wake_clarvis: bool = False, **kw) -> None:
+    def _on_fired(self, signal: str, *, name: str, label: str, **kw) -> None:
         self._flash_and_sound(name, label)
-        if wake_clarvis:
-            self._voice_notify(name, label)
 
     def _flash_and_sound(self, name: str, label: str) -> None:
         from ..display.audio import play_system_sound
@@ -39,14 +32,3 @@ class TimerNotifier:
 
         self._ctx.loop.call_later(2.0, _revert)
         self._ctx.loop.create_task(play_system_sound("Glass"))
-
-    def _voice_notify(self, name: str, label: str) -> None:
-        orchestrator = self._get_voice()
-        if not orchestrator:
-            return
-
-        display_name = label or name
-        prompt = f"Timer '{display_name}' just fired."
-        if label and label != name:
-            prompt = f"Timer '{name}' just fired. Label: {label}"
-        self._ctx.loop.create_task(orchestrator.notify(prompt))

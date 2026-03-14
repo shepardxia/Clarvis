@@ -140,15 +140,6 @@ async def test_reset_no_reconnect_when_not_connected(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reset_resets_context_injector(tmp_path):
-    """Agent.reset() calls context.reset() if context is set."""
-    mock_context = MagicMock()
-    agent = _make_reset_agent(tmp_path, context=mock_context)
-    await agent.reset()
-    mock_context.reset.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_reset_noop_no_file(tmp_path):
     """Agent.reset() works fine when no session file exists."""
     agent = _make_reset_agent(tmp_path)

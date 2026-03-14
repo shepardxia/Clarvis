@@ -45,9 +45,10 @@ memory = [
     "python-dateutil>=2.8",
 ]
 music = ["clautify"]
+web = ["tavily-python"]
 channels = ["httpx", "websockets"]
 particles = ["numba>=0.63.1"]
-all = ["clarvis[voice,memory,music,particles]"]
+all = ["clarvis[voice,memory,music,web,particles]"]
 test = [
     "pytest",
     "pytest-cov",

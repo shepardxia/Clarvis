@@ -2,11 +2,10 @@
 
 from .ipc import DaemonClient, DaemonServer
 from .scheduler import Scheduler
-from .state import StateStore, get_state_store
+from .state import StateStore
 
 __all__ = [
     "StateStore",
-    "get_state_store",
     "DaemonServer",
     "DaemonClient",
     "Scheduler",
